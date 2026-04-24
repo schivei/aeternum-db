@@ -289,3 +289,5 @@ Você pode adotar um modelo dual-license ou multi-license, bastante comum em pro
 ---
 
 👉 Minha recomendação: AGPLv3.0 para o core, Apache/MIT para SDKs e extensões, e licença comercial opcional para quem quiser usar sem restrições. Isso cria um equilíbrio entre proteção comunitária e potencial de renda futura.
+
+traduza todos os documento para inglês.
