@@ -1,7 +1,3 @@
-Aqui está um PULL_REQUEST_TEMPLATE.md pronto para o repositório do AeternumDB, que vai ajudar a padronizar como colaboradores submetem PRs e manter consistência no fluxo de contribuição:
-
----
-
 🔀 Pull Request Template – AeternumDB
 
 📖 Descrição
@@ -69,11 +65,3 @@ Descreva os testes que foram feitos para validar a mudança:
 📎 Informações Adicionais
 
 Inclua qualquer detalhe extra que ajude a revisão: logs, prints, links, referências.
-
----
-
-👉 Esse arquivo pode ser salvo como .github/PULL_REQUEST_TEMPLATE.md no repositório. Assim, cada novo PR aberto já terá esse formato, facilitando revisão e alinhamento com o ROADMAP.md e o modelo de licenciamento híbrido.
-
----
-
-Quer que eu também prepare um SECURITY.md, para orientar como a comunidade deve reportar vulnerabilidades de segurança no AeternumDB?
