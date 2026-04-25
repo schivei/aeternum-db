@@ -554,4 +554,52 @@ mod tests {
             "page must be clean after a successful flush"
         );
     }
+
+    /// Verify that when `write_page` fails during `flush()`, the page whose
+    /// write failed is **not** marked clean — it stays dirty so the next
+    /// `flush()` call retries it.
+    ///
+    /// We simulate the write failure by deallocating the page slot directly
+    /// through the `FileManager` after making the page dirty in the buffer
+    /// pool.  `write_page` enforces allocation invariants and returns
+    /// `PageNotAllocated`, which propagates as a `StorageError` out of
+    /// `flush()`.  Since `mark_clean` is only called *after* a successful
+    /// write, the dirty flag is preserved through the failure.
+    #[tokio::test]
+    async fn test_dirty_page_stays_dirty_after_flush_write_failure() {
+        let (engine, _tmp) = make_engine().await;
+        let id = engine.allocate_page().await.unwrap();
+
+        engine
+            .write_page_data(id, 0, b"active session token")
+            .await
+            .unwrap();
+
+        engine.pin_page(id).await.unwrap();
+        engine.unpin_page(id, true).await.unwrap();
+
+        {
+            let mut inner = engine.inner.lock().await;
+            assert!(
+                inner.buffer_pool.is_dirty(id),
+                "page must be dirty before the simulated failure"
+            );
+            inner
+                .file_manager
+                .deallocate_page(id)
+                .await
+                .expect("direct deallocation must succeed");
+        }
+
+        let flush_result = engine.flush().await;
+        assert!(
+            flush_result.is_err(),
+            "flush must return an error when write_page fails"
+        );
+
+        assert!(
+            engine.inner.lock().await.buffer_pool.is_dirty(id),
+            "page must remain dirty after a failed flush so it is retried"
+        );
+    }
 }
