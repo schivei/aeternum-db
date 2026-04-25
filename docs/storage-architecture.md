@@ -100,8 +100,11 @@ Each `Frame` holds:
 #### LRU Eviction
 
 When a new page must be inserted and no free frame exists, the pool scans
-`lru_order` from the front to find the first frame whose `pin_count == 0`.
-That frame is reclaimed and its `PageId` removed from `page_table`.
+`lru_order` from the front to find the first frame whose `pin_count == 0`
+**and** is not dirty.  Dirty pages must be flushed to disk (via
+`StorageEngine::flush`) before they become eligible eviction candidates; until
+then they are treated as pinned.  If every resident page is either pinned or
+dirty, the insert returns `BufferPoolError::PoolFull`.
 
 #### Thread Safety
 

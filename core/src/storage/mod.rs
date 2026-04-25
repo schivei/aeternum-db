@@ -143,8 +143,10 @@ struct EngineInner {
 impl EngineInner {
     /// Pin page `id` in the buffer pool, loading it from disk when not cached.
     ///
-    /// Validates the checksum on every disk load to detect silent corruption.
-    /// If the page is already in the pool its pin count is incremented.
+    /// Relies on the disk read path (`read_page`) to enforce both bounds and
+    /// allocation checks, and verifies the checksum on every disk load to detect
+    /// silent corruption.  If the page is already in the pool its pin count is
+    /// incremented.
     async fn load_and_pin(&mut self, id: PageId) -> Result<(), StorageError> {
         if self.buffer_pool.contains(id) {
             self.buffer_pool.pin(id)?;
@@ -197,11 +199,17 @@ impl StorageEngine {
     /// Open (or create) a storage engine using `config`.
     ///
     /// # Panics
-    /// Panics if `config.page_size <= HEADER_SIZE`.
+    /// Panics if `config.page_size <= HEADER_SIZE` or if
+    /// `config.page_size - HEADER_SIZE` exceeds [`u16::MAX`].
     pub async fn new(config: StorageConfig) -> Result<Self, StorageError> {
         assert!(
             config.page_size > HEADER_SIZE,
             "page_size must be > HEADER_SIZE ({HEADER_SIZE})"
+        );
+        assert!(
+            config.page_size - HEADER_SIZE <= u16::MAX as usize,
+            "page data capacity {} exceeds u16::MAX; use a smaller page_size or widen free_space",
+            config.page_size - HEADER_SIZE
         );
         let fm = FileManager::open(&config.data_path, config.page_size).await?;
         let bp = BufferPool::new(BufferPoolConfig::new(
@@ -302,11 +310,15 @@ impl StorageEngine {
     ///
     /// Holds the engine lock for the entire duration so that concurrent writes
     /// cannot overwrite an in-flight flush snapshot (no lost-update race).
+    /// Each page is marked clean only after its disk write succeeds, so a
+    /// partial failure leaves unwritten pages dirty and eligible for retry.
     pub async fn flush(&self) -> Result<(), StorageError> {
         let mut inner = self.inner.lock().await;
         let dirty_pages = inner.buffer_pool.flush_dirty_pages();
         for page in dirty_pages {
+            let id = page.id();
             inner.file_manager.write_page(&page).await?;
+            inner.buffer_pool.mark_clean(id);
         }
         Ok(())
     }
@@ -504,5 +516,90 @@ mod tests {
         for h in handles {
             h.await.unwrap();
         }
+    }
+
+    /// Verify that `flush_dirty_pages()` does NOT clear the dirty flag, and
+    /// that only `flush()` (which calls `mark_clean` after each successful
+    /// disk write) marks pages clean.
+    ///
+    /// This guards the retry-safe flush contract: if `flush()` were to fail
+    /// mid-way, dirty pages remain dirty and are written on the next `flush()`
+    /// call, preventing silent data loss.
+    #[tokio::test]
+    async fn test_dirty_pages_cleaned_only_after_successful_write() {
+        let (engine, _tmp) = make_engine().await;
+        let id = engine.allocate_page().await.unwrap();
+
+        engine.pin_page(id).await.unwrap();
+        engine.unpin_page(id, true).await.unwrap();
+
+        {
+            let inner = engine.inner.lock().await;
+            assert!(
+                inner.buffer_pool.is_dirty(id),
+                "page must be dirty before flush"
+            );
+            let snapshot = inner.buffer_pool.flush_dirty_pages();
+            assert_eq!(snapshot.len(), 1, "one dirty page must be returned");
+            assert!(
+                inner.buffer_pool.is_dirty(id),
+                "flush_dirty_pages must not clear the dirty flag"
+            );
+        }
+
+        engine.flush().await.unwrap();
+
+        assert!(
+            !engine.inner.lock().await.buffer_pool.is_dirty(id),
+            "page must be clean after a successful flush"
+        );
+    }
+
+    /// Verify that when `write_page` fails during `flush()`, the page whose
+    /// write failed is **not** marked clean — it stays dirty so the next
+    /// `flush()` call retries it.
+    ///
+    /// We simulate the write failure by deallocating the page slot directly
+    /// through the `FileManager` after making the page dirty in the buffer
+    /// pool.  `write_page` enforces allocation invariants and returns
+    /// `PageNotAllocated`, which propagates as a `StorageError` out of
+    /// `flush()`.  Since `mark_clean` is only called *after* a successful
+    /// write, the dirty flag is preserved through the failure.
+    #[tokio::test]
+    async fn test_dirty_page_stays_dirty_after_flush_write_failure() {
+        let (engine, _tmp) = make_engine().await;
+        let id = engine.allocate_page().await.unwrap();
+
+        engine
+            .write_page_data(id, 0, b"active session token")
+            .await
+            .unwrap();
+
+        engine.pin_page(id).await.unwrap();
+        engine.unpin_page(id, true).await.unwrap();
+
+        {
+            let mut inner = engine.inner.lock().await;
+            assert!(
+                inner.buffer_pool.is_dirty(id),
+                "page must be dirty before the simulated failure"
+            );
+            inner
+                .file_manager
+                .deallocate_page(id)
+                .await
+                .expect("direct deallocation must succeed");
+        }
+
+        let flush_result = engine.flush().await;
+        assert!(
+            flush_result.is_err(),
+            "flush must return an error when write_page fails"
+        );
+
+        assert!(
+            engine.inner.lock().await.buffer_pool.is_dirty(id),
+            "page must remain dirty after a failed flush so it is retried"
+        );
     }
 }

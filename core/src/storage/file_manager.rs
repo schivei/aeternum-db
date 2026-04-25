@@ -29,6 +29,8 @@ pub enum FileManagerError {
     PageAlreadyFree(PageId),
     /// Attempted to allocate a page that is already allocated.
     PageAlreadyAllocated(PageId),
+    /// Attempted to read or write a page slot that is not allocated.
+    PageNotAllocated(PageId),
     /// An underlying I/O error.
     Io(std::io::Error),
     /// The on-disk page layout could not be parsed (corrupt data).
@@ -43,6 +45,7 @@ impl std::fmt::Display for FileManagerError {
             FileManagerError::PageAlreadyAllocated(id) => {
                 write!(f, "page {id} is already allocated")
             }
+            FileManagerError::PageNotAllocated(id) => write!(f, "page {id} is not allocated"),
             FileManagerError::Io(e) => write!(f, "I/O error: {e}"),
             FileManagerError::CorruptPage(id) => write!(f, "page {id} is corrupt"),
         }
@@ -138,11 +141,17 @@ impl FileManager {
     /// and free-list so the engine can continue exactly where it left off.
     ///
     /// # Panics
-    /// Panics if `page_size <= HEADER_SIZE`.
+    /// Panics if `page_size <= HEADER_SIZE` or if `page_size - HEADER_SIZE` exceeds
+    /// [`u16::MAX`] (the maximum value storable in the `free_space` header field).
     pub async fn open(path: impl AsRef<Path>, page_size: usize) -> Result<Self, FileManagerError> {
         assert!(
             page_size > HEADER_SIZE,
             "page_size must be larger than HEADER_SIZE ({HEADER_SIZE})"
+        );
+        assert!(
+            page_size - HEADER_SIZE <= u16::MAX as usize,
+            "page data capacity {} exceeds u16::MAX; use a smaller page_size or widen free_space",
+            page_size - HEADER_SIZE
         );
 
         let path = path.as_ref().to_owned();
@@ -210,14 +219,22 @@ impl FileManager {
     }
 
     /// Write `page` to disk at the offset corresponding to its page id.
+    ///
+    /// Returns [`FileManagerError::PageNotAllocated`] when the page slot is
+    /// not currently allocated in the bitmap.
     pub async fn write_page(&mut self, page: &Page) -> Result<(), FileManagerError> {
         self.check_valid_id(page.id())?;
+        self.check_allocated(page.id())?;
         self.write_page_to_disk(page).await
     }
 
     /// Read and return the page stored at `id`.
+    ///
+    /// Returns [`FileManagerError::PageNotAllocated`] when `id` is not
+    /// currently allocated in the bitmap.
     pub async fn read_page(&mut self, id: PageId) -> Result<Page, FileManagerError> {
         self.check_valid_id(id)?;
+        self.check_allocated(id)?;
         let offset = id * self.page_size as u64;
         self.file.seek(SeekFrom::Start(offset)).await?;
         let mut buf = vec![0u8; self.page_size];
@@ -278,20 +295,24 @@ impl FileManager {
     /// in the range `from..to`.
     ///
     /// Only the 16-byte header is written; the remaining page-data bytes are
-    /// already zero-filled by the OS after sparse file growth.
+    /// already zero-filled by the OS after sparse file growth.  The checksum
+    /// is computed over the all-zero data payload so that any future
+    /// validation of these slots does not produce spurious corruption errors.
     async fn write_free_headers_for_range(
         &mut self,
         from: PageId,
         to: PageId,
     ) -> Result<(), FileManagerError> {
+        let data_size = self.page_size - HEADER_SIZE;
+        let checksum = Page::compute_checksum(&vec![0u8; data_size]);
         for id in from..to {
             let offset = id * self.page_size as u64;
             self.file.seek(SeekFrom::Start(offset)).await?;
             let header = PageHeader {
                 page_id: id,
                 page_type: PageType::Free,
-                free_space: (self.page_size - HEADER_SIZE) as u16,
-                checksum: 0,
+                free_space: data_size as u16,
+                checksum,
             };
             self.file.write_all(&header.serialize()).await?;
         }
@@ -317,6 +338,15 @@ impl FileManager {
     fn check_valid_id(&self, id: PageId) -> Result<(), FileManagerError> {
         if id >= self.page_count {
             Err(FileManagerError::InvalidPageId(id))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Return an error if page `id` is not currently allocated in the bitmap.
+    fn check_allocated(&self, id: PageId) -> Result<(), FileManagerError> {
+        if !self.bitmap[id as usize] {
+            Err(FileManagerError::PageNotAllocated(id))
         } else {
             Ok(())
         }
@@ -429,5 +459,33 @@ mod tests {
         assert_eq!(fm.allocated_count(), 2);
         fm.deallocate_page(id0).await.unwrap();
         assert_eq!(fm.allocated_count(), 1);
+    }
+
+    /// Reading a freed page slot must return `PageNotAllocated`, not silently
+    /// return stale data.  This mirrors what happens when a caller tries to
+    /// access a deleted database record through a stale page reference.
+    #[tokio::test]
+    async fn test_read_freed_page_returns_not_allocated() {
+        let (mut fm, _tmp) = open_temp().await;
+        let id = fm.allocate_page().await.unwrap();
+        fm.deallocate_page(id).await.unwrap();
+        assert!(matches!(
+            fm.read_page(id).await,
+            Err(FileManagerError::PageNotAllocated(_))
+        ));
+    }
+
+    /// Writing to a freed page slot must return `PageNotAllocated`, preventing
+    /// callers from accidentally overwriting a slot that may have been reused.
+    #[tokio::test]
+    async fn test_write_freed_page_returns_not_allocated() {
+        let (mut fm, _tmp) = open_temp().await;
+        let id = fm.allocate_page().await.unwrap();
+        let page = Page::new(id, PageType::Data, PAGE_SIZE - HEADER_SIZE);
+        fm.deallocate_page(id).await.unwrap();
+        assert!(matches!(
+            fm.write_page(&page).await,
+            Err(FileManagerError::PageNotAllocated(_))
+        ));
     }
 }
