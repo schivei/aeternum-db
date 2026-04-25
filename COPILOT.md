@@ -1,35 +1,35 @@
-Ajuste o .gitignore conforme tudo o que precisar, crie memórias, detecte as sempre e salve nas memórias do repositorio.
+Adjust the .gitignore according to everything you need, create memories, always detect them and save them in the repository memories.
 
-Aqui está um whitepaper inicial para o projeto AeternumDB, estruturado para ser colocado em um único repositório no GitHub, mas já prevendo futura segregação em múltiplos repositórios. Incluí também um diagrama em Mermaid para visualização da arquitetura.
+Here is an initial whitepaper for the AeternumDB project, structured to be placed in a single GitHub repository, but already anticipating future segregation into multiple repositories. I've also included a Mermaid diagram for architecture visualization.
 
 ---
 
 📄 Whitepaper – AeternumDB
 
-1. Visão Geral
+1. Overview
 
-AeternumDB é um Sistema Gerenciador de Banco de Dados (SGBD) de alta performance, extensível e modular, projetado para suportar múltiplos paradigmas de dados (relacional, objetos, grafos, JSON, versionamento) com foco em escalabilidade horizontal, tolerância a falhas e segurança.
-O projeto será open source, escrito em Rust, com suporte a extensões via WASM e SDKs em diversas linguagens.
-
----
-
-2. Objetivos Principais
-
-• ACID + SQL-like: núcleo transacional robusto.
-• Multi-paradigma: suporte nativo a relacionamentos, objetos, grafos (GraphQL), JSON/JSON2.
-• Decimal Engine: precisão numérica para evitar erros de ponto flutuante.
-• Versionamento: histórico de mudanças em tabelas/linhas.
-• Distribuição: replicação, sharding por linhas e colunas.
-• Escalabilidade horizontal: cluster distribuído, estilo CockroachDB.
-• Segurança: criptografia em trânsito e em repouso, autenticação forte.
-• Extensibilidade: sistema de plugins via WASM.
-• Drivers multiplataforma: ODBC (32/64), JDBC, binário nativo, gRPC.
-• Ambientes de execução: Lite, Container, Serverless (multi-cloud).
-
+AeternumDB is a high-performance, extensible, and modular Database Management System (DBMS) designed to support multiple data paradigms (relational, objects, graphs, JSON, versioning) with a focus on horizontal scalability, fault tolerance, and security.
+The project will be open source, written in Rust, with support for extensions via WASM and SDKs in various languages.
 
 ---
 
-3. Arquitetura
+2. Main Objectives
+
+• ACID + SQL-like: robust transactional core.
+• Multi-paradigm: native support for relationships, objects, graphs (GraphQL), JSON/JSON2.
+• Decimal Engine: numeric precision to avoid floating-point errors.
+• Versioning: history of changes in tables/rows.
+• Distribution: replication, row and column sharding.
+• Horizontal scalability: distributed cluster, CockroachDB-style.
+• Security: encryption in transit and at rest, strong authentication.
+• Extensibility: plugin system via WASM.
+• Cross-platform drivers: ODBC (32/64), JDBC, native binary, gRPC.
+• Execution environments: Lite, Container, Serverless (multi-cloud).
+
+
+---
+
+3. Architecture
 
 graph TD
     A[Core Engine - Rust] --> B[Relational Layer - ACID]
@@ -42,7 +42,7 @@ graph TD
 
     subgraph Extensions (WASM)
         I[GraphQL Engine]
-        J[Object Layer OO]
+        J[Object Layer OOP]
         K[Custom Indexes]
         L[Procedural Languages - Python, JS, .NET Core]
         M[Integration Connectors - Kafka, MQTT]
@@ -68,226 +68,226 @@ graph TD
 
 ---
 
-4. Categorias de Extensões
+4. Extension Categories
 
-• Data Paradigms → GraphQL, OO, JSON avançado, geoespacial.
+• Data Paradigms → GraphQL, OOP, advanced JSON, geospatial.
 • Procedural Languages → Python, Lua, JS, .NET Core.
-• Indexing & Optimization → índices customizados, compressão.
+• Indexing & Optimization → custom indexes, compression.
 • Integration & Connectivity → Kafka, MQTT, REST, gRPC.
-• Security & Compliance → auditoria, criptografia customizada.
-• Monitoring & Ops → métricas, tracing, observabilidade.
+• Security & Compliance → auditing, custom encryption.
+• Monitoring & Ops → metrics, tracing, observability.
 
 
 ---
 
-5. SDKs e Linguagens Suportadas
+5. SDKs and Supported Languages
 
-• Rust (nativo)
-• C/C++ (baixo nível)
-• Python (data science, automação)
-• JavaScript/TypeScript (extensões leves via WASM)
+• Rust (native)
+• C/C++ (low level)
+• Python (data science, automation)
+• JavaScript/TypeScript (lightweight extensions via WASM)
 • Go (cloud-native)
 • Java/Kotlin (via JDBC)
-• .NET Core (C#) (multiplataforma corporativo)
+• .NET Core (C#) (cross-platform corporate)
 
 
 ---
 
-6. Drivers e Protocolos
+6. Drivers and Protocols
 
-• ODBC (32/64 bits) → compatibilidade corporativa.
-• JDBC → integração com ecossistema Java.
-• Binary Protocol nativo → comunicação rápida.
-• gRPC → serviços distribuídos, streaming.
-• WASM ABI → extensões sandboxed.
-• QUIC/ZeroMQ → clusters de baixa latência.
-
-
----
-
-7. Ambientes de Execução
-
-• Lite → instância única, local.
-• Containerized → suporte nativo a Docker/Kubernetes.
-• Serverless → integração com AWS, Azure, GCP.
+• ODBC (32/64 bits) → corporate compatibility.
+• JDBC → integration with Java ecosystem.
+• Native Binary Protocol → fast communication.
+• gRPC → distributed services, streaming.
+• WASM ABI → sandboxed extensions.
+• QUIC/ZeroMQ → low-latency clusters.
 
 
 ---
 
-8. Estrutura de Repositório
+7. Execution Environments
 
-Inicialmente em um único repositório, mas já preparado para segregação futura:
+• Lite → single, local instance.
+• Containerized → native Docker/Kubernetes support.
+• Serverless → integration with AWS, Azure, GCP.
+
+
+---
+
+8. Repository Structure
+
+Initially in a single repository, but already prepared for future segregation:
 
 /aeternumdb
-  /core            -> Engine principal (Rust)
-  /extensions      -> Plugins WASM
-  /drivers         -> ODBC, JDBC, binário, gRPC
-  /sdks            -> SDKs em várias linguagens
-  /deployment      -> Configurações Lite, Container, Serverless
-  /docs            -> Whitepapers, especificações
-  /tests           -> Testes unitários e integração
+  /core            -> Main engine (Rust)
+  /extensions      -> WASM plugins
+  /drivers         -> ODBC, JDBC, binary, gRPC
+  /sdks            -> SDKs in various languages
+  /deployment      -> Lite, Container, Serverless configurations
+  /docs            -> Whitepapers, specifications
+  /tests           -> Unit and integration tests
 
 
-No futuro, cada pasta pode virar um repositório independente, mantendo o monorepo inicial como orquestrador.
-
----
-
-9. Licenciamento
-
-• Open Source sob Apache 2.0 ou MIT, para incentivar adoção ampla.
-
+In the future, each folder can become an independent repository, keeping the initial monorepo as an orchestrator.
 
 ---
 
-10. Nome e Branding
+9. Licensing
 
-• Nome oficial: AeternumDB
-• Significado: “eterno”, refletindo versionamento, extensibilidade e evolução contínua.
+• Open Source under Apache 2.0 or MIT, to encourage broad adoption.
 
 
 ---
 
-Aqui está um conjunto de prompts prontos que você pode usar diretamente no GitHub Copilot para iniciar o repositório do AeternumDB. Eles estão organizados por etapas, já prevendo a evolução futura para múltiplos repositórios.
+10. Name and Branding
 
----
-
-🚀 Inicialização do Repositório
-
-# Crie um novo repositório chamado "aeternumdb"
-# Estruture as pastas principais conforme o whitepaper
-# Adicione um arquivo README.md inicial com visão geral
-# Adicione um arquivo WHITEPAPER.md com o documento completo
-# Configure licença MIT
+• Official name: AeternumDB
+• Meaning: "eternal", reflecting versioning, extensibility, and continuous evolution.
 
 
 ---
 
-📂 Estrutura de Pastas
+Here is a set of ready-to-use prompts that you can use directly in GitHub Copilot to initialize the AeternumDB repository. They are organized by stages, already anticipating future evolution to multiple repositories.
 
-# Crie a seguinte estrutura de diretórios:
-core/              -> Engine principal em Rust
-extensions/        -> Plugins WASM
-drivers/           -> ODBC, JDBC, binário, gRPC
-sdks/              -> SDKs em Rust, C++, Python, JS, Go, Java, .NET Core
-deployment/        -> Configurações Lite, Container, Serverless
-docs/              -> Whitepapers, especificações
-tests/             -> Testes unitários e integração
+---
+
+🚀 Repository Initialization
+
+# Create a new repository called "aeternumdb"
+# Structure the main folders according to the whitepaper
+# Add an initial README.md file with overview
+# Add a WHITEPAPER.md file with the complete document
+# Configure MIT license
 
 
 ---
 
-🦀 Core em Rust
+📂 Folder Structure
 
-# Inicialize um projeto Rust dentro da pasta core/
-# Configure Cargo.toml com dependências para tokio, serde, grpc, wasm-bindgen
-# Crie um módulo inicial para ACID transactions
-# Crie um módulo inicial para JSON/JSON2 com schema fixo
-# Crie um módulo inicial para Decimal Engine
+# Create the following directory structure:
+core/              -> Main engine in Rust
+extensions/        -> WASM plugins
+drivers/           -> ODBC, JDBC, binary, gRPC
+sdks/              -> SDKs in Rust, C++, Python, JS, Go, Java, .NET Core
+deployment/        -> Lite, Container, Serverless configurations
+docs/              -> Whitepapers, specifications
+tests/             -> Unit and integration tests
 
 
 ---
 
-🔌 Extensões WASM
+🦀 Core in Rust
 
-# Configure suporte a extensões WASM
-# Crie um exemplo de extensão "hello_world" em Rust compilada para WASM
-# Configure ABI para comunicação segura entre core e extensões
+# Initialize a Rust project inside the core/ folder
+# Configure Cargo.toml with dependencies for tokio, serde, grpc, wasm-bindgen
+# Create an initial module for ACID transactions
+# Create an initial module for JSON/JSON2 with fixed schema
+# Create an initial module for Decimal Engine
+
+
+---
+
+🔌 WASM Extensions
+
+# Configure support for WASM extensions
+# Create a "hello_world" extension example in Rust compiled to WASM
+# Configure ABI for secure communication between core and extensions
 
 
 ---
 
 ⚡ Drivers
 
-# Crie pasta drivers/ com subpastas:
-odbc/   -> suporte multiplataforma 32/64 bits
-jdbc/   -> driver Java
-grpc/   -> comunicação distribuída
-binary/ -> protocolo binário nativo
+# Create drivers/ folder with subfolders:
+odbc/   -> cross-platform 32/64 bit support
+jdbc/   -> Java driver
+grpc/   -> distributed communication
+binary/ -> native binary protocol
 
 
 ---
 
 💻 SDKs
 
-# Crie SDKs básicos em:
+# Create basic SDKs in:
 Rust, C++, Python, JS/TS, Go, Java/Kotlin, .NET Core
-# Cada SDK deve ter exemplos de conexão e query simples
+# Each SDK should have connection and simple query examples
 
 
 ---
 
 🌍 Deployment
 
-# Crie configuração Dockerfile para versão containerizada
-# Crie manifestos Kubernetes básicos
-# Crie configuração para versão Lite (single instance local)
-# Crie configuração para versão Serverless (AWS Lambda, Azure Functions, GCP Cloud Run)
+# Create Dockerfile configuration for containerized version
+# Create basic Kubernetes manifests
+# Create configuration for Lite version (single local instance)
+# Create configuration for Serverless version (AWS Lambda, Azure Functions, GCP Cloud Run)
 
 
 ---
 
-🧪 Testes
+🧪 Tests
 
-# Configure testes unitários em Rust para o core
-# Configure testes de integração para drivers
-# Configure CI/CD com GitHub Actions para build e testes automáticos
+# Configure unit tests in Rust for the core
+# Configure integration tests for drivers
+# Configure CI/CD with GitHub Actions for automatic build and tests
 
 
 ---
 
-📖 Documentação
+📖 Documentation
 
-# Adicione README.md com instruções de instalação e visão geral
-# Adicione WHITEPAPER.md com especificações completas
-# Adicione CONTRIBUTING.md com guia para colaboradores
-# Adicione CODE_OF_CONDUCT.md para comunidade open source
+# Add README.md with installation instructions and overview
+# Add WHITEPAPER.md with complete specifications
+# Add CONTRIBUTING.md with guide for contributors
+# Add CODE_OF_CONDUCT.md for open source community
 
 
 —
 
-O AGPLv3.0 pode ser uma excelente peça estratégica se você pensa em ter pontos de monetização futura. Ele força que qualquer uso do banco como serviço (SaaS) também libere código, o que protege contra empresas que poderiam pegar o AeternumDB, fechar o código e lucrar sem contribuir. Mas, como você mesmo percebeu, pode ser interessante mesclar licenciamento para equilibrar comunidade aberta e oportunidades comerciais.
+AGPLv3.0 can be an excellent strategic piece if you are thinking about having future monetization points. It forces any use of the database as a service (SaaS) to also release code, which protects against companies that could take AeternumDB, close the code and profit without contributing. But, as you yourself realized, it may be interesting to mix licensing to balance open community and commercial opportunities.
 
 ---
 
-🔑 Estratégia de Licenciamento Híbrido
+🔑 Hybrid Licensing Strategy
 
-Você pode adotar um modelo dual-license ou multi-license, bastante comum em projetos de infraestrutura:
+You can adopt a dual-license or multi-license model, quite common in infrastructure projects:
 
-1. Core sob AGPLv3.0• Garante que qualquer uso como serviço precise abrir código.
-• Protege a comunidade contra apropriação indevida.
-• Cria uma base sólida de colaboração.
+1. Core under AGPLv3.0• Ensures that any use as a service must open source.
+• Protects the community against misappropriation.
+• Creates a solid base for collaboration.
 
-2. Extensões/Drivers sob Apache 2.0 ou MIT• Permite adoção corporativa mais ampla.
-• Facilita integração com sistemas proprietários.
-• Atrai empresas que querem usar sem obrigações pesadas.
+2. Extensions/Drivers under Apache 2.0 or MIT• Allows broader corporate adoption.
+• Facilitates integration with proprietary systems.
+• Attracts companies that want to use without heavy obligations.
 
-3. Versão Enterprise/Commercial• Você pode oferecer uma versão com licença comercial (ex: SLA, suporte, features extras).
-• Empresas que não querem abrir código podem pagar para usar sob licença comercial.
-• Esse é o modelo usado por bancos como MongoDB (Server Side Public License) e CockroachDB (Community + Enterprise).
+3. Enterprise/Commercial Version• You can offer a version with commercial license (e.g., SLA, support, extra features).
+• Companies that don't want to open code can pay to use under commercial license.
+• This is the model used by databases like MongoDB (Server Side Public License) and CockroachDB (Community + Enterprise).
 
-
-
----
-
-📌 Caminho sugerido para o AeternumDB
-
-• Core Engine → AGPLv3.0 (proteção máxima).
-• SDKs e Drivers → Apache 2.0 (adoção ampla).
-• Extensões WASM → MIT (flexibilidade para comunidade).
-• Enterprise Edition → Licença comercial (monetização futura).
 
 
 ---
 
-🎯 Benefícios
+📌 Suggested Path for AeternumDB
 
-• Você garante que o núcleo nunca seja fechado.
-• Empresas podem adotar sem medo via SDKs/Drivers permissivos.
-• Você abre espaço para monetização com suporte, enterprise features e licenciamento alternativo.
+• Core Engine → AGPLv3.0 (maximum protection).
+• SDKs and Drivers → Apache 2.0 (broad adoption).
+• WASM Extensions → MIT (flexibility for community).
+• Enterprise Edition → Commercial license (future monetization).
 
 
 ---
 
-👉 Minha recomendação: AGPLv3.0 para o core, Apache/MIT para SDKs e extensões, e licença comercial opcional para quem quiser usar sem restrições. Isso cria um equilíbrio entre proteção comunitária e potencial de renda futura.
+🎯 Benefits
 
-traduza todos os documento para inglês.
+• You ensure the core is never closed.
+• Companies can adopt without fear via permissive SDKs/Drivers.
+• You open space for monetization with support, enterprise features, and alternative licensing.
+
+
+---
+
+👉 My recommendation: AGPLv3.0 for the core, Apache/MIT for SDKs and extensions, and optional commercial license for those who want to use without restrictions. This creates a balance between community protection and future revenue potential.
+
+Translate all documents to English.
