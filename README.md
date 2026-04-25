@@ -1,62 +1,62 @@
 🌀 AeternumDB
 
-AeternumDB é um Sistema Gerenciador de Banco de Dados (SGBD) de alta performance, extensível e modular, escrito em Rust, com suporte a múltiplos paradigmas de dados e ambientes de execução modernos.
+AeternumDB is a high-performance, extensible, and modular Database Management System (DBMS) written in Rust, with support for multiple data paradigms and modern execution environments.
 
-O projeto é open source e combina segurança, escalabilidade e extensibilidade para atender desde instâncias locais até arquiteturas distribuídas em nuvem.
-
----
-
-✨ Principais Recursos
-
-• ACID + SQL-like: núcleo transacional robusto.
-• Multi-paradigma: suporte a relacionamentos, objetos, grafos (GraphQL), JSON/JSON2.
-• Decimal Engine: precisão numérica para evitar erros de ponto flutuante.
-• Versionamento: histórico de mudanças em tabelas/linhas.
-• Distribuição: replicação, sharding por linhas e colunas.
-• Escalabilidade horizontal: cluster distribuído, estilo CockroachDB.
-• Segurança: criptografia em trânsito e em repouso, autenticação forte.
-• Extensibilidade via WASM: plugins para novos paradigmas, funções e integrações.
-• Drivers multiplataforma: ODBC (32/64), JDBC, binário nativo, gRPC.
-• Ambientes de execução: Lite, Container, Serverless (multi-cloud).
-
+The project is open source and combines security, scalability, and extensibility to serve from local instances to distributed cloud architectures.
 
 ---
 
-📂 Estrutura do Repositório
+✨ Key Features
+
+• ACID + SQL-like: robust transactional core.
+• Multi-paradigm: support for relationships, objects, graphs (GraphQL), JSON/JSON2.
+• Decimal Engine: numeric precision to avoid floating-point errors.
+• Versioning: history of changes in tables/rows.
+• Distribution: replication, sharding by rows and columns.
+• Horizontal scalability: distributed cluster, CockroachDB-style.
+• Security: encryption in transit and at rest, strong authentication.
+• Extensibility via WASM: plugins for new paradigms, functions, and integrations.
+• Cross-platform drivers: ODBC (32/64), JDBC, native binary, gRPC.
+• Execution environments: Lite, Container, Serverless (multi-cloud).
+
+
+---
+
+📂 Repository Structure
 
 /aeternumdb
-  /core            -> Engine principal (Rust, AGPLv3.0)
-  /extensions      -> Plugins WASM (MIT)
-  /drivers         -> ODBC, JDBC, binário, gRPC (Apache 2.0)
-  /sdks            -> SDKs em várias linguagens (Apache 2.0)
-  /deployment      -> Configurações Lite, Container, Serverless
-  /docs            -> Whitepapers, especificações
-  /tests           -> Testes unitários e integração
+  /core            -> Main engine (Rust, AGPLv3.0)
+  /extensions      -> WASM plugins (MIT)
+  /drivers         -> ODBC, JDBC, binary, gRPC (Apache 2.0)
+  /sdks            -> SDKs in multiple languages (Apache 2.0)
+  /deployment      -> Lite, Container, Serverless configurations
+  /docs            -> Whitepapers, specifications
+  /tests           -> Unit and integration tests
 
 
 ---
 
-🚀 Instalação e Uso
+🚀 Installation and Usage
 
-Pré-requisitos
+Prerequisites
 
-• Rust (versão estável mais recente)
-• Cargo para gerenciamento de pacotes
-• Docker/Kubernetes (opcional, para versão containerizada)
+• Rust (latest stable version)
+• Cargo for package management
+• Docker/Kubernetes (optional, for containerized version)
 
 
-Compilação do Core
+Core Compilation
 
 cd core
 cargo build --release
 
 
-Executando Instância Local (Lite)
+Running Local Instance (Lite)
 
 ./target/release/aeternumdb --lite
 
 
-Executando em Container
+Running in Container
 
 docker build -t aeternumdb .
 docker run -p 5432:5432 aeternumdb
@@ -64,45 +64,45 @@ docker run -p 5432:5432 aeternumdb
 
 ---
 
-📜 Licenciamento
+📜 Licensing
 
 • Core Engine → AGPLv3.0
-• SDKs e Drivers → Apache 2.0
-• Extensões WASM → MIT
-• Enterprise Edition → Licença comercial futura
+• SDKs and Drivers → Apache 2.0
+• WASM Extensions → MIT
+• Enterprise Edition → Future commercial license
 
 
-Consulte [Parece que o resultado não era seguro para exibição. Vamos mudar as coisas e tentar outra opção!] para detalhes.
-
----
-
-🤝 Contribuindo
-
-Contribuições são bem-vindas!
-
-• Leia [Parece que o resultado não era seguro para exibição. Vamos mudar as coisas e tentar outra opção!] para entender como participar.
-• Respeite o [Parece que o resultado não era seguro para exibição. Vamos mudar as coisas e tentar outra opção!].
-
+See [LICENSE.md](LICENSE.md) for details.
 
 ---
 
-📖 Documentação
+🤝 Contributing
 
-• [Parece que o resultado não era seguro para exibição. Vamos mudar as coisas e tentar outra opção!] → visão completa da arquitetura e objetivos.
-• [Parece que o resultado não era seguro para exibição. Vamos mudar as coisas e tentar outra opção!] → guia para colaboradores.
-• [Parece que o resultado não era seguro para exibição. Vamos mudar as coisas e tentar outra opção!] → código de conduta da comunidade.
+Contributions are welcome!
+
+• Read [CONTRIBUTING.md](CONTRIBUTING.md) to understand how to participate.
+• Respect the [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+
+
+---
+
+📖 Documentation
+
+• [COPILOT.md](COPILOT.md) → complete vision of architecture and objectives.
+• [CONTRIBUTING.md](CONTRIBUTING.md) → guide for contributors.
+• [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) → community code of conduct.
 
 
 ---
 
 🌍 Roadmap
 
-• Implementar núcleo ACID em Rust
-• Suporte inicial a JSON/JSON2
+• Implement ACID core in Rust
+• Initial support for JSON/JSON2
 • Decimal Engine
-• Replicação e sharding básico
-• Extensões WASM de exemplo
-• Drivers ODBC/JDBC
-• SDKs em Rust, Python, JS/TS, Go, Java, .NET Core
-• Deploy containerizado
-• Versão Serverless multi-cloud
+• Basic replication and sharding
+• Example WASM extensions
+• ODBC/JDBC drivers
+• SDKs in Rust, Python, JS/TS, Go, Java, .NET Core
+• Containerized deployment
+• Multi-cloud Serverless version

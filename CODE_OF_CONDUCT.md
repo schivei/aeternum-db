@@ -1,69 +1,69 @@
-📜 Código de Conduta – AeternumDB
+📜 Code of Conduct – AeternumDB
 
-1. Compromisso
+1. Commitment
 
-Nós, como membros, colaboradores e mantenedores do AeternumDB, comprometemo-nos a criar um ambiente aberto e acolhedor, livre de assédio e discriminação, onde todos possam contribuir de forma produtiva e respeitosa.
-
----
-
-2. Padrões Esperados
-
-• Trate todos com respeito e cordialidade.
-• Aceite críticas construtivas com maturidade.
-• Seja colaborativo e inclusivo.
-• Use linguagem clara e profissional.
-• Respeite diferentes pontos de vista e experiências.
-
+We, as members, contributors, and maintainers of AeternumDB, commit to creating an open and welcoming environment, free from harassment and discrimination, where everyone can contribute productively and respectfully.
 
 ---
 
-3. Comportamentos Inaceitáveis
+2. Expected Standards
 
-• Uso de linguagem ofensiva, discriminatória ou abusiva.
-• Assédio de qualquer tipo (verbal, físico, online).
-• Publicação de informações privadas sem consentimento.
-• Comportamento que prejudique o projeto ou a comunidade.
+• Treat everyone with respect and courtesy.
+• Accept constructive criticism with maturity.
+• Be collaborative and inclusive.
+• Use clear and professional language.
+• Respect different viewpoints and experiences.
 
 
 ---
 
-4. Responsabilidades
+3. Unacceptable Behaviors
 
-• Os mantenedores do projeto têm a responsabilidade de aplicar este código de conduta.
-• Eles podem remover, editar ou rejeitar contribuições que violem estas regras.
-• Podem banir temporária ou permanentemente membros que não respeitem o código.
-
-
----
-
-5. Escopo
-
-Este código de conduta aplica-se:
-
-• Dentro do repositório e suas ferramentas (issues, pull requests, discussões).
-• Em canais de comunicação oficiais relacionados ao projeto.
-• Em interações públicas que afetem diretamente a comunidade AeternumDB.
+• Use of offensive, discriminatory, or abusive language.
+• Harassment of any kind (verbal, physical, online).
+• Publishing private information without consent.
+• Behavior that harms the project or community.
 
 
 ---
 
-6. Aplicação
+4. Responsibilities
 
-Violação deste código pode resultar em:
-
-• Aviso formal.
-• Suspensão temporária da participação.
-• Banimento permanente em casos graves.
+• Project maintainers have the responsibility to enforce this code of conduct.
+• They may remove, edit, or reject contributions that violate these rules.
+• They may temporarily or permanently ban members who do not respect the code.
 
 
 ---
 
-7. Contato
+5. Scope
 
-Para relatar violações, entre em contato com os mantenedores através de issues privadas ou e-mail oficial do projeto (a ser definido). Todas as denúncias serão tratadas com confidencialidade.
+This code of conduct applies:
+
+• Within the repository and its tools (issues, pull requests, discussions).
+• In official communication channels related to the project.
+• In public interactions that directly affect the AeternumDB community.
+
 
 ---
 
-8. Inspiração
+6. Enforcement
 
-Este código de conduta foi inspirado no Contributor Covenant, versão 2.1.
+Violation of this code may result in:
+
+• Formal warning.
+• Temporary suspension from participation.
+• Permanent ban in severe cases.
+
+
+---
+
+7. Contact
+
+To report violations, contact the maintainers through private issues or the project's official email (to be defined). All reports will be treated with confidentiality.
+
+---
+
+8. Inspiration
+
+This code of conduct was inspired by the Contributor Covenant, version 2.1.

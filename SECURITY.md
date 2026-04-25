@@ -1,55 +1,55 @@
-🔒 Política de Segurança – AeternumDB
+🔒 Security Policy – AeternumDB
 
-1. Compromisso
+1. Commitment
 
-A equipe do AeternumDB leva a segurança muito a sério. Nosso objetivo é garantir que o banco de dados seja confiável, seguro e adequado para uso em ambientes críticos.
-
----
-
-2. Reportando Vulnerabilidades
-
-Se você identificar uma vulnerabilidade de segurança:
-
-• Não abra uma issue pública no GitHub.
-• Envie um relatório privado para os mantenedores através de e-mail oficial de segurança (a ser definido).
-• Inclua no relatório:• Descrição clara da vulnerabilidade.
-• Passos para reproduzir o problema.
-• Impacto potencial.
-• Sugestões de mitigação, se possível.
-
-
+The AeternumDB team takes security very seriously. Our goal is to ensure the database is reliable, secure, and suitable for use in critical environments.
 
 ---
 
-3. Responsabilidade
+2. Reporting Vulnerabilities
 
-• Nós nos comprometemos a responder a relatórios de segurança em até 7 dias úteis.
-• Vulnerabilidades confirmadas serão corrigidas com prioridade.
-• Dependendo da gravidade, será emitido um Security Advisory público após a correção.
+If you identify a security vulnerability:
+
+• Do not open a public issue on GitHub.
+• Send a private report to the maintainers through the official security email (to be defined).
+• Include in the report:• Clear description of the vulnerability.
+• Steps to reproduce the problem.
+• Potential impact.
+• Mitigation suggestions, if possible.
+
 
 
 ---
 
-4. Escopo
+3. Responsibility
 
-Esta política cobre:
+• We commit to responding to security reports within 7 business days.
+• Confirmed vulnerabilities will be fixed with priority.
+• Depending on the severity, a public Security Advisory will be issued after the fix.
+
+
+---
+
+4. Scope
+
+This policy covers:
 
 • Core Engine (AGPLv3.0)
-• SDKs e Drivers (Apache 2.0)
-• Extensões WASM (MIT)
+• SDKs and Drivers (Apache 2.0)
+• WASM Extensions (MIT)
 • Deployment (Lite, Container, Serverless)
 
 
 ---
 
-5. Divulgação Responsável
+5. Responsible Disclosure
 
-• Não publique detalhes da vulnerabilidade antes que uma correção oficial esteja disponível.
-• A divulgação pública será coordenada com os mantenedores para proteger usuários e empresas que dependem do AeternumDB.
+• Do not publish vulnerability details before an official fix is available.
+• Public disclosure will be coordinated with maintainers to protect users and companies that depend on AeternumDB.
 
 
 ---
 
-6. Inspiração
+6. Inspiration
 
-Esta política foi inspirada em práticas recomendadas da comunidade open source, incluindo o GitHub Security Policy (docs.github.com in Bing).
+This policy was inspired by best practices from the open source community, including the GitHub Security Policy.
