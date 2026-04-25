@@ -88,4 +88,45 @@ mod tests {
         assert!(tx.rollback().is_ok());
         assert_eq!(tx.state(), TransactionState::Aborted);
     }
+
+    #[test]
+    fn test_transaction_commit_when_committed() {
+        let mut tx = Transaction::new(1, IsolationLevel::ReadCommitted);
+        assert!(tx.commit().is_ok());
+        assert!(tx.commit().is_err());
+    }
+
+    #[test]
+    fn test_transaction_commit_when_aborted() {
+        let mut tx = Transaction::new(1, IsolationLevel::ReadCommitted);
+        assert!(tx.rollback().is_ok());
+        assert!(tx.commit().is_err());
+    }
+
+    #[test]
+    fn test_transaction_rollback_when_committed() {
+        let mut tx = Transaction::new(1, IsolationLevel::ReadCommitted);
+        assert!(tx.commit().is_ok());
+        assert!(tx.rollback().is_err());
+    }
+
+    #[test]
+    fn test_transaction_rollback_when_aborted() {
+        let mut tx = Transaction::new(1, IsolationLevel::ReadCommitted);
+        assert!(tx.rollback().is_ok());
+        assert!(tx.rollback().is_err());
+    }
+
+    #[test]
+    fn test_isolation_levels() {
+        let tx1 = Transaction::new(1, IsolationLevel::ReadUncommitted);
+        let tx2 = Transaction::new(2, IsolationLevel::ReadCommitted);
+        let tx3 = Transaction::new(3, IsolationLevel::RepeatableRead);
+        let tx4 = Transaction::new(4, IsolationLevel::Serializable);
+
+        assert_eq!(tx1.id(), 1);
+        assert_eq!(tx2.id(), 2);
+        assert_eq!(tx3.id(), 3);
+        assert_eq!(tx4.id(), 4);
+    }
 }

@@ -97,4 +97,32 @@ mod tests {
         let doc = JsonDocument::with_schema(schema, data);
         assert!(doc.schema().is_some());
     }
+
+    #[test]
+    fn test_json_document_validate() {
+        let mut schema = JsonSchema::new("test_schema".to_string(), "1.0".to_string());
+        schema.add_field("name".to_string(), json!("string"));
+
+        let data = json!({"name": "test"});
+        let doc = JsonDocument::with_schema(schema, data);
+
+        // Validate method should execute without panic
+        doc.validate();
+    }
+
+    #[test]
+    fn test_json_document_data_getter() {
+        let data = json!({"name": "test", "value": 42});
+        let doc = JsonDocument::new(data.clone());
+        assert_eq!(doc.data(), &data);
+    }
+
+    #[test]
+    fn test_json_schema_fields() {
+        let mut schema = JsonSchema::new("test_schema".to_string(), "1.0".to_string());
+        schema.add_field("name".to_string(), json!("string"));
+        schema.add_field("age".to_string(), json!("number"));
+        schema.add_field("active".to_string(), json!("boolean"));
+        assert_eq!(schema.fields.len(), 3);
+    }
 }

@@ -63,4 +63,33 @@ mod tests {
         let b = Decimal::ZERO;
         assert!(DecimalEngine::divide(a, b).is_err());
     }
+
+    #[test]
+    fn test_decimal_subtraction() {
+        let a = Decimal::new(100, 2); // 1.00
+        let b = Decimal::new(50, 2); // 0.50
+        let result = DecimalEngine::subtract(a, b);
+        assert_eq!(result, Decimal::new(50, 2)); // 0.50
+    }
+
+    #[test]
+    fn test_decimal_multiplication() {
+        let a = Decimal::new(100, 2); // 1.00
+        let b = Decimal::new(50, 2); // 0.50
+        let result = DecimalEngine::multiply(a, b);
+        // 1.00 * 0.50 = 0.5000
+        assert_eq!(result, Decimal::new(5000, 4));
+    }
+
+    #[test]
+    fn test_from_str_valid() {
+        let result = DecimalEngine::from_str("123.45").unwrap();
+        assert_eq!(result, Decimal::new(12345, 2));
+    }
+
+    #[test]
+    fn test_from_str_invalid() {
+        let result = DecimalEngine::from_str("invalid");
+        assert!(result.is_err());
+    }
 }

@@ -114,4 +114,34 @@ mod tests {
         let version2 = record.get_version(2).unwrap();
         assert_eq!(version2.data, vec![4, 5, 6]);
     }
+
+    #[test]
+    fn test_get_current_version() {
+        let mut record = VersionedRecord::new("test-1".to_string(), vec![1, 2, 3]);
+
+        let current = record.get_current().unwrap();
+        assert_eq!(current.data, vec![1, 2, 3]);
+        assert_eq!(current.version_id, 1);
+
+        record.add_version(vec![4, 5, 6], Some("user1".to_string()));
+
+        let current = record.get_current().unwrap();
+        assert_eq!(current.data, vec![4, 5, 6]);
+        assert_eq!(current.version_id, 2);
+    }
+
+    #[test]
+    fn test_get_nonexistent_version() {
+        let record = VersionedRecord::new("test-1".to_string(), vec![1, 2, 3]);
+        assert!(record.get_version(999).is_none());
+    }
+
+    #[test]
+    fn test_version_with_author() {
+        let mut record = VersionedRecord::new("test-1".to_string(), vec![1, 2, 3]);
+        record.add_version(vec![4, 5, 6], Some("author1".to_string()));
+
+        let version2 = record.get_version(2).unwrap();
+        assert_eq!(version2.author, Some("author1".to_string()));
+    }
 }

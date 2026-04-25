@@ -34,3 +34,14 @@ fn run_lite_mode() {
     println!("Database ready to accept connections");
     // TODO: Implement actual database initialization
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_run_lite_mode() {
+        // Test that run_lite_mode executes without panic
+        run_lite_mode();
+    }
+}
