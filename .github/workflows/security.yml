@@ -280,25 +280,27 @@ jobs:
             const runUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
             const securityUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/security/code-scanning`;
 
-            const body = `## ${overallIcon} Security Scan Results
-
-            ${overallText}
-
-            | Tool | Category | Status |
-            |------|----------|--------|
-            | [CodeQL](${securityUrl}) | SAST | ${icon(results.codeql)} |
-            | [Semgrep](${securityUrl}) | SAST | ${icon(results.semgrep)} |
-            | [Trivy FS](${securityUrl}) | SAST | ${icon(results.trivyFs)} |
-            | [Trivy Image](${securityUrl}) | DAST (Container) | ${icon(results.trivyDocker)} |
-            | cargo-audit | CVE Dependency Scan | ${icon(results.cargoAudit)} |
-            | cargo-deny | Supply Chain / License | ${icon(results.cargoDeny)} |
-            | Gitleaks | Secret Detection | ${icon(results.gitleaks)} |
-            | cargo-fuzz | DAST (Fuzzing) | ${icon(results.fuzz)} |
-
-            > 🔗 Full SARIF findings are in the [Security tab](${securityUrl}).
-            > 📋 [View full workflow run](${runUrl})
-
-            <!-- security-scan-report -->`;
+            const body = [
+              `## ${overallIcon} Security Scan Results`,
+              '',
+              overallText,
+              '',
+              '| Tool | Category | Status |',
+              '|------|----------|--------|',
+              `| [CodeQL](${securityUrl}) | SAST | ${icon(results.codeql)} |`,
+              `| [Semgrep](${securityUrl}) | SAST | ${icon(results.semgrep)} |`,
+              `| [Trivy FS](${securityUrl}) | SAST | ${icon(results.trivyFs)} |`,
+              `| [Trivy Image](${securityUrl}) | DAST (Container) | ${icon(results.trivyDocker)} |`,
+              `| cargo-audit | CVE Dependency Scan | ${icon(results.cargoAudit)} |`,
+              `| cargo-deny | Supply Chain / License | ${icon(results.cargoDeny)} |`,
+              `| Gitleaks | Secret Detection | ${icon(results.gitleaks)} |`,
+              `| cargo-fuzz | DAST (Fuzzing) | ${icon(results.fuzz)} |`,
+              '',
+              `> 🔗 Full SARIF findings are in the [Security tab](${securityUrl}).`,
+              `> 📋 [View full workflow run](${runUrl})`,
+              '',
+              '<!-- security-scan-report -->',
+            ].join('\n');
 
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
