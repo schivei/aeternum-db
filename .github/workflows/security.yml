@@ -2,9 +2,8 @@ name: Security Scanning
 
 on:
   push:
-    branches: [main, develop]
+    branches: [ '**' ]
   pull_request:
-    branches: [main]
   schedule:
     # Run weekly on Mondays at 06:00 UTC to catch newly-published advisories
     - cron: '0 6 * * 1'
