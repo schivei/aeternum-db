@@ -1,19 +1,11 @@
-version = 2
-
 # ── Advisories ────────────────────────────────────────────────────────────────
 # Checks crates against the RustSec advisory database.
 [advisories]
-db-path = "~/.cargo/advisory-db"
-db-urls = ["https://github.com/rustsec/advisory-db"]
-
 # Deny any crate with a known security vulnerability
 vulnerability = "deny"
 
 # Warn on unmaintained crates (flag but don't fail)
 unmaintained = "warn"
-
-# Deny yanked crates
-yanked = "deny"
 
 # Warn on security notices
 notice = "warn"
@@ -46,7 +38,7 @@ allow = [
 copyleft = "warn"
 
 # Accept crates that are dual-licensed under an OSI-approved OR FSF-free license
-allow-osi-fsf-dual = "either"
+allow-osi-fsf-free = "either"
 
 # Reject anything not in the allow list
 default = "deny"
@@ -61,7 +53,7 @@ exceptions = []
 # Prevents use of specific crates or flags duplicate dependency versions.
 [bans]
 # Warn when multiple versions of the same crate are resolved
-multiple-versions = "warn"
+multiple-versions = "all"
 
 # Deny wildcard version requirements (e.g. *)
 wildcards = "deny"

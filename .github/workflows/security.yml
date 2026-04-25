@@ -35,7 +35,7 @@ jobs:
           key: ${{ runner.os }}-cargo-codeql-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@v4
         with:
           languages: rust
           queries: security-and-quality
@@ -45,7 +45,7 @@ jobs:
         run: cargo build 2>&1
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@v4
         with:
           category: "/language:rust"
 
@@ -59,6 +59,8 @@ jobs:
       image: semgrep/semgrep
     steps:
       - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run Semgrep (Rust + security rules)
         run: |
@@ -71,7 +73,7 @@ jobs:
             . || true
 
       - name: Upload Semgrep SARIF results
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
           sarif_file: semgrep.sarif
@@ -125,7 +127,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Run Trivy vulnerability scanner (filesystem)
-        uses: aquasecurity/trivy-action@0.31.0
+        uses: aquasecurity/trivy-action@0.36.0
         with:
           scan-type: fs
           scan-ref: .
@@ -135,7 +137,7 @@ jobs:
           exit-code: "0"
 
       - name: Upload Trivy FS SARIF results
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
           sarif_file: trivy-fs.sarif
@@ -161,7 +163,7 @@ jobs:
           tags: aeternumdb:security-scan
 
       - name: Run Trivy vulnerability scanner (Docker image)
-        uses: aquasecurity/trivy-action@0.31.0
+        uses: aquasecurity/trivy-action@0.36.0
         with:
           image-ref: aeternumdb:security-scan
           format: sarif
@@ -170,7 +172,7 @@ jobs:
           exit-code: "0"
 
       - name: Upload Trivy image SARIF results
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
           sarif_file: trivy-image.sarif
