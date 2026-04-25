@@ -460,4 +460,32 @@ mod tests {
         fm.deallocate_page(id0).await.unwrap();
         assert_eq!(fm.allocated_count(), 1);
     }
+
+    /// Reading a freed page slot must return `PageNotAllocated`, not silently
+    /// return stale data.  This mirrors what happens when a caller tries to
+    /// access a deleted database record through a stale page reference.
+    #[tokio::test]
+    async fn test_read_freed_page_returns_not_allocated() {
+        let (mut fm, _tmp) = open_temp().await;
+        let id = fm.allocate_page().await.unwrap();
+        fm.deallocate_page(id).await.unwrap();
+        assert!(matches!(
+            fm.read_page(id).await,
+            Err(FileManagerError::PageNotAllocated(_))
+        ));
+    }
+
+    /// Writing to a freed page slot must return `PageNotAllocated`, preventing
+    /// callers from accidentally overwriting a slot that may have been reused.
+    #[tokio::test]
+    async fn test_write_freed_page_returns_not_allocated() {
+        let (mut fm, _tmp) = open_temp().await;
+        let id = fm.allocate_page().await.unwrap();
+        let page = Page::new(id, PageType::Data, PAGE_SIZE - HEADER_SIZE);
+        fm.deallocate_page(id).await.unwrap();
+        assert!(matches!(
+            fm.write_page(&page).await,
+            Err(FileManagerError::PageNotAllocated(_))
+        ));
+    }
 }

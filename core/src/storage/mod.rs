@@ -143,18 +143,14 @@ struct EngineInner {
 impl EngineInner {
     /// Pin page `id` in the buffer pool, loading it from disk when not cached.
     ///
-    /// Validates that the page slot is allocated before issuing a disk read,
-    /// and verifies the checksum on every disk load to detect silent corruption.
-    /// If the page is already in the pool its pin count is incremented.
+    /// Relies on the disk read path (`read_page`) to enforce both bounds and
+    /// allocation checks, and verifies the checksum on every disk load to detect
+    /// silent corruption.  If the page is already in the pool its pin count is
+    /// incremented.
     async fn load_and_pin(&mut self, id: PageId) -> Result<(), StorageError> {
         if self.buffer_pool.contains(id) {
             self.buffer_pool.pin(id)?;
         } else {
-            if !self.file_manager.is_allocated(id) {
-                return Err(StorageError::FileManager(
-                    FileManagerError::PageNotAllocated(id),
-                ));
-            }
             let page = self.file_manager.read_page(id).await?;
             if !page.validate_checksum() {
                 return Err(StorageError::ChecksumMismatch(id));
@@ -520,5 +516,42 @@ mod tests {
         for h in handles {
             h.await.unwrap();
         }
+    }
+
+    /// Verify that `flush_dirty_pages()` does NOT clear the dirty flag, and
+    /// that only `flush()` (which calls `mark_clean` after each successful
+    /// disk write) marks pages clean.
+    ///
+    /// This guards the retry-safe flush contract: if `flush()` were to fail
+    /// mid-way, dirty pages remain dirty and are written on the next `flush()`
+    /// call, preventing silent data loss.
+    #[tokio::test]
+    async fn test_dirty_pages_cleaned_only_after_successful_write() {
+        let (engine, _tmp) = make_engine().await;
+        let id = engine.allocate_page().await.unwrap();
+
+        engine.pin_page(id).await.unwrap();
+        engine.unpin_page(id, true).await.unwrap();
+
+        {
+            let inner = engine.inner.lock().await;
+            assert!(
+                inner.buffer_pool.is_dirty(id),
+                "page must be dirty before flush"
+            );
+            let snapshot = inner.buffer_pool.flush_dirty_pages();
+            assert_eq!(snapshot.len(), 1, "one dirty page must be returned");
+            assert!(
+                inner.buffer_pool.is_dirty(id),
+                "flush_dirty_pages must not clear the dirty flag"
+            );
+        }
+
+        engine.flush().await.unwrap();
+
+        assert!(
+            !engine.inner.lock().await.buffer_pool.is_dirty(id),
+            "page must be clean after a successful flush"
+        );
     }
 }

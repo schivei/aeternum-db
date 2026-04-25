@@ -237,7 +237,7 @@ impl BufferPool {
     /// calling [`mark_clean`](Self::mark_clean) for each page after a
     /// successful write.  Keeping pages dirty until the write succeeds ensures
     /// they are retried on the next flush if an error occurs.
-    pub fn flush_dirty_pages(&mut self) -> Vec<Page> {
+    pub fn flush_dirty_pages(&self) -> Vec<Page> {
         self.frames
             .iter()
             .flatten()
