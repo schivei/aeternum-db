@@ -8,8 +8,9 @@
 //! the Least-Recently-Used candidate is chosen.
 //!
 //! # Thread safety
-//! All mutable operations are protected by a [`parking_lot::RwLock`] so the
-//! pool can be safely shared across async tasks via `Arc<RwLock<BufferPool>>`.
+//! The struct itself is `!Sync`; wrap it in `Arc<tokio::sync::Mutex<BufferPool>>`
+//! (or use [`SharedBufferPool`] with [`parking_lot::RwLock`] for sync contexts)
+//! when sharing across tasks.
 
 use crate::storage::page::{Page, PageId};
 use parking_lot::RwLock;

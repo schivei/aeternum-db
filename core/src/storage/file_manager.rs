@@ -112,7 +112,6 @@ impl FileManager {
 
         if page_count > 0 {
             let mut reader = file.try_clone().await?;
-            let data_size = page_size - HEADER_SIZE;
             for id in 0..page_count {
                 reader.seek(SeekFrom::Start(id * page_size as u64)).await?;
                 let mut header_buf = [0u8; HEADER_SIZE];
@@ -130,8 +129,6 @@ impl FileManager {
                         free_list.push_back(id);
                     }
                 }
-                // skip data bytes
-                let _ = data_size; // data bytes not read during scan
             }
         }
 

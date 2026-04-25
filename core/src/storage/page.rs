@@ -175,6 +175,13 @@ impl Page {
     /// Write `src` bytes into the data section starting at `offset`.
     ///
     /// Returns an error if the write would exceed the data buffer.
+    ///
+    /// # Note on `free_space`
+    /// `free_space` is updated to reflect remaining capacity *after* the end of
+    /// this write (`data.len() - (offset + src.len())`).  For non-sequential or
+    /// overlapping writes the reported value is approximate — it does **not**
+    /// account for gaps between earlier writes.  Callers that need precise free
+    /// space accounting should track used ranges at a higher layer.
     pub fn write_data(&mut self, offset: usize, src: &[u8]) -> Result<(), PageError> {
         let end = offset
             .checked_add(src.len())
@@ -184,10 +191,8 @@ impl Page {
         }
         self.data[offset..end].copy_from_slice(src);
         self.update_checksum();
-        // update free_space: bytes that have never been written stay zero but
-        // we simply track remaining capacity from the highest written position.
-        let used = end;
-        self.header.free_space = (self.data.len().saturating_sub(used)) as u16;
+        // Track remaining bytes after the highest byte written in this call.
+        self.header.free_space = (self.data.len().saturating_sub(end)) as u16;
         Ok(())
     }
 
