@@ -68,7 +68,8 @@ mod tests {
 
     #[test]
     fn test_cli_parses_lite_subcommand() {
-        let cli = Cli::try_parse_from(["aeternumdb", "lite"]).expect("'lite' subcommand must parse");
+        let cli =
+            Cli::try_parse_from(["aeternumdb", "lite"]).expect("'lite' subcommand must parse");
         assert!(matches!(cli.command, Some(Commands::Lite)));
     }
 
