@@ -23,7 +23,7 @@ jobs:
       contents: read
       security-events: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -58,7 +58,7 @@ jobs:
     container:
       image: semgrep/semgrep
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -84,7 +84,7 @@ jobs:
     name: "🛡️ Cargo Audit (CVE Scan)"
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -104,7 +104,7 @@ jobs:
     name: "🔗 Cargo Deny (Supply Chain)"
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Check licenses, bans, advisories, and sources
         uses: EmbarkStudios/cargo-deny-action@v2
@@ -117,7 +117,7 @@ jobs:
     name: "🔑 Secret Scan (Gitleaks)"
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -131,7 +131,7 @@ jobs:
     name: "🔭 Grype FS Scan (SAST)"
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Run Grype vulnerability scanner (filesystem)
         uses: anchore/scan-action@v7.4.0
@@ -156,7 +156,7 @@ jobs:
     name: "🐳 Grype Image Scan (DAST)"
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -193,7 +193,7 @@ jobs:
     name: "🎯 Fuzz Testing (DAST)"
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust nightly (required by cargo-fuzz)
         uses: dtolnay/rust-toolchain@nightly
@@ -234,7 +234,7 @@ jobs:
       contents: read
       pull-requests: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
