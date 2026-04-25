@@ -1,8 +1,8 @@
 // Versioning Layer for table/row history
 // Licensed under AGPLv3.0
 
-use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Version identifier
 pub type VersionId = u64;

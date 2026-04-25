@@ -1,6 +1,8 @@
 // AeternumDB Core Engine
 // Licensed under AGPLv3.0
 
+#![allow(dead_code)]
+
 mod acid;
 mod decimal;
 mod json_engine;

@@ -2,7 +2,7 @@
 // Licensed under AGPLv3.0
 
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, Map};
+use serde_json::{Map, Value};
 
 /// JSON document with schema
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -22,10 +22,7 @@ pub struct JsonSchema {
 impl JsonDocument {
     /// Create a new JSON document
     pub fn new(data: Value) -> Self {
-        JsonDocument {
-            schema: None,
-            data,
-        }
+        JsonDocument { schema: None, data }
     }
 
     /// Create a JSON document with schema

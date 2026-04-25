@@ -44,7 +44,7 @@ mod tests {
     #[test]
     fn test_decimal_addition() {
         let a = Decimal::new(100, 2); // 1.00
-        let b = Decimal::new(50, 2);  // 0.50
+        let b = Decimal::new(50, 2); // 0.50
         let result = DecimalEngine::add(a, b);
         assert_eq!(result, Decimal::new(150, 2)); // 1.50
     }
@@ -52,7 +52,7 @@ mod tests {
     #[test]
     fn test_decimal_division() {
         let a = Decimal::new(100, 2); // 1.00
-        let b = Decimal::new(50, 2);  // 0.50
+        let b = Decimal::new(50, 2); // 0.50
         let result = DecimalEngine::divide(a, b).unwrap();
         assert_eq!(result, Decimal::new(200, 2)); // 2.00
     }
