@@ -137,9 +137,13 @@ impl Page {
     /// `page_size − HEADER_SIZE`).
     ///
     /// # Panics
-    /// Panics if `data_capacity` is 0.
+    /// Panics if `data_capacity` is 0 or greater than [`u16::MAX`].
     pub fn new(page_id: PageId, page_type: PageType, data_capacity: usize) -> Self {
         assert!(data_capacity > 0, "data_capacity must be > 0");
+        assert!(
+            data_capacity <= u16::MAX as usize,
+            "data_capacity {data_capacity} exceeds u16::MAX; use a smaller page_size or widen free_space"
+        );
         let data = vec![0u8; data_capacity];
         let checksum = Self::compute_checksum(&data);
         Page {

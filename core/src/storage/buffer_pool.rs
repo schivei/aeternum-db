@@ -282,10 +282,12 @@ impl BufferPool {
     }
 
     /// Scan [`lru_order`](Self::lru_order) from front to back and evict the
-    /// first frame whose pin count is zero.
+    /// first frame whose pin count is zero **and** is not dirty.
     ///
-    /// Returns the freed frame index, or [`BufferPoolError::PoolFull`] when
-    /// every page is pinned.
+    /// Dirty pages must be flushed to disk before they can be evicted; callers
+    /// should use [`flush_dirty_pages`](Self::flush_dirty_pages) and then
+    /// retry.  Returns the freed frame index, or
+    /// [`BufferPoolError::PoolFull`] when every page is pinned or dirty.
     fn evict_lru_victim(&mut self) -> Result<usize, BufferPoolError> {
         let victim_fi = self
             .lru_order
@@ -294,7 +296,7 @@ impl BufferPool {
             .find(|&fi| {
                 self.frames[fi]
                     .as_ref()
-                    .map(|f| f.pin_count == 0)
+                    .map(|f| f.pin_count == 0 && !f.dirty)
                     .unwrap_or(false)
             })
             .ok_or(BufferPoolError::PoolFull)?;
@@ -304,6 +306,19 @@ impl BufferPool {
         self.frames[victim_fi] = None;
         self.lru_order.retain(|&x| x != victim_fi);
         Ok(victim_fi)
+    }
+
+    /// Clear the dirty flag for page `id` without changing its pin count.
+    ///
+    /// Called after a successful disk write so the page is not written again
+    /// unnecessarily and becomes eligible for LRU eviction.  No-op when `id`
+    /// is not in the pool.
+    pub fn mark_clean(&mut self, id: PageId) {
+        if let Some(&fi) = self.page_table.get(&id) {
+            if let Some(frame) = self.frames[fi].as_mut() {
+                frame.dirty = false;
+            }
+        }
     }
 
     /// Move frame `fi` to the back of [`lru_order`](Self::lru_order)

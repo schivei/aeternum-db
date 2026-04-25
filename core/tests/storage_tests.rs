@@ -245,20 +245,43 @@ async fn test_document_fills_entire_page_data_section() {
 }
 
 /// Verify that the checksum stored in the page header is consistent after a
-/// write and remains valid when the page is reloaded from disk.
+/// write **and** after the page is reloaded from disk by a fresh engine instance.
+///
+/// A fresh engine has an empty buffer pool, so `pin_page` is guaranteed to
+/// read from disk rather than hitting a cached copy.
 #[tokio::test]
 async fn test_checksum_valid_after_write_and_reload() {
-    let (engine, _tmp) = make_engine(64).await;
-    let pid = engine.allocate_page().await.unwrap();
-    engine
-        .write_page_data(pid, 0, b"checksum sentinel")
+    let tmp = NamedTempFile::new().unwrap();
+    let path = tmp.path().to_path_buf();
+
+    let pid = {
+        let engine = StorageEngine::new(StorageConfig {
+            data_path: path.clone(),
+            buffer_pool_size: 64,
+            page_size: PAGE_SIZE,
+        })
         .await
         .unwrap();
+        let pid = engine.allocate_page().await.unwrap();
+        engine
+            .write_page_data(pid, 0, b"checksum sentinel")
+            .await
+            .unwrap();
+        pid
+    };
+
+    let engine = StorageEngine::new(StorageConfig {
+        data_path: path,
+        buffer_pool_size: 64,
+        page_size: PAGE_SIZE,
+    })
+    .await
+    .unwrap();
 
     let page = engine.pin_page(pid).await.unwrap();
     assert!(
         page.validate_checksum(),
-        "checksum must be valid after a write"
+        "checksum must be valid after disk reload"
     );
     engine.unpin_page(pid, false).await.unwrap();
 }

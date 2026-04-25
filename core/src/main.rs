@@ -6,7 +6,6 @@
 mod acid;
 mod decimal;
 mod json_engine;
-mod storage;
 mod versioning;
 
 use clap::{Parser, Subcommand};

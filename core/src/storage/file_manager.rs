@@ -11,7 +11,7 @@
 //! pages at a time, amortising the cost of each `ftruncate`/`SetEndOfFile`
 //! system call.
 
-use crate::storage::page::{Page, PageId, PageType, HEADER_SIZE};
+use crate::storage::page::{Page, PageHeader, PageId, PageType, HEADER_SIZE};
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use tokio::fs::{File, OpenOptions};
@@ -65,13 +65,15 @@ impl From<std::io::Error> for FileManagerError {
     }
 }
 
-/// Returns `true` when the raw header bytes identify a free page.
+/// Returns `true` when the raw header bytes identify a free or uninitialised page.
 ///
 /// Reads byte 8 (the `page_type` field in the serialized header) and checks
 /// it against [`PageType::Free`], avoiding a full deserialization during the
-/// startup scan.
+/// startup scan.  An all-zero buffer indicates a slot that was never written
+/// (e.g. from an old file that pre-dates the free-marker convention) and is
+/// also treated as free.
 fn is_page_free_header(buf: &[u8; HEADER_SIZE]) -> bool {
-    buf[8] == PageType::Free.as_u8()
+    buf[8] == PageType::Free.as_u8() || buf.iter().all(|&b| b == 0)
 }
 
 /// Scan every page header in `file` and reconstruct the allocation bitmap and
@@ -100,9 +102,10 @@ async fn scan_allocation_state(
                     bitmap[id as usize] = true;
                 }
             }
-            Err(_) => {
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
                 free_list.push_back(id);
             }
+            Err(e) => return Err(FileManagerError::Io(e)),
         }
     }
     Ok((bitmap, free_list))
@@ -255,15 +258,44 @@ impl FileManager {
     }
 
     /// Seek to the last byte of the target size and write a zero, causing the
-    /// OS to fill the gap.  Updates [`bitmap`](Self::bitmap) and
+    /// OS to fill the gap.  Then writes a [`PageType::Free`] header at the
+    /// start of every newly added slot so that the allocation state is
+    /// self-describing on disk.  Updates [`bitmap`](Self::bitmap) and
     /// [`page_count`](Self::page_count).
     async fn extend_file(&mut self, new_count: u64) -> Result<(), FileManagerError> {
+        let old_count = self.page_count;
         let new_size = new_count * self.page_size as u64;
         self.file.seek(SeekFrom::Start(new_size - 1)).await?;
         self.file.write_all(&[0u8]).await?;
         self.file.flush().await?;
         self.bitmap.resize(new_count as usize, false);
         self.page_count = new_count;
+        self.write_free_headers_for_range(old_count, new_count)
+            .await
+    }
+
+    /// Write a [`PageType::Free`] header at the on-disk offset of every slot
+    /// in the range `from..to`.
+    ///
+    /// Only the 16-byte header is written; the remaining page-data bytes are
+    /// already zero-filled by the OS after sparse file growth.
+    async fn write_free_headers_for_range(
+        &mut self,
+        from: PageId,
+        to: PageId,
+    ) -> Result<(), FileManagerError> {
+        for id in from..to {
+            let offset = id * self.page_size as u64;
+            self.file.seek(SeekFrom::Start(offset)).await?;
+            let header = PageHeader {
+                page_id: id,
+                page_type: PageType::Free,
+                free_space: (self.page_size - HEADER_SIZE) as u16,
+                checksum: 0,
+            };
+            self.file.write_all(&header.serialize()).await?;
+        }
+        self.file.flush().await?;
         Ok(())
     }
 

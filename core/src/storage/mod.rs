@@ -66,6 +66,8 @@ pub enum StorageError {
     OutOfBounds,
     /// The stored page checksum did not match the data payload.
     ChecksumMismatch(PageId),
+    /// Attempted to deallocate a page that still has active pins.
+    PagePinned(PageId),
 }
 
 impl std::fmt::Display for StorageError {
@@ -75,6 +77,9 @@ impl std::fmt::Display for StorageError {
             StorageError::FileManager(e) => write!(f, "file manager error: {e}"),
             StorageError::OutOfBounds => write!(f, "page data access out of bounds"),
             StorageError::ChecksumMismatch(id) => write!(f, "checksum mismatch on page {id}"),
+            StorageError::PagePinned(id) => {
+                write!(f, "page {id} is pinned and cannot be deallocated")
+            }
         }
     }
 }
@@ -170,10 +175,11 @@ impl EngineInner {
             .map_err(|_| StorageError::OutOfBounds)
     }
 
-    /// Write the in-pool copy of page `id` to disk and unpin it.
+    /// Write the in-pool copy of page `id` to disk, mark it clean, and unpin it.
     async fn flush_to_disk(&mut self, id: PageId) -> Result<(), StorageError> {
         let page = self.buffer_pool.get(id).unwrap().clone();
         self.file_manager.write_page(&page).await?;
+        self.buffer_pool.mark_clean(id);
         self.buffer_pool.unpin(id, false)?;
         Ok(())
     }
@@ -220,8 +226,14 @@ impl StorageEngine {
 
     /// Release page `id`, removing it from the buffer pool and marking its
     /// disk slot as free so it can be reused.
+    ///
+    /// Returns [`StorageError::PagePinned`] when the page still has active
+    /// pins; the caller must unpin it before deallocating.
     pub async fn deallocate_page(&self, id: PageId) -> Result<(), StorageError> {
         let mut inner = self.inner.lock().await;
+        if inner.buffer_pool.pin_count(id) > 0 {
+            return Err(StorageError::PagePinned(id));
+        }
         inner.evict_if_cached(id)?;
         inner.file_manager.deallocate_page(id).await?;
         Ok(())
@@ -287,15 +299,14 @@ impl StorageEngine {
     }
 
     /// Flush all dirty unpinned pages in the buffer pool to disk.
+    ///
+    /// Holds the engine lock for the entire duration so that concurrent writes
+    /// cannot overwrite an in-flight flush snapshot (no lost-update race).
     pub async fn flush(&self) -> Result<(), StorageError> {
-        let dirty_pages: Vec<Page> = self.inner.lock().await.buffer_pool.flush_dirty_pages();
+        let mut inner = self.inner.lock().await;
+        let dirty_pages = inner.buffer_pool.flush_dirty_pages();
         for page in dirty_pages {
-            self.inner
-                .lock()
-                .await
-                .file_manager
-                .write_page(&page)
-                .await?;
+            inner.file_manager.write_page(&page).await?;
         }
         Ok(())
     }
