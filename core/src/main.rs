@@ -65,4 +65,22 @@ mod tests {
         // Test that run_lite_mode executes without panic
         run_lite_mode();
     }
+
+    #[test]
+    fn test_cli_parses_lite_subcommand() {
+        let cli = Cli::try_parse_from(["aeternumdb", "lite"]).expect("'lite' subcommand must parse");
+        assert!(matches!(cli.command, Some(Commands::Lite)));
+    }
+
+    #[test]
+    fn test_cli_parses_no_subcommand() {
+        let cli = Cli::try_parse_from(["aeternumdb"]).expect("no subcommand must parse");
+        assert!(cli.command.is_none());
+    }
+
+    #[test]
+    fn test_cli_rejects_unknown_subcommand() {
+        let result = Cli::try_parse_from(["aeternumdb", "unknown-mode"]);
+        assert!(result.is_err(), "unknown subcommand must be rejected");
+    }
 }
