@@ -130,7 +130,7 @@ jobs:
         uses: aquasecurity/setup-trivy@v0.2.0
         with:
           cache: true
-          version: v0.63.0
+          version: v0.70.0
 
       - name: Run Trivy vulnerability scanner (filesystem)
         uses: aquasecurity/trivy-action@master
@@ -161,7 +161,7 @@ jobs:
         uses: aquasecurity/setup-trivy@v0.2.0
         with:
           cache: true
-          version: v0.63.0
+          version: v0.70.0
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3

@@ -9,6 +9,7 @@ mod json_engine;
 mod versioning;
 
 use std::env;
+use std::ffi::OsStr;
 
 #[tokio::main]
 async fn main() {
@@ -16,11 +17,11 @@ async fn main() {
     println!("High-performance, extensible database management system");
     println!();
 
-    // Skip argv[0] (the binary path), which can be set to arbitrary text
-    // and must not be relied upon for security or mode-selection purposes.
-    let args: Vec<String> = env::args().skip(1).collect();
+    // Use args_os() to avoid relying on lossy UTF-8 conversion and to ensure
+    // argv[0] (which can be set to arbitrary text) is properly skipped.
+    let args: Vec<_> = env::args_os().skip(1).collect();
 
-    if args.first().map(String::as_str) == Some("--lite") {
+    if args.first().map(|a| a.as_os_str()) == Some(OsStr::new("--lite")) {
         println!("Starting in Lite mode (single local instance)...");
         run_lite_mode();
     } else {
