@@ -90,9 +90,7 @@ async fn scan_allocation_state(
 
     let mut reader = file.try_clone().await?;
     for id in 0..page_count {
-        reader
-            .seek(SeekFrom::Start(id * page_size as u64))
-            .await?;
+        reader.seek(SeekFrom::Start(id * page_size as u64)).await?;
         let mut header_buf = [0u8; HEADER_SIZE];
         match reader.read_exact(&mut header_buf).await {
             Ok(_) => {
@@ -155,8 +153,7 @@ impl FileManager {
 
         let file_len = file.metadata().await?.len();
         let page_count = file_len / (page_size as u64);
-        let (bitmap, free_list) =
-            scan_allocation_state(&file, page_count, page_size).await?;
+        let (bitmap, free_list) = scan_allocation_state(&file, page_count, page_size).await?;
 
         Ok(FileManager {
             path,

@@ -67,10 +67,7 @@ async fn test_user_record_insert_read_update_delete() {
     assert_eq!(&stored[9..], b"alice@example.com");
 
     let updated = encode_user(1001, 31, b"alice.updated@example.com");
-    engine
-        .write_page_data(page_id, 0, &updated)
-        .await
-        .unwrap();
+    engine.write_page_data(page_id, 0, &updated).await.unwrap();
     let after_update = engine
         .read_page_data(page_id, 0, updated.len())
         .await
@@ -295,7 +292,10 @@ async fn test_partial_page_write_at_offset() {
     let offset = 200;
     let label = b"offset-write-ok";
     engine.write_page_data(pid, offset, label).await.unwrap();
-    let data = engine.read_page_data(pid, offset, label.len()).await.unwrap();
+    let data = engine
+        .read_page_data(pid, offset, label.len())
+        .await
+        .unwrap();
     assert_eq!(&data, label);
     let prefix = engine.read_page_data(pid, 0, offset).await.unwrap();
     assert!(
