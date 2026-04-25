@@ -119,49 +119,37 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # ── SAST: Trivy filesystem scan ──────────────────────────────────────────────
-  trivy-fs:
-    name: "🔭 Trivy FS Scan (SAST)"
-    runs-on: ubuntu-24.04
+  # ── SAST: Grype filesystem scan ──────────────────────────────────────────────
+  grype-fs:
+    name: "🔭 Grype FS Scan (SAST)"
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Trivy
-        uses: aquasecurity/setup-trivy@v0.2.6
+      - name: Run Grype vulnerability scanner (filesystem)
+        uses: anchore/scan-action@v7.4.0
+        id: grype-fs
         with:
-          cache: true
-          version: v0.70.0
+          path: .
+          output-format: sarif
+          output-file: grype-fs.sarif
+          severity-cutoff: medium
+          fail-build: "false"
+          cache-db: true
 
-      - name: Run Trivy vulnerability scanner (filesystem)
-        uses: aquasecurity/trivy-action@master
-        with:
-          scan-type: fs
-          scan-ref: .
-          format: sarif
-          output: trivy-fs.sarif
-          severity: CRITICAL,HIGH,MEDIUM
-          exit-code: "0"
-          skip-setup-trivy: true
-
-      - name: Upload Trivy FS SARIF results
+      - name: Upload Grype FS SARIF results
         uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
-          sarif_file: trivy-fs.sarif
-          category: trivy-filesystem
+          sarif_file: grype-fs.sarif
+          category: grype-filesystem
 
-  # ── DAST: Trivy Docker image scan ────────────────────────────────────────────
-  trivy-docker:
-    name: "🐳 Trivy Image Scan (DAST)"
-    runs-on: ubuntu-24.04
+  # ── DAST: Grype Docker image scan ────────────────────────────────────────────
+  grype-docker:
+    name: "🐳 Grype Image Scan (DAST)"
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up Trivy
-        uses: aquasecurity/setup-trivy@v0.2.6
-        with:
-          cache: true
-          version: v0.70.0
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -175,22 +163,23 @@ jobs:
           load: true
           tags: aeternumdb:security-scan
 
-      - name: Run Trivy vulnerability scanner (Docker image)
-        uses: aquasecurity/trivy-action@master
+      - name: Run Grype vulnerability scanner (Docker image)
+        uses: anchore/scan-action@v7.4.0
+        id: grype-docker
         with:
-          image-ref: aeternumdb:security-scan
-          format: sarif
-          output: trivy-image.sarif
-          severity: CRITICAL,HIGH,MEDIUM
-          exit-code: "0"
-          skip-setup-trivy: true
+          image: aeternumdb:security-scan
+          output-format: sarif
+          output-file: grype-image.sarif
+          severity-cutoff: medium
+          fail-build: "false"
+          cache-db: true
 
-      - name: Upload Trivy image SARIF results
+      - name: Upload Grype image SARIF results
         uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
-          sarif_file: trivy-image.sarif
-          category: trivy-docker
+          sarif_file: grype-image.sarif
+          category: grype-docker
 
   # ── DAST: Fuzz Testing (cargo-fuzz) ─────────────────────────────────────────
   fuzz:
@@ -270,7 +259,7 @@ jobs:
   security-report:
     name: "📋 Security Report"
     runs-on: ubuntu-latest
-    needs: [codeql, semgrep, cargo-audit, cargo-deny, trivy-fs, trivy-docker, gitleaks, fuzz, sonarcloud]
+    needs: [codeql, semgrep, cargo-audit, cargo-deny, grype-fs, grype-docker, gitleaks, fuzz, sonarcloud]
     if: always()
     permissions:
       contents: read
@@ -290,8 +279,8 @@ jobs:
             echo "| [CodeQL](../../security/code-scanning) | SAST | $(status '${{ needs.codeql.result }}') |"
             echo "| [Semgrep](../../security/code-scanning) | SAST | $(status '${{ needs.semgrep.result }}') |"
             echo "| [SonarCloud](https://sonarcloud.io/project/overview?id=schivei_aeternum-db) | SAST / Quality Gate | $(status '${{ needs.sonarcloud.result }}') |"
-            echo "| [Trivy FS](../../security/code-scanning) | SAST | $(status '${{ needs.trivy-fs.result }}') |"
-            echo "| [Trivy Image](../../security/code-scanning) | DAST (Container) | $(status '${{ needs.trivy-docker.result }}') |"
+            echo "| [Grype FS](../../security/code-scanning) | SAST | $(status '${{ needs.grype-fs.result }}') |"
+            echo "| [Grype Image](../../security/code-scanning) | DAST (Container) | $(status '${{ needs.grype-docker.result }}') |"
             echo "| cargo-audit | CVE Dependency Scan | $(status '${{ needs.cargo-audit.result }}') |"
             echo "| cargo-deny | Supply Chain / License | $(status '${{ needs.cargo-deny.result }}') |"
             echo "| Gitleaks | Secret Detection | $(status '${{ needs.gitleaks.result }}') |"
@@ -311,8 +300,8 @@ jobs:
               codeql:      '${{ needs.codeql.result }}',
               semgrep:     '${{ needs.semgrep.result }}',
               sonarcloud:  '${{ needs.sonarcloud.result }}',
-              trivyFs:     '${{ needs.trivy-fs.result }}',
-              trivyDocker: '${{ needs.trivy-docker.result }}',
+              grypefs:     '${{ needs.grype-fs.result }}',
+              grypeDocker: '${{ needs.grype-docker.result }}',
               cargoAudit:  '${{ needs.cargo-audit.result }}',
               cargoDeny:   '${{ needs.cargo-deny.result }}',
               gitleaks:    '${{ needs.gitleaks.result }}',
@@ -343,8 +332,8 @@ jobs:
               `| [CodeQL](${securityUrl}) | SAST | ${icon(results.codeql)} |`,
               `| [Semgrep](${securityUrl}) | SAST | ${icon(results.semgrep)} |`,
               `| [SonarCloud](https://sonarcloud.io/project/overview?id=schivei_aeternum-db) | SAST / Quality Gate | ${icon(results.sonarcloud)} |`,
-              `| [Trivy FS](${securityUrl}) | SAST | ${icon(results.trivyFs)} |`,
-              `| [Trivy Image](${securityUrl}) | DAST (Container) | ${icon(results.trivyDocker)} |`,
+              `| [Grype FS](${securityUrl}) | SAST | ${icon(results.grypefs)} |`,
+              `| [Grype Image](${securityUrl}) | DAST (Container) | ${icon(results.grypeDocker)} |`,
               `| cargo-audit | CVE Dependency Scan | ${icon(results.cargoAudit)} |`,
               `| cargo-deny | Supply Chain / License | ${icon(results.cargoDeny)} |`,
               `| Gitleaks | Secret Detection | ${icon(results.gitleaks)} |`,
@@ -381,3 +370,4 @@ jobs:
                 body,
               });
             }
+
