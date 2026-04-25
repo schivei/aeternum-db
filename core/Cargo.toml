@@ -16,6 +16,7 @@ prost = "0.14"
 wasm-bindgen = "0.2"
 rust_decimal = "1.41"
 sqlparser = "0.61"
+clap = { version = "4.5", features = ["derive"] }
 
 [dev-dependencies]
 tokio-test = "0.4"

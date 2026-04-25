@@ -8,8 +8,25 @@ mod decimal;
 mod json_engine;
 mod versioning;
 
-use std::env;
-use std::ffi::OsStr;
+use clap::{Parser, Subcommand};
+
+/// AeternumDB — high-performance, extensible database management system
+#[derive(Parser)]
+#[command(
+    name = "aeternumdb",
+    version = env!("CARGO_PKG_VERSION"),
+    about = "High-performance, extensible database management system"
+)]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Commands>,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Run as a single local instance (Lite mode)
+    Lite,
+}
 
 #[tokio::main]
 async fn main() {
@@ -17,18 +34,19 @@ async fn main() {
     println!("High-performance, extensible database management system");
     println!();
 
-    // Use args_os() to avoid relying on lossy UTF-8 conversion and to ensure
-    // argv[0] (which can be set to arbitrary text) is properly skipped.
-    let args: Vec<_> = env::args_os().skip(1).collect();
+    let cli = Cli::parse();
 
-    if args.first().map(|a| a.as_os_str()) == Some(OsStr::new("--lite")) {
-        println!("Starting in Lite mode (single local instance)...");
-        run_lite_mode();
-    } else {
-        println!("Usage: aeternumdb --lite");
-        println!();
-        println!("Available modes:");
-        println!("  --lite    Run as single local instance");
+    match cli.command {
+        Some(Commands::Lite) => {
+            println!("Starting in Lite mode (single local instance)...");
+            run_lite_mode();
+        }
+        None => {
+            println!("Usage: aeternumdb lite");
+            println!();
+            println!("Available modes:");
+            println!("  lite    Run as single local instance");
+        }
     }
 }
 
