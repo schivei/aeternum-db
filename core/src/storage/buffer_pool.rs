@@ -1,0 +1,465 @@
+// Storage Engine — Buffer Pool
+// Licensed under AGPLv3.0
+
+//! LRU buffer pool with page pinning and dirty-page tracking.
+//!
+//! The [`BufferPool`] caches [`Page`]s in memory so that repeated accesses
+//! avoid disk I/O.  When the pool is full and an unpinned page must be evicted
+//! the Least-Recently-Used candidate is chosen.
+//!
+//! # Thread safety
+//! All mutable operations are protected by a [`parking_lot::RwLock`] so the
+//! pool can be safely shared across async tasks via `Arc<RwLock<BufferPool>>`.
+
+use crate::storage::page::{Page, PageId};
+use parking_lot::RwLock;
+use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
+
+/// Error variants for buffer pool operations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BufferPoolError {
+    /// The pool is full and every resident page is pinned.
+    PoolFull,
+    /// The requested page is not present in the pool.
+    PageNotFound(PageId),
+    /// Attempted to unpin a page that is not pinned.
+    NotPinned(PageId),
+}
+
+impl std::fmt::Display for BufferPoolError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BufferPoolError::PoolFull => write!(f, "buffer pool is full; all pages are pinned"),
+            BufferPoolError::PageNotFound(id) => write!(f, "page {id} not in buffer pool"),
+            BufferPoolError::NotPinned(id) => write!(f, "page {id} is not pinned"),
+        }
+    }
+}
+
+impl std::error::Error for BufferPoolError {}
+
+/// Eviction policy selector (only LRU is currently implemented).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum EvictionPolicy {
+    /// Least-Recently-Used: evict the page that was accessed furthest in the past.
+    #[default]
+    Lru,
+}
+
+/// Configuration for a [`BufferPool`].
+#[derive(Debug, Clone)]
+pub struct BufferPoolConfig {
+    /// Maximum number of pages held in memory simultaneously.
+    pub capacity: usize,
+    /// Page size in bytes.  Used for validation only; the pool stores full
+    /// [`Page`] objects as returned by the [`FileManager`].
+    pub page_size: usize,
+    /// Which eviction algorithm to use.
+    pub eviction_policy: EvictionPolicy,
+}
+
+impl BufferPoolConfig {
+    /// Create a configuration with the given capacity and page size.
+    pub fn new(capacity: usize, page_size: usize) -> Self {
+        BufferPoolConfig {
+            capacity,
+            page_size,
+            eviction_policy: EvictionPolicy::Lru,
+        }
+    }
+}
+
+/// Per-frame metadata stored alongside a cached page.
+#[derive(Debug)]
+struct Frame {
+    page: Page,
+    /// Number of active "pins" (readers / writers) on this page.
+    pin_count: u32,
+    /// Whether the page has been modified since it was loaded.
+    dirty: bool,
+}
+
+/// Concurrent LRU buffer pool.
+///
+/// Wrap in `Arc<RwLock<BufferPool>>` to share across threads/tasks.
+pub struct BufferPool {
+    config: BufferPoolConfig,
+    /// page_id → frame index
+    page_table: HashMap<PageId, usize>,
+    /// Indexed frames (Some = occupied, None = empty slot).
+    frames: Vec<Option<Frame>>,
+    /// LRU order: front = least recently used.
+    lru_order: VecDeque<usize>,
+    /// Stack of frame indices that have never been used.
+    free_frames: VecDeque<usize>,
+}
+
+impl BufferPool {
+    /// Create a new buffer pool with the given configuration.
+    pub fn new(config: BufferPoolConfig) -> Self {
+        let cap = config.capacity;
+        let frames = (0..cap).map(|_| None).collect();
+        let free_frames = (0..cap).collect();
+        BufferPool {
+            config,
+            page_table: HashMap::new(),
+            frames,
+            lru_order: VecDeque::new(),
+            free_frames,
+        }
+    }
+
+    /// Insert `page` into the pool and pin it once.
+    ///
+    /// If the page is already present its pin count is incremented and the
+    /// existing frame is moved to the back of the LRU queue.
+    ///
+    /// Returns an error when the pool is full and all resident pages are pinned.
+    pub fn insert_and_pin(&mut self, page: Page) -> Result<(), BufferPoolError> {
+        let id = page.id();
+
+        // Page already in pool — just bump pin count.
+        if let Some(&fi) = self.page_table.get(&id) {
+            let frame = self.frames[fi].as_mut().unwrap();
+            frame.pin_count += 1;
+            self.touch_lru(fi);
+            return Ok(());
+        }
+
+        let fi = self.get_free_frame()?;
+        self.frames[fi] = Some(Frame {
+            page,
+            pin_count: 1,
+            dirty: false,
+        });
+        self.page_table.insert(id, fi);
+        self.lru_order.push_back(fi);
+        Ok(())
+    }
+
+    /// Pin the page identified by `id`.
+    ///
+    /// Pinned pages cannot be evicted.  Returns the immutable page reference,
+    /// or an error if the page is not currently in the pool.
+    pub fn pin(&mut self, id: PageId) -> Result<&Page, BufferPoolError> {
+        let fi = *self
+            .page_table
+            .get(&id)
+            .ok_or(BufferPoolError::PageNotFound(id))?;
+        let frame = self.frames[fi].as_mut().unwrap();
+        frame.pin_count += 1;
+        self.touch_lru(fi);
+        Ok(&self.frames[fi].as_ref().unwrap().page)
+    }
+
+    /// Unpin the page identified by `id`.
+    ///
+    /// Setting `dirty = true` marks the page as needing to be flushed before
+    /// eviction.  The pin count must be >0; calling unpin on an unpinned page
+    /// returns an error.
+    pub fn unpin(&mut self, id: PageId, dirty: bool) -> Result<(), BufferPoolError> {
+        let fi = *self
+            .page_table
+            .get(&id)
+            .ok_or(BufferPoolError::PageNotFound(id))?;
+        let frame = self.frames[fi].as_mut().unwrap();
+        if frame.pin_count == 0 {
+            return Err(BufferPoolError::NotPinned(id));
+        }
+        frame.pin_count -= 1;
+        if dirty {
+            frame.dirty = true;
+        }
+        Ok(())
+    }
+
+    /// Return an immutable reference to the page if it resides in the pool.
+    pub fn get(&self, id: PageId) -> Option<&Page> {
+        let fi = *self.page_table.get(&id)?;
+        Some(&self.frames[fi].as_ref()?.page)
+    }
+
+    /// Return a mutable reference to the page if it resides in the pool.
+    ///
+    /// Automatically marks the page dirty.
+    pub fn get_mut(&mut self, id: PageId) -> Option<&mut Page> {
+        let fi = *self.page_table.get(&id)?;
+        let frame = self.frames[fi].as_mut()?;
+        frame.dirty = true;
+        Some(&mut frame.page)
+    }
+
+    /// Returns `true` if the page is currently in the pool.
+    pub fn contains(&self, id: PageId) -> bool {
+        self.page_table.contains_key(&id)
+    }
+
+    /// Returns `true` if the page is marked dirty.
+    pub fn is_dirty(&self, id: PageId) -> bool {
+        self.page_table
+            .get(&id)
+            .and_then(|&fi| self.frames[fi].as_ref())
+            .map(|f| f.dirty)
+            .unwrap_or(false)
+    }
+
+    /// Returns the current pin count for a page.
+    pub fn pin_count(&self, id: PageId) -> u32 {
+        self.page_table
+            .get(&id)
+            .and_then(|&fi| self.frames[fi].as_ref())
+            .map(|f| f.pin_count)
+            .unwrap_or(0)
+    }
+
+    /// Return the number of pages currently in the pool.
+    pub fn len(&self) -> usize {
+        self.page_table.len()
+    }
+
+    /// Return `true` if no pages are in the pool.
+    pub fn is_empty(&self) -> bool {
+        self.page_table.is_empty()
+    }
+
+    /// Return the maximum number of pages the pool can hold.
+    pub fn capacity(&self) -> usize {
+        self.config.capacity
+    }
+
+    /// Collect all dirty unpinned pages and return them (marking them clean).
+    ///
+    /// The caller is responsible for writing these pages to disk.
+    pub fn flush_dirty_pages(&mut self) -> Vec<Page> {
+        let mut flushed = Vec::new();
+        for frame in self.frames.iter_mut().flatten() {
+            if frame.dirty && frame.pin_count == 0 {
+                flushed.push(frame.page.clone());
+                frame.dirty = false;
+            }
+        }
+        flushed
+    }
+
+    /// Evict the page from the pool without writing to disk.
+    ///
+    /// Returns the evicted [`Page`] and whether it was dirty.
+    ///
+    /// Returns an error if the page is not in the pool.
+    pub fn evict(&mut self, id: PageId) -> Result<(Page, bool), BufferPoolError> {
+        let fi = *self
+            .page_table
+            .get(&id)
+            .ok_or(BufferPoolError::PageNotFound(id))?;
+        let frame = self.frames[fi].take().unwrap();
+        self.page_table.remove(&id);
+        self.lru_order.retain(|&x| x != fi);
+        self.free_frames.push_back(fi);
+        Ok((frame.page, frame.dirty))
+    }
+
+    // ── Internal helpers ────────────────────────────────────────────────────
+
+    /// Find a free frame, potentially evicting an unpinned LRU page.
+    fn get_free_frame(&mut self) -> Result<usize, BufferPoolError> {
+        if let Some(fi) = self.free_frames.pop_front() {
+            return Ok(fi);
+        }
+        // Evict LRU unpinned page.
+        let victim_fi = self
+            .lru_order
+            .iter()
+            .copied()
+            .find(|&fi| {
+                self.frames[fi]
+                    .as_ref()
+                    .map(|f| f.pin_count == 0)
+                    .unwrap_or(false)
+            })
+            .ok_or(BufferPoolError::PoolFull)?;
+
+        let victim_page_id = self.frames[victim_fi].as_ref().unwrap().page.id();
+        self.page_table.remove(&victim_page_id);
+        self.frames[victim_fi] = None;
+        self.lru_order.retain(|&x| x != victim_fi);
+        Ok(victim_fi)
+    }
+
+    /// Move frame `fi` to the back of the LRU queue (most-recently-used).
+    fn touch_lru(&mut self, fi: usize) {
+        self.lru_order.retain(|&x| x != fi);
+        self.lru_order.push_back(fi);
+    }
+}
+
+/// Thread-safe wrapper around [`BufferPool`].
+pub type SharedBufferPool = Arc<RwLock<BufferPool>>;
+
+/// Convenience constructor for a [`SharedBufferPool`].
+pub fn new_shared_pool(config: BufferPoolConfig) -> SharedBufferPool {
+    Arc::new(RwLock::new(BufferPool::new(config)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::page::{PageType, HEADER_SIZE};
+
+    const PAGE_SIZE: usize = 256;
+    const DATA_SIZE: usize = PAGE_SIZE - HEADER_SIZE;
+
+    fn make_page(id: PageId) -> Page {
+        Page::new(id, PageType::Data, DATA_SIZE)
+    }
+
+    fn make_pool(cap: usize) -> BufferPool {
+        BufferPool::new(BufferPoolConfig::new(cap, PAGE_SIZE))
+    }
+
+    #[test]
+    fn test_insert_and_contains() {
+        let mut pool = make_pool(4);
+        pool.insert_and_pin(make_page(1)).unwrap();
+        assert!(pool.contains(1));
+        assert!(!pool.contains(2));
+    }
+
+    #[test]
+    fn test_pin_existing_page() {
+        let mut pool = make_pool(4);
+        pool.insert_and_pin(make_page(1)).unwrap();
+        pool.unpin(1, false).unwrap(); // pin_count -> 0
+        pool.pin(1).unwrap();
+        assert_eq!(pool.pin_count(1), 1);
+    }
+
+    #[test]
+    fn test_pin_missing_page_returns_error() {
+        let mut pool = make_pool(4);
+        assert!(matches!(
+            pool.pin(99),
+            Err(BufferPoolError::PageNotFound(99))
+        ));
+    }
+
+    #[test]
+    fn test_unpin_marks_dirty() {
+        let mut pool = make_pool(4);
+        pool.insert_and_pin(make_page(1)).unwrap();
+        pool.unpin(1, true).unwrap();
+        assert!(pool.is_dirty(1));
+    }
+
+    #[test]
+    fn test_unpin_not_pinned_returns_error() {
+        let mut pool = make_pool(4);
+        pool.insert_and_pin(make_page(1)).unwrap();
+        pool.unpin(1, false).unwrap(); // pin_count -> 0
+        assert!(matches!(
+            pool.unpin(1, false),
+            Err(BufferPoolError::NotPinned(1))
+        ));
+    }
+
+    #[test]
+    fn test_lru_eviction_when_full() {
+        let mut pool = make_pool(2);
+        pool.insert_and_pin(make_page(1)).unwrap();
+        pool.unpin(1, false).unwrap();
+        pool.insert_and_pin(make_page(2)).unwrap();
+        pool.unpin(2, false).unwrap();
+        // Pool is full (2/2); page 1 is LRU.
+        pool.insert_and_pin(make_page(3)).unwrap();
+        // Page 1 should have been evicted.
+        assert!(!pool.contains(1));
+        assert!(pool.contains(2));
+        assert!(pool.contains(3));
+    }
+
+    #[test]
+    fn test_pool_full_when_all_pinned() {
+        let mut pool = make_pool(2);
+        pool.insert_and_pin(make_page(1)).unwrap(); // pinned
+        pool.insert_and_pin(make_page(2)).unwrap(); // pinned
+                                                    // Both pages are pinned — pool must refuse new insertion.
+        assert!(matches!(
+            pool.insert_and_pin(make_page(3)),
+            Err(BufferPoolError::PoolFull)
+        ));
+    }
+
+    #[test]
+    fn test_flush_dirty_pages() {
+        let mut pool = make_pool(4);
+        pool.insert_and_pin(make_page(1)).unwrap();
+        pool.unpin(1, true).unwrap(); // dirty
+        pool.insert_and_pin(make_page(2)).unwrap();
+        pool.unpin(2, false).unwrap(); // clean
+
+        let dirty = pool.flush_dirty_pages();
+        assert_eq!(dirty.len(), 1);
+        assert_eq!(dirty[0].id(), 1);
+        assert!(!pool.is_dirty(1));
+    }
+
+    #[test]
+    fn test_evict_page() {
+        let mut pool = make_pool(4);
+        pool.insert_and_pin(make_page(5)).unwrap();
+        pool.unpin(5, true).unwrap();
+        let (page, dirty) = pool.evict(5).unwrap();
+        assert_eq!(page.id(), 5);
+        assert!(dirty);
+        assert!(!pool.contains(5));
+    }
+
+    #[test]
+    fn test_len_and_capacity() {
+        let mut pool = make_pool(4);
+        assert_eq!(pool.len(), 0);
+        pool.insert_and_pin(make_page(1)).unwrap();
+        assert_eq!(pool.len(), 1);
+        assert_eq!(pool.capacity(), 4);
+    }
+
+    #[test]
+    fn test_get_mut_marks_dirty() {
+        let mut pool = make_pool(4);
+        pool.insert_and_pin(make_page(10)).unwrap();
+        pool.get_mut(10).unwrap();
+        assert!(pool.is_dirty(10));
+    }
+
+    #[test]
+    fn test_concurrent_shared_pool() {
+        use std::thread;
+
+        let shared = new_shared_pool(BufferPoolConfig::new(100, PAGE_SIZE));
+        let mut handles = vec![];
+
+        for i in 0..10u64 {
+            let pool = Arc::clone(&shared);
+            handles.push(thread::spawn(move || {
+                pool.write().insert_and_pin(make_page(i)).unwrap();
+                pool.write().unpin(i, false).unwrap();
+            }));
+        }
+
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        let pool = shared.read();
+        assert_eq!(pool.len(), 10);
+    }
+
+    #[test]
+    fn test_insert_same_page_twice_increments_pin() {
+        let mut pool = make_pool(4);
+        pool.insert_and_pin(make_page(1)).unwrap();
+        pool.insert_and_pin(make_page(1)).unwrap(); // second pin
+        assert_eq!(pool.pin_count(1), 2);
+        assert_eq!(pool.len(), 1);
+    }
+}
