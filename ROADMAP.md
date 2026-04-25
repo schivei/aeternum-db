@@ -1,103 +1,103 @@
 🗺️ Roadmap – AeternumDB
 
-Este documento descreve as fases de desenvolvimento e os principais marcos do AeternumDB. O objetivo é fornecer uma visão clara da evolução do projeto, desde o núcleo inicial até versões distribuídas e serverless.
+This document describes the development phases and main milestones of AeternumDB. The goal is to provide a clear vision of the project's evolution, from the initial core to distributed and serverless versions.
 
 ---
 
-📌 Fase 1 – Núcleo Básico
+📌 Phase 1 – Basic Core
 
-Objetivo: Criar o motor fundamental do banco de dados.
+Objective: Create the fundamental database engine.
 
-• Implementar engine ACID em Rust
-• Suporte inicial a SQL-like queries
-• Decimal Engine para precisão numérica
-• JSON/JSON2 com schema fixo
-• Versionamento básico de tabelas/linhas
-• Testes unitários e integração inicial
+• Implement ACID engine in Rust
+• Initial support for SQL-like queries
+• Decimal Engine for numeric precision
+• JSON/JSON2 with fixed schema
+• Basic table/row versioning
+• Unit and initial integration tests
 
 
 ---
 
-📌 Fase 2 – Extensibilidade
+📌 Phase 2 – Extensibility
 
-Objetivo: Permitir plugins e extensões.
+Objective: Enable plugins and extensions.
 
-• Sistema de extensões via WASM
-• Extensão de exemplo: GraphQL Engine
-• Extensão de exemplo: Object Layer (OO)
+• WASM extension system
+• Example extension: GraphQL Engine
+• Example extension: Object Layer (OOP)
 • Procedural Languages (Python, JS, .NET Core)
-• Documentação para criação de plugins
+• Documentation for creating plugins
 
 
 ---
 
-📌 Fase 3 – Distribuição e Escalabilidade
+📌 Phase 3 – Distribution and Scalability
 
-Objetivo: Tornar o banco distribuído e escalável.
+Objective: Make the database distributed and scalable.
 
-• Replicação nativa
-• Sharding por linhas e colunas
-• Cluster distribuído com tolerância a falhas
-• Comunicação via gRPC e protocolo binário nativo
-• Observabilidade (monitoramento e métricas)
-
-
----
-
-📌 Fase 4 – Drivers e SDKs
-
-Objetivo: Ampliar integração com diferentes linguagens e plataformas.
-
-• Drivers ODBC (32/64 bits, multiplataforma)
-• Driver JDBC
-• SDK Rust
-• SDK Python
-• SDK Java/Kotlin
-• SDK .NET Core
-• SDK Go
-• SDK JS/TS
+• Native replication
+• Row and column sharding
+• Distributed cluster with fault tolerance
+• Communication via gRPC and native binary protocol
+• Observability (monitoring and metrics)
 
 
 ---
 
-📌 Fase 5 – Ambientes de Execução
+📌 Phase 4 – Drivers and SDKs
 
-Objetivo: Suporte a diferentes cenários de implantação.
+Objective: Expand integration with different languages and platforms.
 
-• Versão Lite (instância única local)
-• Versão Containerizada (Docker/Kubernetes)
-• Versão Serverless (AWS Lambda, Azure Functions, GCP Cloud Run)
-• Configuração multi-cloud para escalabilidade sob demanda
-
-
----
-
-📌 Fase 6 – Segurança e Compliance
-
-Objetivo: Garantir confiabilidade e conformidade.
-
-• Criptografia em trânsito e em repouso
-• Autenticação forte (OAuth2, JWT)
-• Auditoria avançada via extensões
-• Ferramentas de conformidade (LGPD, GDPR)
+• ODBC drivers (32/64 bits, cross-platform)
+• JDBC driver
+• Rust SDK
+• Python SDK
+• Java/Kotlin SDK
+• .NET Core SDK
+• Go SDK
+• JS/TS SDK
 
 
 ---
 
-📌 Fase 7 – Enterprise Edition
+📌 Phase 5 – Execution Environments
 
-Objetivo: Criar versão comercial para monetização.
+Objective: Support different deployment scenarios.
 
-• Recursos avançados exclusivos
-• SLA e suporte dedicado
-• Licenciamento alternativo para empresas
-• Ferramentas de administração corporativa
+• Lite version (single local instance)
+• Containerized version (Docker/Kubernetes)
+• Serverless version (AWS Lambda, Azure Functions, GCP Cloud Run)
+• Multi-cloud configuration for on-demand scalability
 
 
 ---
 
-📖 Notas
+📌 Phase 6 – Security and Compliance
 
-• O roadmap é iterativo: fases podem evoluir em paralelo.
-• Cada milestone deve ser acompanhado de documentação e testes.
-• A comunidade pode propor novas fases e extensões via Issues.
+Objective: Ensure reliability and conformance.
+
+• Encryption in transit and at rest
+• Strong authentication (OAuth2, JWT)
+• Advanced auditing via extensions
+• Compliance tools (LGPD, GDPR)
+
+
+---
+
+📌 Phase 7 – Enterprise Edition
+
+Objective: Create commercial version for monetization.
+
+• Exclusive advanced features
+• SLA and dedicated support
+• Alternative licensing for enterprises
+• Corporate administration tools
+
+
+---
+
+📖 Notes
+
+• The roadmap is iterative: phases can evolve in parallel.
+• Each milestone must be accompanied by documentation and tests.
+• The community can propose new phases and extensions via Issues.
