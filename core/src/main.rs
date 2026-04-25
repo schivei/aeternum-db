@@ -20,7 +20,7 @@ async fn main() {
 
     if args.len() > 1 && args[1] == "--lite" {
         println!("Starting in Lite mode (single local instance)...");
-        run_lite_mode().await;
+        run_lite_mode();
     } else {
         println!("Usage: aeternumdb --lite");
         println!();
@@ -29,7 +29,7 @@ async fn main() {
     }
 }
 
-async fn run_lite_mode() {
+fn run_lite_mode() {
     println!("Lite mode initialized");
     println!("Database ready to accept connections");
     // TODO: Implement actual database initialization

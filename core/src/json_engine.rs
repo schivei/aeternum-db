@@ -26,12 +26,12 @@ impl JsonDocument {
     }
 
     /// Create a JSON document with schema
-    pub fn with_schema(schema: JsonSchema, data: Value) -> Result<Self, String> {
+    pub fn with_schema(schema: JsonSchema, data: Value) -> Self {
         // TODO: Validate data against schema
-        Ok(JsonDocument {
+        JsonDocument {
             schema: Some(schema),
             data,
-        })
+        }
     }
 
     /// Get document data
@@ -45,12 +45,9 @@ impl JsonDocument {
     }
 
     /// Validate document against its schema
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) {
         if let Some(_schema) = &self.schema {
             // TODO: Implement schema validation
-            Ok(())
-        } else {
-            Ok(())
         }
     }
 }
@@ -97,7 +94,7 @@ mod tests {
         schema.add_field("name".to_string(), json!("string"));
 
         let data = json!({"name": "test"});
-        let doc = JsonDocument::with_schema(schema, data).unwrap();
+        let doc = JsonDocument::with_schema(schema, data);
         assert!(doc.schema().is_some());
     }
 }

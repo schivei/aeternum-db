@@ -1,5 +1,5 @@
 # Multi-stage build for AeternumDB
-FROM rust:1.85-slim as builder
+FROM rust:slim as builder
 
 WORKDIR /build
 

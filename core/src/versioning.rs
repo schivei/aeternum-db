@@ -70,7 +70,7 @@ impl VersionedRecord {
     /// Get all version IDs
     pub fn list_versions(&self) -> Vec<VersionId> {
         let mut versions: Vec<VersionId> = self.versions.keys().copied().collect();
-        versions.sort();
+        versions.sort_unstable();
         versions
     }
 

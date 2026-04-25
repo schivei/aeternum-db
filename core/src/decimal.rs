@@ -33,7 +33,7 @@ impl DecimalEngine {
     /// Parse string to decimal
     pub fn from_str(s: &str) -> Result<Decimal, String> {
         s.parse::<Decimal>()
-            .map_err(|e| format!("Failed to parse decimal: {}", e))
+            .map_err(|e| format!("Failed to parse decimal: {e}"))
     }
 }
 
