@@ -2,7 +2,7 @@
 name = "aeternumdb-core"
 version = "0.1.0"
 edition = "2021"
-license = "AGPL-3.0"
+license = "AGPL-3.0-only"
 authors = ["AeternumDB Contributors"]
 description = "High-performance, extensible database management system core engine"
 repository = "https://github.com/schivei/aeternum-db"

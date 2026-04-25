@@ -1,24 +1,12 @@
 # ── Advisories ────────────────────────────────────────────────────────────────
 # Checks crates against the RustSec advisory database.
 [advisories]
-# Deny any crate with a known security vulnerability
-vulnerability = "deny"
-
-# Warn on unmaintained crates (flag but don't fail)
-unmaintained = "warn"
-
-# Warn on security notices
-notice = "warn"
-
 # Advisory IDs to ignore (add known false-positives here)
 ignore = []
 
 # ── Licenses ──────────────────────────────────────────────────────────────────
 # Enforces an approved license allow-list for all transitive dependencies.
 [licenses]
-# Deny crates with no detectable license
-unlicensed = "deny"
-
 # Approved open-source licenses
 allow = [
     "MIT",
@@ -32,16 +20,8 @@ allow = [
     "CC0-1.0",
     "Zlib",
     "OpenSSL",
+    "AGPL-3.0-only",
 ]
-
-# Warn on copyleft licenses (allow with visibility)
-copyleft = "warn"
-
-# Accept crates that are dual-licensed under an OSI-approved OR FSF-free license
-allow-osi-fsf-free = "either"
-
-# Reject anything not in the allow list
-default = "deny"
 
 # Minimum confidence score for license text detection
 confidence-threshold = 0.8
@@ -53,7 +33,7 @@ exceptions = []
 # Prevents use of specific crates or flags duplicate dependency versions.
 [bans]
 # Warn when multiple versions of the same crate are resolved
-multiple-versions = "all"
+multiple-versions = "warn"
 
 # Deny wildcard version requirements (e.g. *)
 wildcards = "deny"
