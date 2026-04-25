@@ -230,18 +230,20 @@ impl BufferPool {
         self.config.capacity
     }
 
-    /// Collect all dirty **unpinned** pages, mark them clean, and return them.
+    /// Collect all dirty **unpinned** pages and return them without altering
+    /// the dirty flag.
     ///
-    /// The caller is responsible for writing the returned pages to disk.
+    /// The caller is responsible for writing the returned pages to disk and
+    /// calling [`mark_clean`](Self::mark_clean) for each page after a
+    /// successful write.  Keeping pages dirty until the write succeeds ensures
+    /// they are retried on the next flush if an error occurs.
     pub fn flush_dirty_pages(&mut self) -> Vec<Page> {
-        let mut flushed = Vec::new();
-        for frame in self.frames.iter_mut().flatten() {
-            if frame.dirty && frame.pin_count == 0 {
-                flushed.push(frame.page.clone());
-                frame.dirty = false;
-            }
-        }
-        flushed
+        self.frames
+            .iter()
+            .flatten()
+            .filter(|f| f.dirty && f.pin_count == 0)
+            .map(|f| f.page.clone())
+            .collect()
     }
 
     /// Remove page `id` from the pool immediately, regardless of pin count.
@@ -435,6 +437,9 @@ mod tests {
         let dirty = pool.flush_dirty_pages();
         assert_eq!(dirty.len(), 1);
         assert_eq!(dirty[0].id(), 1);
+        // Pages remain dirty until the caller confirms a successful disk write.
+        assert!(pool.is_dirty(1));
+        pool.mark_clean(1);
         assert!(!pool.is_dirty(1));
     }
 

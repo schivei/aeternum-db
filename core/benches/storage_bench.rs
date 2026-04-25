@@ -120,10 +120,7 @@ fn bench_mixed_workload(c: &mut Criterion) {
                         let mut ids: Vec<u64> = Vec::with_capacity(n);
                         for _ in 0..n {
                             let id = engine.allocate_page().await.unwrap();
-                            engine
-                                .write_page_data(id, 0, &payload)
-                                .await
-                                .unwrap();
+                            engine.write_page_data(id, 0, &payload).await.unwrap();
                             ids.push(id);
                         }
                         (engine, tmp, ids)

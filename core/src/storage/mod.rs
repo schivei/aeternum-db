@@ -143,12 +143,18 @@ struct EngineInner {
 impl EngineInner {
     /// Pin page `id` in the buffer pool, loading it from disk when not cached.
     ///
-    /// Validates the checksum on every disk load to detect silent corruption.
+    /// Validates that the page slot is allocated before issuing a disk read,
+    /// and verifies the checksum on every disk load to detect silent corruption.
     /// If the page is already in the pool its pin count is incremented.
     async fn load_and_pin(&mut self, id: PageId) -> Result<(), StorageError> {
         if self.buffer_pool.contains(id) {
             self.buffer_pool.pin(id)?;
         } else {
+            if !self.file_manager.is_allocated(id) {
+                return Err(StorageError::FileManager(
+                    FileManagerError::PageNotAllocated(id),
+                ));
+            }
             let page = self.file_manager.read_page(id).await?;
             if !page.validate_checksum() {
                 return Err(StorageError::ChecksumMismatch(id));
@@ -197,11 +203,17 @@ impl StorageEngine {
     /// Open (or create) a storage engine using `config`.
     ///
     /// # Panics
-    /// Panics if `config.page_size <= HEADER_SIZE`.
+    /// Panics if `config.page_size <= HEADER_SIZE` or if
+    /// `config.page_size - HEADER_SIZE` exceeds [`u16::MAX`].
     pub async fn new(config: StorageConfig) -> Result<Self, StorageError> {
         assert!(
             config.page_size > HEADER_SIZE,
             "page_size must be > HEADER_SIZE ({HEADER_SIZE})"
+        );
+        assert!(
+            config.page_size - HEADER_SIZE <= u16::MAX as usize,
+            "page data capacity {} exceeds u16::MAX; use a smaller page_size or widen free_space",
+            config.page_size - HEADER_SIZE
         );
         let fm = FileManager::open(&config.data_path, config.page_size).await?;
         let bp = BufferPool::new(BufferPoolConfig::new(
@@ -302,11 +314,15 @@ impl StorageEngine {
     ///
     /// Holds the engine lock for the entire duration so that concurrent writes
     /// cannot overwrite an in-flight flush snapshot (no lost-update race).
+    /// Each page is marked clean only after its disk write succeeds, so a
+    /// partial failure leaves unwritten pages dirty and eligible for retry.
     pub async fn flush(&self) -> Result<(), StorageError> {
         let mut inner = self.inner.lock().await;
         let dirty_pages = inner.buffer_pool.flush_dirty_pages();
         for page in dirty_pages {
+            let id = page.id();
             inner.file_manager.write_page(&page).await?;
+            inner.buffer_pool.mark_clean(id);
         }
         Ok(())
     }
