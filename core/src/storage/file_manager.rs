@@ -1,17 +1,15 @@
-// Storage Engine — File Manager
-// Licensed under AGPLv3.0
-
 //! Async file-based page storage with free-space bitmap tracking.
 //!
-//! The [`FileManager`] owns a single database file on disk.  Pages are stored
-//! contiguously; each page occupies exactly `page_size` bytes at offset
-//! `page_id * page_size`.  A compact in-memory bitmap tracks which page slots
-//! are allocated.
+//! [`FileManager`] owns a single database file and exposes page-level I/O.
+//! Pages are stored contiguously; page `id` occupies bytes
+//! `id × page_size .. (id+1) × page_size`.  An in-memory bitmap
+//! tracks which slots are allocated, and a LIFO free-list enables O(1) reuse
+//! of deallocated slots.
 //!
 //! # File growth
-//! When all existing slots are occupied the file is extended by
-//! `GROWTH_CHUNK_PAGES` pages at a time, which amortises the cost of
-//! `ftruncate` / `SetEndOfFile` calls.
+//! When all slots are occupied the file is extended by [`GROWTH_CHUNK_PAGES`]
+//! pages at a time, amortising the cost of each `ftruncate`/`SetEndOfFile`
+//! system call.
 
 use crate::storage::page::{Page, PageId, PageType, HEADER_SIZE};
 use std::collections::VecDeque;
@@ -19,21 +17,21 @@ use std::path::{Path, PathBuf};
 use tokio::fs::{File, OpenOptions};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, SeekFrom};
 
-/// Number of pages added when the file must grow.
+/// Number of page slots added to the file each time it must grow.
 const GROWTH_CHUNK_PAGES: u64 = 64;
 
-/// Error type returned by [`FileManager`].
+/// Errors returned by [`FileManager`] operations.
 #[derive(Debug)]
 pub enum FileManagerError {
-    /// A page id is beyond the currently known page count.
+    /// The given page id is beyond the current page count.
     InvalidPageId(PageId),
-    /// The page slot is already free (double-free detected).
+    /// Attempted to free a page that is already free (double-free).
     PageAlreadyFree(PageId),
-    /// The page slot is still allocated (cannot reallocate without freeing).
+    /// Attempted to allocate a page that is already allocated.
     PageAlreadyAllocated(PageId),
-    /// An I/O error occurred.
+    /// An underlying I/O error.
     Io(std::io::Error),
-    /// The page byte layout could not be parsed.
+    /// The on-disk page layout could not be parsed (corrupt data).
     CorruptPage(PageId),
 }
 
@@ -67,27 +65,79 @@ impl From<std::io::Error> for FileManagerError {
     }
 }
 
+/// Returns `true` when the raw header bytes identify a free page.
+///
+/// Reads byte 8 (the `page_type` field in the serialized header) and checks
+/// it against [`PageType::Free`], avoiding a full deserialization during the
+/// startup scan.
+fn is_page_free_header(buf: &[u8; HEADER_SIZE]) -> bool {
+    buf[8] == PageType::Free.as_u8()
+}
+
+/// Scan every page header in `file` and reconstruct the allocation bitmap and
+/// free-list.
+///
+/// Pages whose header cannot be fully read (e.g. truncated) are treated as
+/// free.  Called once by [`FileManager::open`] to restore in-memory state
+/// from the on-disk file.
+async fn scan_allocation_state(
+    file: &File,
+    page_count: u64,
+    page_size: usize,
+) -> Result<(Vec<bool>, VecDeque<PageId>), FileManagerError> {
+    let mut bitmap = vec![false; page_count as usize];
+    let mut free_list = VecDeque::new();
+
+    let mut reader = file.try_clone().await?;
+    for id in 0..page_count {
+        reader
+            .seek(SeekFrom::Start(id * page_size as u64))
+            .await?;
+        let mut header_buf = [0u8; HEADER_SIZE];
+        match reader.read_exact(&mut header_buf).await {
+            Ok(_) => {
+                if is_page_free_header(&header_buf) {
+                    free_list.push_back(id);
+                } else {
+                    bitmap[id as usize] = true;
+                }
+            }
+            Err(_) => {
+                free_list.push_back(id);
+            }
+        }
+    }
+    Ok((bitmap, free_list))
+}
+
 /// Manages reading and writing pages to a single database file.
 ///
 /// # Thread safety
-/// The struct itself is *not* `Sync`; callers are responsible for wrapping it
-/// in a `Mutex` or similar guard when sharing across tasks.
+/// [`FileManager`] is not `Sync`.  Wrap it in a `Mutex` when sharing across
+/// async tasks.
 pub struct FileManager {
+    /// Filesystem path of the managed database file.
     path: PathBuf,
+    /// Open file handle used for all I/O.
     file: File,
+    /// Fixed total size of each page in bytes (header + data).
     page_size: usize,
-    /// `true` at index `i` means page `i` is allocated.
+    /// `bitmap[i]` is `true` while page `i` is allocated.
     bitmap: Vec<bool>,
-    /// LIFO queue of free page ids available for reuse.
+    /// LIFO queue of page ids available for immediate reuse.
     free_list: VecDeque<PageId>,
-    /// Total number of page slots in the file (allocated + free).
+    /// Total number of page slots currently in the file (allocated + free).
     page_count: u64,
 }
 
 impl FileManager {
     /// Open (or create) the database file at `path`.
     ///
-    /// `page_size` must be at least `HEADER_SIZE + 1`.
+    /// All existing page headers are read to reconstruct the allocation bitmap
+    /// and free-list so the engine can continue exactly where it left off.
+    ///
+    /// # Panics
+    /// Panics if `page_size <= HEADER_SIZE`.
     pub async fn open(path: impl AsRef<Path>, page_size: usize) -> Result<Self, FileManagerError> {
         assert!(
             page_size > HEADER_SIZE,
@@ -105,32 +155,8 @@ impl FileManager {
 
         let file_len = file.metadata().await?.len();
         let page_count = file_len / (page_size as u64);
-
-        // Scan existing pages to rebuild the free bitmap.
-        let mut bitmap = vec![false; page_count as usize];
-        let mut free_list = VecDeque::new();
-
-        if page_count > 0 {
-            let mut reader = file.try_clone().await?;
-            for id in 0..page_count {
-                reader.seek(SeekFrom::Start(id * page_size as u64)).await?;
-                let mut header_buf = [0u8; HEADER_SIZE];
-                match reader.read_exact(&mut header_buf).await {
-                    Ok(_) => {
-                        // byte 8 is page_type; Free = 3
-                        if header_buf[8] == PageType::Free.as_u8() {
-                            free_list.push_back(id);
-                        } else {
-                            bitmap[id as usize] = true;
-                        }
-                    }
-                    Err(_) => {
-                        // Partial page at end — mark as free.
-                        free_list.push_back(id);
-                    }
-                }
-            }
-        }
+        let (bitmap, free_list) =
+            scan_allocation_state(&file, page_count, page_size).await?;
 
         Ok(FileManager {
             path,
@@ -159,71 +185,39 @@ impl FileManager {
 
     /// Allocate a new page slot and return its [`PageId`].
     ///
-    /// Reuses a previously freed slot when available; otherwise grows the file
-    /// by [`GROWTH_CHUNK_PAGES`] pages.
+    /// Reuses a previously freed slot when one is available; otherwise grows
+    /// the file by [`GROWTH_CHUNK_PAGES`] new slots and allocates the first.
     pub async fn allocate_page(&mut self) -> Result<PageId, FileManagerError> {
-        // Prefer reusing a free slot.
-        if let Some(id) = self.free_list.pop_front() {
-            self.bitmap[id as usize] = true;
-            // Write an empty (zeroed) page header to claim the slot.
-            let page = Page::new(id, PageType::Data, self.page_size - HEADER_SIZE);
-            self.write_page_to_disk(&page).await?;
+        if let Some(id) = self.try_reuse_free_slot().await? {
             return Ok(id);
         }
-
-        // Grow the file.
-        let new_start = self.page_count;
-        let new_count = self.page_count + GROWTH_CHUNK_PAGES;
-        let new_file_size = new_count * self.page_size as u64;
-
-        // Pre-allocate by seeking to the new end and writing a zero byte.
-        self.file.seek(SeekFrom::Start(new_file_size - 1)).await?;
-        self.file.write_all(&[0u8]).await?;
-        self.file.flush().await?;
-
-        // Mark new slots as free except the first which we allocate now.
-        self.bitmap.resize(new_count as usize, false);
-        for id in (new_start + 1)..new_count {
-            self.free_list.push_back(id);
-        }
-        self.page_count = new_count;
-
-        let id = new_start;
-        self.bitmap[id as usize] = true;
-        let page = Page::new(id, PageType::Data, self.page_size - HEADER_SIZE);
-        self.write_page_to_disk(&page).await?;
-
-        Ok(id)
+        self.grow_and_allocate().await
     }
 
-    /// Mark page `id` as free so its slot can be reused.
+    /// Mark page `id` as free so its slot can be reused by a future
+    /// [`allocate_page`](Self::allocate_page) call.
     ///
-    /// The on-disk header is overwritten with a [`PageType::Free`] marker.
+    /// Overwrites the on-disk header with a [`PageType::Free`] marker so that
+    /// reopening the file correctly reconstructs allocation state.
     pub async fn deallocate_page(&mut self, id: PageId) -> Result<(), FileManagerError> {
-        self.check_id(id)?;
+        self.check_valid_id(id)?;
         if !self.bitmap[id as usize] {
             return Err(FileManagerError::PageAlreadyFree(id));
         }
         self.bitmap[id as usize] = false;
         self.free_list.push_front(id);
-
-        // Write a Free-type page header to disk.
-        let free_page = Page::new(id, PageType::Free, self.page_size - HEADER_SIZE);
-        self.write_page_to_disk(&free_page).await?;
-        Ok(())
+        self.write_free_marker(id).await
     }
 
-    /// Write `page` to disk at the position corresponding to its page id.
-    ///
-    /// The page is serialized and written as a single contiguous block.
+    /// Write `page` to disk at the offset corresponding to its page id.
     pub async fn write_page(&mut self, page: &Page) -> Result<(), FileManagerError> {
-        self.check_id(page.id())?;
+        self.check_valid_id(page.id())?;
         self.write_page_to_disk(page).await
     }
 
-    /// Read and return the page at `id` from disk.
+    /// Read and return the page stored at `id`.
     pub async fn read_page(&mut self, id: PageId) -> Result<Page, FileManagerError> {
-        self.check_id(id)?;
+        self.check_valid_id(id)?;
         let offset = id * self.page_size as u64;
         self.file.seek(SeekFrom::Start(offset)).await?;
         let mut buf = vec![0u8; self.page_size];
@@ -236,9 +230,62 @@ impl FileManager {
         (id as usize) < self.bitmap.len() && self.bitmap[id as usize]
     }
 
-    // ── Internal helpers ────────────────────────────────────────────────────
+    /// Pop the front of the free list, mark the slot allocated, write an
+    /// empty page header to disk, and return the reclaimed [`PageId`].
+    ///
+    /// Returns `Ok(None)` when the free list is empty.
+    async fn try_reuse_free_slot(&mut self) -> Result<Option<PageId>, FileManagerError> {
+        let Some(id) = self.free_list.pop_front() else {
+            return Ok(None);
+        };
+        self.bitmap[id as usize] = true;
+        let page = Page::new(id, PageType::Data, self.page_size - HEADER_SIZE);
+        self.write_page_to_disk(&page).await?;
+        Ok(Some(id))
+    }
 
-    fn check_id(&self, id: PageId) -> Result<(), FileManagerError> {
+    /// Grow the file by [`GROWTH_CHUNK_PAGES`] slots, enqueue the new free
+    /// slots, then allocate and return the first new slot.
+    async fn grow_and_allocate(&mut self) -> Result<PageId, FileManagerError> {
+        let id = self.page_count;
+        let new_count = self.page_count + GROWTH_CHUNK_PAGES;
+        self.extend_file(new_count).await?;
+        self.enqueue_free_slots(id + 1, new_count);
+        self.bitmap[id as usize] = true;
+        let page = Page::new(id, PageType::Data, self.page_size - HEADER_SIZE);
+        self.write_page_to_disk(&page).await?;
+        Ok(id)
+    }
+
+    /// Seek to the last byte of the target size and write a zero, causing the
+    /// OS to fill the gap.  Updates [`bitmap`](Self::bitmap) and
+    /// [`page_count`](Self::page_count).
+    async fn extend_file(&mut self, new_count: u64) -> Result<(), FileManagerError> {
+        let new_size = new_count * self.page_size as u64;
+        self.file.seek(SeekFrom::Start(new_size - 1)).await?;
+        self.file.write_all(&[0u8]).await?;
+        self.file.flush().await?;
+        self.bitmap.resize(new_count as usize, false);
+        self.page_count = new_count;
+        Ok(())
+    }
+
+    /// Push page ids `from..to` onto the tail of the free list.
+    fn enqueue_free_slots(&mut self, from: PageId, to: PageId) {
+        for id in from..to {
+            self.free_list.push_back(id);
+        }
+    }
+
+    /// Overwrite the on-disk header for page `id` with a [`PageType::Free`]
+    /// marker so the slot is recognised as free after a restart.
+    async fn write_free_marker(&mut self, id: PageId) -> Result<(), FileManagerError> {
+        let free_page = Page::new(id, PageType::Free, self.page_size - HEADER_SIZE);
+        self.write_page_to_disk(&free_page).await
+    }
+
+    /// Return an error if `id` is not a valid page slot in the current file.
+    fn check_valid_id(&self, id: PageId) -> Result<(), FileManagerError> {
         if id >= self.page_count {
             Err(FileManagerError::InvalidPageId(id))
         } else {
@@ -246,6 +293,7 @@ impl FileManager {
         }
     }
 
+    /// Seek to `page.id() × page_size` and write the full serialized page.
     async fn write_page_to_disk(&mut self, page: &Page) -> Result<(), FileManagerError> {
         let offset = page.id() * self.page_size as u64;
         self.file.seek(SeekFrom::Start(offset)).await?;
@@ -261,7 +309,7 @@ mod tests {
     use super::*;
     use tempfile::NamedTempFile;
 
-    const PAGE_SIZE: usize = 256; // small pages for tests
+    const PAGE_SIZE: usize = 256;
 
     async fn open_temp() -> (FileManager, NamedTempFile) {
         let tmp = NamedTempFile::new().unwrap();
@@ -323,7 +371,6 @@ mod tests {
         let (mut fm, _tmp) = open_temp().await;
         let id0 = fm.allocate_page().await.unwrap();
         fm.deallocate_page(id0).await.unwrap();
-        // Next allocation should reuse the freed slot.
         let id_reused = fm.allocate_page().await.unwrap();
         assert_eq!(id_reused, id0);
     }

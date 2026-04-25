@@ -1,12 +1,22 @@
-// Storage Engine — Public API
-// Licensed under AGPLv3.0
-
-//! Public API for AeternumDB's storage engine.
+//! Public API for AeternumDB's page-level storage engine.
 //!
-//! [`StorageEngine`] combines a [`FileManager`] and a [`BufferPool`] behind a
-//! single, ergonomic async interface.  Callers interact with pages through the
-//! pin / unpin mechanism: a pinned page is guaranteed to stay in memory until
-//! explicitly unpinned.
+//! [`StorageEngine`] is the single entry point for all page I/O.  It combines
+//! a [`FileManager`] (disk) and a [`BufferPool`] (memory) behind a clean async
+//! interface and a shared-state [`Arc`] so clones are cheap.
+//!
+//! # Sharding
+//! Each [`StorageEngine`] manages exactly one database file (one shard).
+//! Horizontal sharding is achieved by running multiple engines in parallel —
+//! one per [`ShardId`] — and routing each [`PageId`] to the correct engine
+//! at the application layer.  [`StorageEngine`] is `Clone + Send + Sync`, so
+//! multiple shard handles can be stored in a `HashMap<ShardId, StorageEngine>`
+//! and shared across async tasks without additional synchronisation.
+//!
+//! # Replication
+//! Read replicas can open the same file path with their own [`StorageEngine`]
+//! instance and serve reads independently.  Write replication (streaming
+//! mutations from a primary to replicas) requires a Write-Ahead Log, which is
+//! planned for PR 1.8.
 //!
 //! # Example
 //! ```no_run
@@ -18,15 +28,10 @@
 //!     page_size: 8192,
 //! }).await?;
 //!
-//! // Allocate a new page and write some bytes.
 //! let page_id = engine.allocate_page().await?;
 //! engine.write_page_data(page_id, 0, b"hello world").await?;
-//!
-//! // Read back the bytes.
 //! let buf = engine.read_page_data(page_id, 0, 11).await?;
 //! assert_eq!(&buf, b"hello world");
-//!
-//! // Release the page.
 //! engine.deallocate_page(page_id).await?;
 //! # Ok(())
 //! # }
@@ -43,16 +48,23 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-/// Error type for the [`StorageEngine`].
+/// Logical shard identifier used to route page operations in a cluster.
+///
+/// In a sharded deployment each shard corresponds to an independent
+/// [`StorageEngine`] instance backed by its own database file.  A router maps
+/// `(ShardId, PageId)` tuples to the appropriate engine handle.
+pub type ShardId = u16;
+
+/// Error type returned by [`StorageEngine`] operations.
 #[derive(Debug)]
 pub enum StorageError {
-    /// An error from the buffer pool layer.
+    /// An error originating in the buffer pool layer.
     BufferPool(BufferPoolError),
-    /// An error from the file manager layer.
+    /// An error originating in the file manager layer.
     FileManager(FileManagerError),
-    /// Attempted to read / write beyond page data bounds.
+    /// A read or write operation would exceed the page data bounds.
     OutOfBounds,
-    /// The page checksum did not match the stored data.
+    /// The stored page checksum did not match the data payload.
     ChecksumMismatch(PageId),
 }
 
@@ -89,41 +101,97 @@ impl From<FileManagerError> for StorageError {
     }
 }
 
-// ── Configuration ────────────────────────────────────────────────────────────
-
-/// Configuration for [`StorageEngine`].
+/// Configuration for a [`StorageEngine`] instance.
 #[derive(Debug, Clone)]
 pub struct StorageConfig {
-    /// Path to the database file on disk.
+    /// Path to the database file on disk (created if it does not exist).
     pub data_path: PathBuf,
-    /// Number of pages to keep in the in-memory buffer pool.
+    /// Number of pages to keep in the in-memory buffer pool simultaneously.
     pub buffer_pool_size: usize,
-    /// Size of each page in bytes (must be > `HEADER_SIZE`).
+    /// Size of each page in bytes.  Must be greater than `HEADER_SIZE` (16).
     ///
-    /// Common values: 4096, 8192, 16384.
+    /// Common values: `4096`, `8192`, `16384`.
     pub page_size: usize,
 }
 
-// ── StorageEngine ─────────────────────────────────────────────────────────────
-
 /// Main entry point for page-level I/O in AeternumDB.
 ///
-/// The engine is [`Clone`]-able (cheap) — clones share the same underlying
-/// state through `Arc`.
+/// `StorageEngine` is cheaply [`Clone`]-able — all clones share the same
+/// underlying state through an [`Arc`].  It is `Send + Sync` and safe to use
+/// from multiple async tasks concurrently.
 #[derive(Clone)]
 pub struct StorageEngine {
+    /// Shared interior state protected by an async mutex.
     inner: Arc<Mutex<EngineInner>>,
+    /// Cached page size (bytes), duplicated here so `page_size()` is sync.
     page_size: usize,
 }
 
+/// Interior state of a [`StorageEngine`], protected by a [`Mutex`].
 struct EngineInner {
+    /// Disk I/O layer.
     file_manager: FileManager,
+    /// Memory caching layer.
     buffer_pool: BufferPool,
-    page_size: usize,
+}
+
+impl EngineInner {
+    /// Pin page `id` in the buffer pool, loading it from disk when not cached.
+    ///
+    /// Validates the checksum on every disk load to detect silent corruption.
+    /// If the page is already in the pool its pin count is incremented.
+    async fn load_and_pin(&mut self, id: PageId) -> Result<(), StorageError> {
+        if self.buffer_pool.contains(id) {
+            self.buffer_pool.pin(id)?;
+        } else {
+            let page = self.file_manager.read_page(id).await?;
+            if !page.validate_checksum() {
+                return Err(StorageError::ChecksumMismatch(id));
+            }
+            self.buffer_pool.insert_and_pin(page)?;
+        }
+        Ok(())
+    }
+
+    /// Apply `data` bytes at `offset` to the in-pool copy of page `id`.
+    ///
+    /// The pool automatically marks the page dirty.
+    fn write_to_page(
+        &mut self,
+        id: PageId,
+        offset: usize,
+        data: &[u8],
+    ) -> Result<(), StorageError> {
+        let page = self
+            .buffer_pool
+            .get_mut(id)
+            .ok_or(BufferPoolError::PageNotFound(id))?;
+        page.write_data(offset, data)
+            .map_err(|_| StorageError::OutOfBounds)
+    }
+
+    /// Write the in-pool copy of page `id` to disk and unpin it.
+    async fn flush_to_disk(&mut self, id: PageId) -> Result<(), StorageError> {
+        let page = self.buffer_pool.get(id).unwrap().clone();
+        self.file_manager.write_page(&page).await?;
+        self.buffer_pool.unpin(id, false)?;
+        Ok(())
+    }
+
+    /// Evict page `id` from the buffer pool if it is currently cached.
+    fn evict_if_cached(&mut self, id: PageId) -> Result<(), StorageError> {
+        if self.buffer_pool.contains(id) {
+            self.buffer_pool.evict(id)?;
+        }
+        Ok(())
+    }
 }
 
 impl StorageEngine {
-    /// Open (or create) the storage engine using `config`.
+    /// Open (or create) a storage engine using `config`.
+    ///
+    /// # Panics
+    /// Panics if `config.page_size <= HEADER_SIZE`.
     pub async fn new(config: StorageConfig) -> Result<Self, StorageError> {
         assert!(
             config.page_size > HEADER_SIZE,
@@ -139,55 +207,50 @@ impl StorageEngine {
             inner: Arc::new(Mutex::new(EngineInner {
                 file_manager: fm,
                 buffer_pool: bp,
-                page_size,
             })),
             page_size,
         })
     }
 
-    /// Allocate a new page and return its identifier.
+    /// Allocate a new page slot and return its identifier.
     pub async fn allocate_page(&self) -> Result<PageId, StorageError> {
         let id = self.inner.lock().await.file_manager.allocate_page().await?;
         Ok(id)
     }
 
-    /// Deallocate the page at `id`.
-    ///
-    /// The page is evicted from the buffer pool (if present) and its slot is
-    /// marked free on disk.
+    /// Release page `id`, removing it from the buffer pool and marking its
+    /// disk slot as free so it can be reused.
     pub async fn deallocate_page(&self, id: PageId) -> Result<(), StorageError> {
         let mut inner = self.inner.lock().await;
-        // Remove from buffer pool if cached.
-        if inner.buffer_pool.contains(id) {
-            inner.buffer_pool.evict(id)?;
-        }
+        inner.evict_if_cached(id)?;
         inner.file_manager.deallocate_page(id).await?;
         Ok(())
     }
 
-    /// Pin page `id`, loading it from disk if necessary.
+    /// Pin page `id` in the buffer pool and return a snapshot of its data.
     ///
-    /// The returned clone of the page is a snapshot; use [`write_page_data`]
-    /// to modify its contents durably.
+    /// The page remains pinned until [`unpin_page`](Self::unpin_page) is
+    /// called with the same `id`.
     pub async fn pin_page(&self, id: PageId) -> Result<Page, StorageError> {
         let mut inner = self.inner.lock().await;
-        if !inner.buffer_pool.contains(id) {
-            let page = inner.file_manager.read_page(id).await?;
-            inner.buffer_pool.insert_and_pin(page)?;
-        } else {
-            inner.buffer_pool.pin(id)?;
-        }
-        let page = inner.buffer_pool.get(id).unwrap().clone();
-        Ok(page)
+        inner.load_and_pin(id).await?;
+        Ok(inner.buffer_pool.get(id).unwrap().clone())
     }
 
-    /// Unpin page `id`.  Set `dirty = true` if the page was modified.
+    /// Unpin page `id`.
+    ///
+    /// Set `dirty = true` only if you modified the page's data through a
+    /// direct buffer pool reference; for writes via [`write_page_data`] this
+    /// is handled automatically.
     pub async fn unpin_page(&self, id: PageId, dirty: bool) -> Result<(), StorageError> {
         self.inner.lock().await.buffer_pool.unpin(id, dirty)?;
         Ok(())
     }
 
-    /// Write `data` into page `id` at byte `offset`, then flush to disk.
+    /// Write `data` into page `id` at byte `offset` and flush to disk.
+    ///
+    /// The page is loaded from disk if not already in the buffer pool.
+    /// After the write the page is persisted immediately and unpinned.
     pub async fn write_page_data(
         &self,
         id: PageId,
@@ -195,33 +258,15 @@ impl StorageEngine {
         data: &[u8],
     ) -> Result<(), StorageError> {
         let mut inner = self.inner.lock().await;
-
-        // Load page into buffer pool if not already present.
-        if !inner.buffer_pool.contains(id) {
-            let page = inner.file_manager.read_page(id).await?;
-            inner.buffer_pool.insert_and_pin(page)?;
-        } else {
-            inner.buffer_pool.pin(id)?;
-        }
-
-        // Mutate in-pool.
-        {
-            let page = inner
-                .buffer_pool
-                .get_mut(id)
-                .ok_or(BufferPoolError::PageNotFound(id))?;
-            page.write_data(offset, data)
-                .map_err(|_| StorageError::OutOfBounds)?;
-        }
-
-        // Flush to disk immediately.
-        let page = inner.buffer_pool.get(id).unwrap().clone();
-        inner.file_manager.write_page(&page).await?;
-        inner.buffer_pool.unpin(id, false)?;
-        Ok(())
+        inner.load_and_pin(id).await?;
+        inner.write_to_page(id, offset, data)?;
+        inner.flush_to_disk(id).await
     }
 
     /// Read `len` bytes from page `id` starting at byte `offset`.
+    ///
+    /// The page is loaded from disk (and checksum-verified) if not already in
+    /// the buffer pool.
     pub async fn read_page_data(
         &self,
         id: PageId,
@@ -229,29 +274,19 @@ impl StorageEngine {
         len: usize,
     ) -> Result<Vec<u8>, StorageError> {
         let mut inner = self.inner.lock().await;
-
-        // Load if not cached.
-        if !inner.buffer_pool.contains(id) {
-            let page: Page = inner.file_manager.read_page(id).await?;
-            if !page.validate_checksum() {
-                return Err(StorageError::ChecksumMismatch(id));
-            }
-            inner.buffer_pool.insert_and_pin(page)?;
-        } else {
-            inner.buffer_pool.pin(id)?;
-        }
-
-        let result = {
-            let page = inner.buffer_pool.get(id).unwrap();
-            page.read_data(offset, len)
-                .map(|s: &[u8]| s.to_vec())
-                .map_err(|_| StorageError::OutOfBounds)
-        };
+        inner.load_and_pin(id).await?;
+        let result = inner
+            .buffer_pool
+            .get(id)
+            .unwrap()
+            .read_data(offset, len)
+            .map(|s: &[u8]| s.to_vec())
+            .map_err(|_| StorageError::OutOfBounds);
         inner.buffer_pool.unpin(id, false)?;
         result
     }
 
-    /// Flush all dirty, unpinned pages in the buffer pool to disk.
+    /// Flush all dirty unpinned pages in the buffer pool to disk.
     pub async fn flush(&self) -> Result<(), StorageError> {
         let dirty_pages: Vec<Page> = self.inner.lock().await.buffer_pool.flush_dirty_pages();
         for page in dirty_pages {
@@ -265,17 +300,17 @@ impl StorageEngine {
         Ok(())
     }
 
-    /// Return the configured page size.
+    /// Return the configured page size in bytes.
     pub fn page_size(&self) -> usize {
         self.page_size
     }
 
-    /// Return the number of pages currently in the buffer pool.
+    /// Return the number of pages currently held in the buffer pool.
     pub async fn buffer_pool_len(&self) -> usize {
         self.inner.lock().await.buffer_pool.len()
     }
 
-    /// Return the buffer pool capacity.
+    /// Return the maximum number of pages the buffer pool can hold.
     pub async fn buffer_pool_capacity(&self) -> usize {
         self.inner.lock().await.buffer_pool.capacity()
     }
@@ -347,7 +382,6 @@ mod tests {
         let (engine, _tmp) = make_engine().await;
         let id = engine.allocate_page().await.unwrap();
         engine.write_page_data(id, 5, b"persistent").await.unwrap();
-        // write_page_data already handles pin/unpin; just read back the data.
         let data = engine.read_page_data(id, 5, 10).await.unwrap();
         assert_eq!(&data, b"persistent");
     }
@@ -408,7 +442,6 @@ mod tests {
     #[tokio::test]
     async fn test_buffer_pool_eviction_under_pressure() {
         let tmp = NamedTempFile::new().unwrap();
-        // Very small buffer pool of 4 pages.
         let engine = StorageEngine::new(StorageConfig {
             data_path: tmp.path().to_path_buf(),
             buffer_pool_size: 4,
@@ -417,7 +450,6 @@ mod tests {
         .await
         .unwrap();
 
-        // Allocate and write 8 pages — forces eviction.
         let mut ids = Vec::new();
         for i in 0u8..8 {
             let id = engine.allocate_page().await.unwrap();
@@ -425,7 +457,6 @@ mod tests {
             ids.push(id);
         }
 
-        // All values should still be readable (data is on disk).
         for (i, &id) in ids.iter().enumerate() {
             let data = engine.read_page_data(id, 0, 1).await.unwrap();
             assert_eq!(data[0], i as u8);
@@ -445,7 +476,6 @@ mod tests {
         .await
         .unwrap();
 
-        // Pre-allocate pages.
         let mut ids = Vec::new();
         for _ in 0..10 {
             ids.push(engine.allocate_page().await.unwrap());

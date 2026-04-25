@@ -1,6 +1,3 @@
-// Storage Engine — Page module
-// Licensed under AGPLv3.0
-
 //! Page structure, serialization, and checksum utilities.
 //!
 //! A page is the fundamental unit of storage in AeternumDB.  Every page has a
@@ -22,6 +19,9 @@
 
 use crc32fast::Hasher as Crc32Hasher;
 use std::fmt;
+
+/// Zero-value byte written into the header padding slot.
+const HEADER_RESERVED_BYTE: u8 = 0;
 
 /// Size of the serialized page header in bytes.
 pub const HEADER_SIZE: usize = 16;
@@ -98,7 +98,7 @@ impl PageHeader {
         let mut buf = [0u8; HEADER_SIZE];
         buf[0..8].copy_from_slice(&self.page_id.to_le_bytes());
         buf[8] = self.page_type.as_u8();
-        buf[9] = 0; // reserved
+        buf[9] = HEADER_RESERVED_BYTE;
         buf[10..12].copy_from_slice(&self.free_space.to_le_bytes());
         buf[12..16].copy_from_slice(&self.checksum.to_le_bytes());
         buf
@@ -298,12 +298,15 @@ mod tests {
         assert!(page.validate_checksum());
     }
 
+    fn corrupt_data_at(page: &mut Page, index: usize, value: u8) {
+        page.data[index] = value;
+    }
+
     #[test]
     fn test_checksum_detects_corruption() {
         let mut page = make_page(1);
         page.write_data(0, &[10, 20, 30]).unwrap();
-        // Corrupt data without updating checksum
-        page.data[0] = 0xFF;
+        corrupt_data_at(&mut page, 0, 0xFF);
         assert!(!page.validate_checksum());
     }
 

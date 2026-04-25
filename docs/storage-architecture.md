@@ -123,7 +123,6 @@ pub struct StorageEngine {
 struct EngineInner {
     file_manager: FileManager,
     buffer_pool:  BufferPool,
-    page_size:    usize,
 }
 ```
 
@@ -196,7 +195,65 @@ programmer-error conditions (e.g. `page_size == 0`).
 
 ---
 
-## Future Work
+## Sharding and Replication Support
+
+### Horizontal Sharding
+
+Each `StorageEngine` instance manages exactly **one shard** (one database file).
+Horizontal sharding is achieved at the application layer by running multiple
+engine instances in parallel:
+
+```rust
+use std::collections::HashMap;
+use aeternumdb_core::storage::{ShardId, StorageConfig, StorageEngine};
+
+// One engine per shard.
+let mut shards: HashMap<ShardId, StorageEngine> = HashMap::new();
+for shard_id in 0..NUM_SHARDS {
+    let engine = StorageEngine::new(StorageConfig {
+        data_path: format!("/data/shard-{shard_id:04}.db").into(),
+        ..default_config()
+    }).await?;
+    shards.insert(shard_id as ShardId, engine);
+}
+
+// Route a logical page to the right shard and translate the logical
+// page id to a shard-local page id.
+fn route(logical_id: u64, num_shards: u16) -> (ShardId, PageId) {
+    (logical_id as u16 % num_shards, logical_id / num_shards as u64)
+}
+```
+
+`StorageEngine` is `Clone + Send + Sync`, so shard handles can be freely shared
+across async tasks without additional locks.  The `ShardId` type alias
+(`u16`) is exported from `aeternumdb_core::storage` for use in router logic.
+
+### Read Replicas
+
+A read replica can open the **same file path** with its own `StorageEngine`
+instance to serve read traffic independently:
+
+```rust
+// Primary (read-write):
+let primary = StorageEngine::new(primary_config).await?;
+
+// Read replica (read-only by convention — no write calls):
+let replica = StorageEngine::new(replica_config).await?;
+```
+
+Because every `write_page_data` call flushes to disk immediately, a replica
+that reopens the file after a short delay sees up-to-date data.
+
+### Write Replication
+
+Streaming mutations from a primary to replicas requires a **Write-Ahead Log**
+(WAL) so the replica can replay operations atomically.  WAL is planned for
+**PR 1.8**.  Until then, write replication should be handled at a higher layer
+(e.g., Raft or Paxos consensus above the storage engine).
+
+---
+
+
 
 - **WAL (Write-Ahead Log)** — durability across crashes (PR 1.8)
 - **MVCC** — multi-version concurrency control (PR 1.7)

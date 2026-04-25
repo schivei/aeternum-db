@@ -1,6 +1,3 @@
-// Storage Engine — Performance Benchmarks
-// Licensed under AGPLv3.0
-
 //! Criterion benchmarks for the storage engine.
 //!
 //! Run with: `cargo bench --bench storage_bench`
@@ -33,6 +30,14 @@ async fn make_engine(pool_size: usize) -> (StorageEngine, NamedTempFile) {
 }
 
 // ── Sequential writes ─────────────────────────────────────────────────────────
+
+fn xor_shuffle_index(current: usize, n: usize) -> usize {
+    (current ^ (current >> 3) ^ 0xABCD) % n
+}
+
+fn is_write_step(step: usize) -> bool {
+    step % 5 == 0
+}
 
 fn bench_sequential_write(c: &mut Criterion) {
     let mut group = c.benchmark_group("sequential_write");
@@ -75,10 +80,9 @@ fn bench_random_read(c: &mut Criterion) {
                         engine.write_page_data(id, 0, &payload).await.unwrap();
                         ids.push(id);
                     }
-                    // Read in pseudo-random order using a simple XOR shuffle.
                     let mut idx = 0usize;
                     for _ in 0..n {
-                        idx = (idx ^ (idx >> 3) ^ 0xABCD) % n;
+                        idx = xor_shuffle_index(idx, n);
                         let _ = engine.read_page_data(ids[idx], 0, 64).await.unwrap();
                     }
                 });
@@ -108,14 +112,12 @@ fn bench_mixed_workload(c: &mut Criterion) {
                         ids.push(id);
                     }
                     for i in 0..n {
-                        if i % 5 == 0 {
-                            // write
+                        if is_write_step(i) {
                             engine
                                 .write_page_data(ids[i % ids.len()], 0, &payload)
                                 .await
                                 .unwrap();
                         } else {
-                            // read
                             let _ = engine
                                 .read_page_data(ids[i % ids.len()], 0, 64)
                                 .await
@@ -138,7 +140,6 @@ fn bench_buffer_hit_latency(c: &mut Criterion) {
         group.throughput(Throughput::Elements(n as u64));
         group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, &n| {
             let rt = rt();
-            // Setup: pre-populate pool once outside the iter.
             let (engine, _tmp, ids) = rt.block_on(async {
                 let (engine, tmp) = make_engine(POOL_SIZE).await;
                 let payload = vec![0xDDu8; 64];
