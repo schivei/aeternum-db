@@ -1,65 +1,65 @@
-📜 Licenciamento – AeternumDB
+📜 Licensing – AeternumDB
 
-1. Núcleo (Core Engine)
+1. Core (Core Engine)
 
-O núcleo do AeternumDB, incluindo o motor de transações ACID, replicação, sharding, versionamento e segurança, é licenciado sob a GNU Affero General Public License v3.0 (AGPLv3.0).
+The AeternumDB core, including the ACID transaction engine, replication, sharding, versioning, and security, is licensed under the GNU Affero General Public License v3.0 (AGPLv3.0).
 
-Isso significa que:
+This means that:
 
-• Qualquer modificação ou derivado do núcleo deve ser disponibilizado sob a mesma licença.
-• Se o núcleo for utilizado para fornecer serviços remotos (SaaS), o código-fonte das modificações também deve ser disponibilizado.
-
-
----
-
-2. SDKs e Drivers
-
-Os SDKs e drivers oficiais (Rust, C++, Python, JS/TS, Go, Java/Kotlin, .NET Core, ODBC, JDBC) são licenciados sob a Apache License 2.0.
-
-Isso garante:
-
-• Uso comercial amplo sem obrigação de abrir código.
-• Proteção contra litígios de patentes.
-• Integração facilitada com sistemas proprietários.
+• Any modification or derivative of the core must be made available under the same license.
+• If the core is used to provide remote services (SaaS), the source code of modifications must also be made available.
 
 
 ---
 
-3. Extensões WASM
+2. SDKs and Drivers
 
-As extensões WASM e exemplos de plugins são licenciados sob a MIT License, para máxima flexibilidade da comunidade.
+The official SDKs and drivers (Rust, C++, Python, JS/TS, Go, Java/Kotlin, .NET Core, ODBC, JDBC) are licensed under the Apache License 2.0.
 
-Isso permite:
+This ensures:
 
-• Livre uso, modificação e redistribuição.
-• Adoção rápida por desenvolvedores independentes.
-
-
----
-
-4. Versão Comercial (Enterprise Edition)
-
-O projeto prevê uma versão comercial futura, com:
-
-• Suporte dedicado.
-• Recursos avançados exclusivos.
-• Licenciamento alternativo para empresas que desejem usar sem restrições do AGPL.
+• Broad commercial use without obligation to open source.
+• Protection against patent litigation.
+• Easy integration with proprietary systems.
 
 
 ---
 
-5. Resumo
+3. WASM Extensions
+
+WASM extensions and plugin examples are licensed under the MIT License for maximum community flexibility.
+
+This allows:
+
+• Free use, modification, and redistribution.
+• Rapid adoption by independent developers.
+
+
+---
+
+4. Commercial Version (Enterprise Edition)
+
+The project envisions a future commercial version with:
+
+• Dedicated support.
+• Exclusive advanced features.
+• Alternative licensing for companies that wish to use without AGPL restrictions.
+
+
+---
+
+5. Summary
 
 • Core Engine → AGPLv3.0
-• SDKs e Drivers → Apache 2.0
-• Extensões WASM → MIT
-• Enterprise Edition → Licença comercial futura
+• SDKs and Drivers → Apache 2.0
+• WASM Extensions → MIT
+• Enterprise Edition → Future commercial license
 
 
 ---
 
-6. Textos completos das licenças
+6. Full License Texts
 
-• GNU AGPLv3.0 (gnu.org in Bing)
-• Apache License 2.0 (apache.org in Bing)
-• MIT License
+• GNU AGPLv3.0: https://www.gnu.org/licenses/agpl-3.0.html
+• Apache License 2.0: https://www.apache.org/licenses/LICENSE-2.0
+• MIT License: https://opensource.org/licenses/MIT

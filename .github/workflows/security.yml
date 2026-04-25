@@ -1,0 +1,380 @@
+name: Security Scanning
+
+on:
+  push:
+    branches: [ '**' ]
+  pull_request:
+  schedule:
+    # Run weekly on Mondays at 06:00 UTC to catch newly-published advisories
+    - cron: '0 6 * * 1'
+
+permissions:
+  contents: read
+  security-events: write
+  pull-requests: write
+
+jobs:
+  # ── SAST: GitHub CodeQL ─────────────────────────────────────────────────────
+  codeql:
+    name: "🔬 CodeQL (SAST)"
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-codeql-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: rust
+          queries: security-and-quality
+
+      - name: Build for CodeQL
+        working-directory: ./core
+        run: cargo build 2>&1
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:rust"
+
+  # ── SAST: Semgrep ────────────────────────────────────────────────────────────
+  semgrep:
+    name: "🔍 Semgrep (SAST)"
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+    container:
+      image: semgrep/semgrep
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run Semgrep (Rust + security rules)
+        run: |
+          semgrep \
+            --config "p/rust" \
+            --config "p/security-audit" \
+            --config "p/owasp-top-ten" \
+            --sarif \
+            --output semgrep.sarif \
+            . || true
+
+      - name: Upload Semgrep SARIF results
+        uses: github/codeql-action/upload-sarif@v4
+        if: always()
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
+
+  # ── Dependency CVE Scan: cargo-audit ────────────────────────────────────────
+  cargo-audit:
+    name: "🛡️ Cargo Audit (CVE Scan)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Generate Cargo.lock
+        working-directory: ./core
+        run: cargo generate-lockfile
+
+      - name: Run cargo audit
+        uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          working-directory: ./core
+
+  # ── Supply Chain: cargo-deny ─────────────────────────────────────────────────
+  cargo-deny:
+    name: "🔗 Cargo Deny (Supply Chain)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check licenses, bans, advisories, and sources
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: core/Cargo.toml
+          arguments: --all-features
+
+  # ── Secret Scanning: Gitleaks ────────────────────────────────────────────────
+  gitleaks:
+    name: "🔑 Secret Scan (Gitleaks)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Gitleaks secret scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── SAST: Grype filesystem scan ──────────────────────────────────────────────
+  grype-fs:
+    name: "🔭 Grype FS Scan (SAST)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Grype vulnerability scanner (filesystem)
+        uses: anchore/scan-action@v7.4.0
+        id: grype-fs
+        with:
+          path: .
+          output-format: sarif
+          output-file: grype-fs.sarif
+          severity-cutoff: medium
+          fail-build: "false"
+          cache-db: true
+
+      - name: Upload Grype FS SARIF results
+        uses: github/codeql-action/upload-sarif@v4
+        if: always()
+        with:
+          sarif_file: grype-fs.sarif
+          category: grype-filesystem
+
+  # ── DAST: Grype Docker image scan ────────────────────────────────────────────
+  grype-docker:
+    name: "🐳 Grype Image Scan (DAST)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image for security scanning
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./deployment/container/Dockerfile
+          push: false
+          load: true
+          tags: aeternumdb:security-scan
+
+      - name: Run Grype vulnerability scanner (Docker image)
+        uses: anchore/scan-action@v7.4.0
+        id: grype-docker
+        with:
+          image: aeternumdb:security-scan
+          output-format: sarif
+          output-file: grype-image.sarif
+          severity-cutoff: medium
+          fail-build: "false"
+          cache-db: true
+
+      - name: Upload Grype image SARIF results
+        uses: github/codeql-action/upload-sarif@v4
+        if: always()
+        with:
+          sarif_file: grype-image.sarif
+          category: grype-docker
+
+  # ── DAST: Fuzz Testing (cargo-fuzz) ─────────────────────────────────────────
+  fuzz:
+    name: "🎯 Fuzz Testing (DAST)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust nightly (required by cargo-fuzz)
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src, llvm-tools-preview
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-fuzz-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz
+
+      - name: Run fuzz targets (60 s each, if any targets exist)
+        working-directory: ./core
+        run: |
+          TARGETS=$(cargo fuzz list 2>/dev/null || true)
+          if [ -z "$TARGETS" ]; then
+            echo "ℹ️  No fuzz targets defined yet."
+            echo "   Add targets under core/fuzz/fuzz_targets/ to enable fuzzing."
+            exit 0
+          fi
+          for target in $TARGETS; do
+            echo "▶ Fuzzing '$target' for 60 seconds …"
+            cargo fuzz run "$target" -- \
+              -max_total_time=60 \
+              -timeout=10 \
+              -print_final_stats=1
+          done
+
+  # ── SAST: SonarCloud ────────────────────────────────────────────────────────
+  sonarcloud:
+    name: "☁️ SonarCloud (SAST)"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-sonar-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Generate LCOV coverage for SonarCloud
+        working-directory: ./core
+        run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
+
+      - name: Run SonarCloud analysis
+        uses: SonarSource/sonarcloud-github-action@master
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+  # ── Security Report Summary ──────────────────────────────────────────────────
+  security-report:
+    name: "📋 Security Report"
+    runs-on: ubuntu-latest
+    needs: [codeql, semgrep, cargo-audit, cargo-deny, grype-fs, grype-docker, gitleaks, fuzz, sonarcloud]
+    if: always()
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Write job summary
+        run: |
+          status() {
+            if [ "$1" = "success" ]; then echo "✅ Pass"; elif [ "$1" = "skipped" ]; then echo "⏭️ Skipped"; else echo "❌ Fail"; fi
+          }
+
+          {
+            echo "## 🔒 Security Scan Results"
+            echo ""
+            echo "| Tool | Category | Status |"
+            echo "|------|----------|--------|"
+            echo "| [CodeQL](../../security/code-scanning) | SAST | $(status '${{ needs.codeql.result }}') |"
+            echo "| [Semgrep](../../security/code-scanning) | SAST | $(status '${{ needs.semgrep.result }}') |"
+            echo "| [SonarCloud](https://sonarcloud.io/project/overview?id=schivei_aeternum-db) | SAST / Quality Gate | $(status '${{ needs.sonarcloud.result }}') |"
+            echo "| [Grype FS](../../security/code-scanning) | SAST | $(status '${{ needs.grype-fs.result }}') |"
+            echo "| [Grype Image](../../security/code-scanning) | DAST (Container) | $(status '${{ needs.grype-docker.result }}') |"
+            echo "| cargo-audit | CVE Dependency Scan | $(status '${{ needs.cargo-audit.result }}') |"
+            echo "| cargo-deny | Supply Chain / License | $(status '${{ needs.cargo-deny.result }}') |"
+            echo "| Gitleaks | Secret Detection | $(status '${{ needs.gitleaks.result }}') |"
+            echo "| cargo-fuzz | DAST (Fuzzing) | $(status '${{ needs.fuzz.result }}') |"
+            echo ""
+            echo "> 🔗 Full SARIF findings are in the [Security tab](../../security/code-scanning)."
+            echo "> 📅 This workflow also runs weekly to catch newly-published advisories."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Comment PR with security results
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const results = {
+              codeql:      '${{ needs.codeql.result }}',
+              semgrep:     '${{ needs.semgrep.result }}',
+              sonarcloud:  '${{ needs.sonarcloud.result }}',
+              grypefs:     '${{ needs.grype-fs.result }}',
+              grypeDocker: '${{ needs.grype-docker.result }}',
+              cargoAudit:  '${{ needs.cargo-audit.result }}',
+              cargoDeny:   '${{ needs.cargo-deny.result }}',
+              gitleaks:    '${{ needs.gitleaks.result }}',
+              fuzz:        '${{ needs.fuzz.result }}',
+            };
+
+            const icon = (r) =>
+              r === 'success' ? '✅ Pass' : r === 'skipped' ? '⏭️ Skipped' : '❌ Fail';
+
+            const allPassed = Object.values(results).every(
+              (r) => r === 'success' || r === 'skipped'
+            );
+            const overallIcon = allPassed ? '✅' : '❌';
+            const overallText = allPassed
+              ? 'All security checks passed.'
+              : '⚠️ One or more security checks failed. Please review the details below.';
+
+            const runUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const securityUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/security/code-scanning`;
+
+            const body = [
+              `## ${overallIcon} Security Scan Results`,
+              '',
+              overallText,
+              '',
+              '| Tool | Category | Status |',
+              '|------|----------|--------|',
+              `| [CodeQL](${securityUrl}) | SAST | ${icon(results.codeql)} |`,
+              `| [Semgrep](${securityUrl}) | SAST | ${icon(results.semgrep)} |`,
+              `| [SonarCloud](https://sonarcloud.io/project/overview?id=schivei_aeternum-db) | SAST / Quality Gate | ${icon(results.sonarcloud)} |`,
+              `| [Grype FS](${securityUrl}) | SAST | ${icon(results.grypefs)} |`,
+              `| [Grype Image](${securityUrl}) | DAST (Container) | ${icon(results.grypeDocker)} |`,
+              `| cargo-audit | CVE Dependency Scan | ${icon(results.cargoAudit)} |`,
+              `| cargo-deny | Supply Chain / License | ${icon(results.cargoDeny)} |`,
+              `| Gitleaks | Secret Detection | ${icon(results.gitleaks)} |`,
+              `| cargo-fuzz | DAST (Fuzzing) | ${icon(results.fuzz)} |`,
+              '',
+              `> 🔗 Full SARIF findings are in the [Security tab](${securityUrl}).`,
+              `> 📋 [View full workflow run](${runUrl})`,
+              '',
+              '<!-- security-scan-report -->',
+            ].join('\n');
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const existing = comments.find(
+              (c) => c.user.type === 'Bot' && c.body.includes('<!-- security-scan-report -->')
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+

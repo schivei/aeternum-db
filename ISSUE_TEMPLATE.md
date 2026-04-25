@@ -1,63 +1,63 @@
 📝 Issue Template – AeternumDB
 
-📌 Tipo de Issue
+📌 Issue Type
 
-Selecione uma das opções:
+Select one of the options:
 
 • Bug report
 • Feature request
-• Enhancement (melhoria em algo existente)
+• Enhancement (improvement to something existing)
 • Documentation update
 • Roadmap proposal
 
 
 ---
 
-📖 Descrição
+📖 Description
 
-Explique claramente o problema ou sugestão:
+Clearly explain the problem or suggestion:
 
-• O que está acontecendo ou o que você gostaria de ver implementado?
-• Qual é o impacto esperado?
-
-
----
-
-🔄 Passos para Reproduzir (apenas para bugs)
-
-1. Descreva os passos para reproduzir o problema.
-2. Inclua exemplos de código ou comandos, se possível.
-3. Informe o resultado atual e o resultado esperado.
+• What is happening or what would you like to see implemented?
+• What is the expected impact?
 
 
 ---
 
-🛠️ Área Afetada
+🔄 Steps to Reproduce (bugs only)
 
-Marque a área do projeto relacionada:
+1. Describe the steps to reproduce the problem.
+2. Include code examples or commands if possible.
+3. State the current result and the expected result.
+
+
+---
+
+🛠️ Affected Area
+
+Mark the related project area:
 
 • Core (AGPLv3.0)
 • SDKs (Apache 2.0)
 • Drivers (Apache 2.0)
-• Extensões WASM (MIT)
+• WASM Extensions (MIT)
 • Deployment (Lite, Container, Serverless)
-• Documentação
+• Documentation
 
 
 ---
 
 ✅ Checklist
 
-Antes de enviar, confirme:
+Before submitting, confirm:
 
-• Eu li o CONTRIBUTING.md
-• Eu respeitei o CODE_OF_CONDUCT.md
-• Eu incluí testes ou exemplos, quando aplicável
-• Eu descrevi claramente o impacto da mudança
+• I have read CONTRIBUTING.md
+• I have respected CODE_OF_CONDUCT.md
+• I have included tests or examples when applicable
+• I have clearly described the impact of the change
 
 
 ---
 
-📎 Informações Adicionais
+📎 Additional Information
 
-Inclua logs, prints, links ou qualquer detalhe que ajude a entender melhor a issue.
+Include logs, screenshots, links, or any details that help better understand the issue.

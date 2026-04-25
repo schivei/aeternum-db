@@ -1,0 +1,29 @@
+[package]
+name = "aeternumdb-core"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+authors = ["AeternumDB Contributors"]
+description = "High-performance, extensible database management system core engine"
+repository = "https://github.com/schivei/aeternum-db"
+
+[dependencies]
+tokio = { version = "1.52", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tonic = "0.14"
+prost = "0.14"
+wasm-bindgen = "0.2"
+rust_decimal = "1.41"
+sqlparser = "0.61"
+clap = { version = "4.5", features = ["derive"] }
+
+[dev-dependencies]
+tokio-test = "0.4"
+
+[build-dependencies]
+tonic-build = "0.14"
+
+[[bin]]
+name = "aeternumdb"
+path = "src/main.rs"

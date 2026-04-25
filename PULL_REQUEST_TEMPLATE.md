@@ -1,67 +1,67 @@
 🔀 Pull Request Template – AeternumDB
 
-📖 Descrição
+📖 Description
 
-Explique claramente o que este PR faz:
+Clearly explain what this PR does:
 
-• Qual problema ou melhoria está sendo resolvido?
-• Qual área do projeto foi afetada?
-• Qual é o impacto esperado?
-
-
----
-
-🛠️ Tipo de Mudança
-
-Selecione uma das opções:
-
-• Bug fix (correção sem quebrar compatibilidade)
-• Nova feature (funcionalidade nova)
-• Breaking change (mudança que quebra compatibilidade)
-• Documentação
-• Testes
+• What problem or improvement is being solved?
+• What area of the project was affected?
+• What is the expected impact?
 
 
 ---
 
-📂 Área Afetada
+🛠️ Type of Change
 
-Marque a área do projeto relacionada:
+Select one of the options:
+
+• Bug fix (correction without breaking compatibility)
+• New feature (new functionality)
+• Breaking change (change that breaks compatibility)
+• Documentation
+• Tests
+
+
+---
+
+📂 Affected Area
+
+Mark the related project area:
 
 • Core (AGPLv3.0)
 • SDKs (Apache 2.0)
 • Drivers (Apache 2.0)
-• Extensões WASM (MIT)
+• WASM Extensions (MIT)
 • Deployment (Lite, Container, Serverless)
-• Documentação
+• Documentation
 
 
 ---
 
 ✅ Checklist
 
-Antes de enviar, confirme:
+Before submitting, confirm:
 
-• Eu li o CONTRIBUTING.md
-• Eu respeitei o CODE_OF_CONDUCT.md
-• Eu adicionei testes para validar minhas mudanças
-• Eu atualizei a documentação quando necessário
-• O código compila e passa nos testes locais
-
-
----
-
-🔄 Testes Realizados
-
-Descreva os testes que foram feitos para validar a mudança:
-
-• Ambiente utilizado (local, container, cloud).
-• Casos de teste executados.
-• Resultados obtidos.
+• I have read CONTRIBUTING.md
+• I have respected CODE_OF_CONDUCT.md
+• I have added tests to validate my changes
+• I have updated documentation when necessary
+• The code compiles and passes local tests
 
 
 ---
 
-📎 Informações Adicionais
+🔄 Tests Performed
 
-Inclua qualquer detalhe extra que ajude a revisão: logs, prints, links, referências.
+Describe the tests that were done to validate the change:
+
+• Environment used (local, container, cloud).
+• Test cases executed.
+• Results obtained.
+
+
+---
+
+📎 Additional Information
+
+Include any extra details that help with the review: logs, screenshots, links, references.
