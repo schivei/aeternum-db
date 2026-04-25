@@ -21,11 +21,16 @@ RUN apt-get update && apt-get install -y \
 # Copy binary from builder
 COPY --from=builder /build/core/target/release/aeternumdb /usr/local/bin/
 
-# Create data directory
-RUN mkdir -p /var/lib/aeternumdb
+# Create a non-root user and data directory
+RUN groupadd -r aeternumdb && useradd -r -g aeternumdb aeternumdb \
+    && mkdir -p /var/lib/aeternumdb \
+    && chown -R aeternumdb:aeternumdb /var/lib/aeternumdb
 
 # Expose default port
 EXPOSE 5432
+
+# Run as non-root user
+USER aeternumdb
 
 # Set default command
 CMD ["aeternumdb", "--lite"]

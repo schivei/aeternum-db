@@ -16,9 +16,11 @@ async fn main() {
     println!("High-performance, extensible database management system");
     println!();
 
-    let args: Vec<String> = env::args().collect();
+    // Skip argv[0] (the binary path), which can be set to arbitrary text
+    // and must not be relied upon for security or mode-selection purposes.
+    let args: Vec<String> = env::args().skip(1).collect();
 
-    if args.len() > 1 && args[1] == "--lite" {
+    if args.first().map(String::as_str) == Some("--lite") {
         println!("Starting in Lite mode (single local instance)...");
         run_lite_mode();
     } else {

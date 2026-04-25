@@ -35,6 +35,14 @@ spec:
         ports:
         - containerPort: 5432
           name: database
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 999
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: false
         resources:
           requests:
             memory: "256Mi"
