@@ -230,11 +230,47 @@ jobs:
               -print_final_stats=1
           done
 
+  # ── SAST: SonarCloud ────────────────────────────────────────────────────────
+  sonarcloud:
+    name: "☁️ SonarCloud (SAST)"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-sonar-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Generate LCOV coverage for SonarCloud
+        working-directory: ./core
+        run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
+
+      - name: Run SonarCloud analysis
+        uses: SonarSource/sonarcloud-github-action@master
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
   # ── Security Report Summary ──────────────────────────────────────────────────
   security-report:
     name: "📋 Security Report"
     runs-on: ubuntu-latest
-    needs: [codeql, semgrep, cargo-audit, cargo-deny, trivy-fs, trivy-docker, gitleaks, fuzz]
+    needs: [codeql, semgrep, cargo-audit, cargo-deny, trivy-fs, trivy-docker, gitleaks, fuzz, sonarcloud]
     if: always()
     permissions:
       contents: read
@@ -253,6 +289,7 @@ jobs:
             echo "|------|----------|--------|"
             echo "| [CodeQL](../../security/code-scanning) | SAST | $(status '${{ needs.codeql.result }}') |"
             echo "| [Semgrep](../../security/code-scanning) | SAST | $(status '${{ needs.semgrep.result }}') |"
+            echo "| [SonarCloud](https://sonarcloud.io/project/overview?id=schivei_aeternum-db) | SAST / Quality Gate | $(status '${{ needs.sonarcloud.result }}') |"
             echo "| [Trivy FS](../../security/code-scanning) | SAST | $(status '${{ needs.trivy-fs.result }}') |"
             echo "| [Trivy Image](../../security/code-scanning) | DAST (Container) | $(status '${{ needs.trivy-docker.result }}') |"
             echo "| cargo-audit | CVE Dependency Scan | $(status '${{ needs.cargo-audit.result }}') |"
@@ -273,6 +310,7 @@ jobs:
             const results = {
               codeql:      '${{ needs.codeql.result }}',
               semgrep:     '${{ needs.semgrep.result }}',
+              sonarcloud:  '${{ needs.sonarcloud.result }}',
               trivyFs:     '${{ needs.trivy-fs.result }}',
               trivyDocker: '${{ needs.trivy-docker.result }}',
               cargoAudit:  '${{ needs.cargo-audit.result }}',
@@ -304,6 +342,7 @@ jobs:
               '|------|----------|--------|',
               `| [CodeQL](${securityUrl}) | SAST | ${icon(results.codeql)} |`,
               `| [Semgrep](${securityUrl}) | SAST | ${icon(results.semgrep)} |`,
+              `| [SonarCloud](https://sonarcloud.io/project/overview?id=schivei_aeternum-db) | SAST / Quality Gate | ${icon(results.sonarcloud)} |`,
               `| [Trivy FS](${securityUrl}) | SAST | ${icon(results.trivyFs)} |`,
               `| [Trivy Image](${securityUrl}) | DAST (Container) | ${icon(results.trivyDocker)} |`,
               `| cargo-audit | CVE Dependency Scan | ${icon(results.cargoAudit)} |`,
