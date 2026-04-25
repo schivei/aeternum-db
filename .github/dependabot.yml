@@ -1,0 +1,63 @@
+version: 2
+
+updates:
+  # ── Rust / Cargo ────────────────────────────────────────────────────────────
+  - package-ecosystem: cargo
+    directory: /core
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: UTC
+    open-pull-requests-limit: 10
+    labels:
+      - dependencies
+      - rust
+    commit-message:
+      prefix: "chore(deps)"
+      include: scope
+    # Group patch and minor updates to reduce PR noise
+    groups:
+      patch-updates:
+        update-types:
+          - patch
+      minor-updates:
+        update-types:
+          - minor
+
+  # ── GitHub Actions ──────────────────────────────────────────────────────────
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: UTC
+    open-pull-requests-limit: 10
+    labels:
+      - dependencies
+      - github-actions
+    commit-message:
+      prefix: "chore(ci)"
+      include: scope
+    groups:
+      actions-updates:
+        update-types:
+          - patch
+          - minor
+
+  # ── Docker ──────────────────────────────────────────────────────────────────
+  - package-ecosystem: docker
+    directory: /deployment/container
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: UTC
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - docker
+    commit-message:
+      prefix: "chore(docker)"
+      include: scope

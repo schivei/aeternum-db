@@ -1,0 +1,247 @@
+name: Security Scanning
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Run weekly on Mondays at 06:00 UTC to catch newly-published advisories
+    - cron: '0 6 * * 1'
+
+permissions:
+  contents: read
+  security-events: write
+  pull-requests: write
+
+jobs:
+  # ── SAST: GitHub CodeQL ─────────────────────────────────────────────────────
+  codeql:
+    name: "🔬 CodeQL (SAST)"
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-codeql-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: rust
+          queries: security-and-quality
+
+      - name: Build for CodeQL
+        working-directory: ./core
+        run: cargo build 2>&1
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:rust"
+
+  # ── SAST: Semgrep ────────────────────────────────────────────────────────────
+  semgrep:
+    name: "🔍 Semgrep (SAST)"
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+    container:
+      image: semgrep/semgrep
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Semgrep (Rust + security rules)
+        run: |
+          semgrep \
+            --config "p/rust" \
+            --config "p/security-audit" \
+            --config "p/owasp-top-ten" \
+            --sarif \
+            --output semgrep.sarif \
+            . || true
+
+      - name: Upload Semgrep SARIF results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
+
+  # ── Dependency CVE Scan: cargo-audit ────────────────────────────────────────
+  cargo-audit:
+    name: "🛡️ Cargo Audit (CVE Scan)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run cargo audit
+        uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          working-directory: ./core
+
+  # ── Supply Chain: cargo-deny ─────────────────────────────────────────────────
+  cargo-deny:
+    name: "🔗 Cargo Deny (Supply Chain)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check licenses, bans, advisories, and sources
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: core/Cargo.toml
+          arguments: --all-features
+
+  # ── Secret Scanning: Gitleaks ────────────────────────────────────────────────
+  gitleaks:
+    name: "🔑 Secret Scan (Gitleaks)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Gitleaks secret scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── SAST: Trivy filesystem scan ──────────────────────────────────────────────
+  trivy-fs:
+    name: "🔭 Trivy FS Scan (SAST)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Trivy vulnerability scanner (filesystem)
+        uses: aquasecurity/trivy-action@0.31.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: sarif
+          output: trivy-fs.sarif
+          severity: CRITICAL,HIGH,MEDIUM
+          exit-code: "0"
+
+      - name: Upload Trivy FS SARIF results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-fs.sarif
+          category: trivy-filesystem
+
+  # ── DAST: Trivy Docker image scan ────────────────────────────────────────────
+  trivy-docker:
+    name: "🐳 Trivy Image Scan (DAST)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image for security scanning
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./deployment/container/Dockerfile
+          push: false
+          load: true
+          tags: aeternumdb:security-scan
+
+      - name: Run Trivy vulnerability scanner (Docker image)
+        uses: aquasecurity/trivy-action@0.31.0
+        with:
+          image-ref: aeternumdb:security-scan
+          format: sarif
+          output: trivy-image.sarif
+          severity: CRITICAL,HIGH,MEDIUM
+          exit-code: "0"
+
+      - name: Upload Trivy image SARIF results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-image.sarif
+          category: trivy-docker
+
+  # ── DAST: Fuzz Testing (cargo-fuzz) ─────────────────────────────────────────
+  fuzz:
+    name: "🎯 Fuzz Testing (DAST)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust nightly (required by cargo-fuzz)
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src, llvm-tools-preview
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-fuzz-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz
+
+      - name: Run fuzz targets (60 s each, if any targets exist)
+        working-directory: ./core
+        run: |
+          TARGETS=$(cargo fuzz list 2>/dev/null || true)
+          if [ -z "$TARGETS" ]; then
+            echo "ℹ️  No fuzz targets defined yet."
+            echo "   Add targets under core/fuzz/fuzz_targets/ to enable fuzzing."
+            exit 0
+          fi
+          for target in $TARGETS; do
+            echo "▶ Fuzzing '$target' for 60 seconds …"
+            cargo fuzz run "$target" -- \
+              -max_total_time=60 \
+              -timeout=10 \
+              -print_final_stats=1
+          done
+
+  # ── Security Report Summary ──────────────────────────────────────────────────
+  security-report:
+    name: "📋 Security Report"
+    runs-on: ubuntu-latest
+    needs: [codeql, semgrep, cargo-audit, cargo-deny, trivy-fs, trivy-docker, gitleaks, fuzz]
+    if: always()
+    steps:
+      - name: Write job summary
+        run: |
+          status() {
+            if [ "$1" = "success" ]; then echo "✅ Pass"; elif [ "$1" = "skipped" ]; then echo "⏭️ Skipped"; else echo "❌ Fail"; fi
+          }
+
+          {
+            echo "## 🔒 Security Scan Results"
+            echo ""
+            echo "| Tool | Category | Status |"
+            echo "|------|----------|--------|"
+            echo "| [CodeQL](../../security/code-scanning) | SAST | $(status '${{ needs.codeql.result }}') |"
+            echo "| [Semgrep](../../security/code-scanning) | SAST | $(status '${{ needs.semgrep.result }}') |"
+            echo "| [Trivy FS](../../security/code-scanning) | SAST | $(status '${{ needs.trivy-fs.result }}') |"
+            echo "| [Trivy Image](../../security/code-scanning) | DAST (Container) | $(status '${{ needs.trivy-docker.result }}') |"
+            echo "| cargo-audit | CVE Dependency Scan | $(status '${{ needs.cargo-audit.result }}') |"
+            echo "| cargo-deny | Supply Chain / License | $(status '${{ needs.cargo-deny.result }}') |"
+            echo "| Gitleaks | Secret Detection | $(status '${{ needs.gitleaks.result }}') |"
+            echo "| cargo-fuzz | DAST (Fuzzing) | $(status '${{ needs.fuzz.result }}') |"
+            echo ""
+            echo "> 🔗 Full SARIF findings are in the [Security tab](../../security/code-scanning)."
+            echo "> 📅 This workflow also runs weekly to catch newly-published advisories."
+          } >> "$GITHUB_STEP_SUMMARY"
