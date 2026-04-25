@@ -121,7 +121,7 @@ fn bench_mixed_workload(c: &mut Criterion) {
                         for _ in 0..n {
                             let id = engine.allocate_page().await.unwrap();
                             engine
-                                .write_page_data(id, 0, &vec![0xCCu8; 64])
+                                .write_page_data(id, 0, &payload)
                                 .await
                                 .unwrap();
                             ids.push(id);
@@ -130,12 +130,12 @@ fn bench_mixed_workload(c: &mut Criterion) {
                     })
                 },
                 |(engine, _tmp, ids)| {
-                    let payload = payload.clone();
+                    let p: &[u8] = &payload;
                     rt.block_on(async move {
                         for i in 0..n {
                             if is_write_step(i) {
                                 engine
-                                    .write_page_data(ids[i % ids.len()], 0, &payload)
+                                    .write_page_data(ids[i % ids.len()], 0, p)
                                     .await
                                     .unwrap();
                             } else {
