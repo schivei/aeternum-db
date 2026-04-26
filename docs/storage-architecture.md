@@ -186,15 +186,15 @@ cargo bench --bench storage_bench
 ## Error Handling
 
 All public methods return typed `Result` values.  No panics occur in
-production paths; `assert!`/`panic` is used only in constructors for
-programmer-error conditions (e.g. `page_size == 0`).
+production paths; `assert!` is used only in constructors for
+programmer-error conditions (e.g. `page_size == 0` or `page_size > HEADER_SIZE + u16::MAX`).
 
 | Type                | Variants                                               |
 |--------------------|--------------------------------------------------------|
-| `PageError`         | `WriteOutOfBounds`, `ReadOutOfBounds`, `ChecksumMismatch` |
-| `FileManagerError`  | `InvalidPageId`, `PageAlreadyFree`, `PageAlreadyAllocated`, `Io`, `CorruptPage` |
-| `BufferPoolError`   | `PoolFull`, `PageNotFound`, `NotPinned`                |
-| `StorageError`      | `BufferPool(…)`, `FileManager(…)`, `OutOfBounds`, `ChecksumMismatch` |
+| `PageError`         | `WriteOutOfBounds`, `ReadOutOfBounds`                  |
+| `FileManagerError`  | `InvalidPageId`, `PageAlreadyFree`, `PageAlreadyAllocated`, `PageNotAllocated`, `PageSizeMismatch`, `Io`, `CorruptPage` |
+| `BufferPoolError`   | `PoolFull`, `PageNotFound`, `NotPinned`, `PageSizeMismatch` |
+| `StorageError`      | `BufferPool(…)`, `FileManager(…)`, `OutOfBounds`, `ChecksumMismatch`, `PagePinned` |
 
 ---
 

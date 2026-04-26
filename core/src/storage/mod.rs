@@ -178,12 +178,26 @@ impl EngineInner {
     }
 
     /// Write the in-pool copy of page `id` to disk, mark it clean, and unpin it.
+    ///
+    /// Called by the public [`StorageEngine`] methods. If the disk write fails
+    /// the page is still unpinned but kept dirty so the next call to
+    /// [`StorageEngine::flush`] will retry writing it.
     async fn flush_to_disk(&mut self, id: PageId) -> Result<(), StorageError> {
-        let page = self.buffer_pool.get(id).unwrap().clone();
-        self.file_manager.write_page(&page).await?;
-        self.buffer_pool.mark_clean(id);
+        let page = self
+            .buffer_pool
+            .get(id)
+            .ok_or(BufferPoolError::PageNotFound(id))?
+            .clone();
+        let write_result = self
+            .file_manager
+            .write_page(&page)
+            .await
+            .map_err(StorageError::FileManager);
+        if write_result.is_ok() {
+            self.buffer_pool.mark_clean(id);
+        }
         self.buffer_pool.unpin(id, false)?;
-        Ok(())
+        write_result
     }
 
     /// Evict page `id` from the buffer pool if it is currently cached.
@@ -254,7 +268,12 @@ impl StorageEngine {
     pub async fn pin_page(&self, id: PageId) -> Result<Page, StorageError> {
         let mut inner = self.inner.lock().await;
         inner.load_and_pin(id).await?;
-        Ok(inner.buffer_pool.get(id).unwrap().clone())
+        let page = inner
+            .buffer_pool
+            .get(id)
+            .ok_or(BufferPoolError::PageNotFound(id))?
+            .clone();
+        Ok(page)
     }
 
     /// Unpin page `id`.
@@ -271,6 +290,7 @@ impl StorageEngine {
     ///
     /// The page is loaded from disk if not already in the buffer pool.
     /// After the write the page is persisted immediately and unpinned.
+    /// On any error after pin the page is unpinned before returning.
     pub async fn write_page_data(
         &self,
         id: PageId,
@@ -279,7 +299,10 @@ impl StorageEngine {
     ) -> Result<(), StorageError> {
         let mut inner = self.inner.lock().await;
         inner.load_and_pin(id).await?;
-        inner.write_to_page(id, offset, data)?;
+        if let Err(e) = inner.write_to_page(id, offset, data) {
+            let _ = inner.buffer_pool.unpin(id, false);
+            return Err(e);
+        }
         inner.flush_to_disk(id).await
     }
 
@@ -298,7 +321,7 @@ impl StorageEngine {
         let result = inner
             .buffer_pool
             .get(id)
-            .unwrap()
+            .ok_or(BufferPoolError::PageNotFound(id))?
             .read_data(offset, len)
             .map(|s: &[u8]| s.to_vec())
             .map_err(|_| StorageError::OutOfBounds);

@@ -31,6 +31,15 @@ pub enum FileManagerError {
     PageAlreadyAllocated(PageId),
     /// Attempted to read or write a page slot that is not allocated.
     PageNotAllocated(PageId),
+    /// The page's total size does not match this manager's configured page size.
+    PageSizeMismatch {
+        /// Page that caused the mismatch.
+        page_id: PageId,
+        /// Size this manager expects for each page.
+        expected: usize,
+        /// Actual size of the provided page.
+        actual: usize,
+    },
     /// An underlying I/O error.
     Io(std::io::Error),
     /// The on-disk page layout could not be parsed (corrupt data).
@@ -46,6 +55,14 @@ impl std::fmt::Display for FileManagerError {
                 write!(f, "page {id} is already allocated")
             }
             FileManagerError::PageNotAllocated(id) => write!(f, "page {id} is not allocated"),
+            FileManagerError::PageSizeMismatch {
+                page_id,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "page {page_id} size mismatch: expected {expected} bytes, got {actual}"
+            ),
             FileManagerError::Io(e) => write!(f, "I/O error: {e}"),
             FileManagerError::CorruptPage(id) => write!(f, "page {id} is corrupt"),
         }
@@ -164,7 +181,7 @@ impl FileManager {
             .await?;
 
         let file_len = file.metadata().await?.len();
-        let page_count = file_len / (page_size as u64);
+        let page_count = file_len.div_ceil(page_size as u64);
         let (bitmap, free_list) = scan_allocation_state(&file, page_count, page_size).await?;
 
         Ok(FileManager {
@@ -221,10 +238,13 @@ impl FileManager {
     /// Write `page` to disk at the offset corresponding to its page id.
     ///
     /// Returns [`FileManagerError::PageNotAllocated`] when the page slot is
-    /// not currently allocated in the bitmap.
+    /// not currently allocated in the bitmap.  Returns
+    /// [`FileManagerError::PageSizeMismatch`] when the page's total byte
+    /// length does not match this manager's configured `page_size`.
     pub async fn write_page(&mut self, page: &Page) -> Result<(), FileManagerError> {
         self.check_valid_id(page.id())?;
         self.check_allocated(page.id())?;
+        self.check_page_size(page)?;
         self.write_page_to_disk(page).await
     }
 
@@ -347,6 +367,23 @@ impl FileManager {
     fn check_allocated(&self, id: PageId) -> Result<(), FileManagerError> {
         if !self.bitmap[id as usize] {
             Err(FileManagerError::PageNotAllocated(id))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Return an error if `page`'s total byte size does not match `self.page_size`.
+    ///
+    /// Prevents writing a page constructed with a different `page_size` from
+    /// overwriting only part of a disk slot and corrupting adjacent pages.
+    fn check_page_size(&self, page: &Page) -> Result<(), FileManagerError> {
+        let actual = page.total_size();
+        if actual != self.page_size {
+            Err(FileManagerError::PageSizeMismatch {
+                page_id: page.id(),
+                expected: self.page_size,
+                actual,
+            })
         } else {
             Ok(())
         }

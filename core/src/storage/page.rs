@@ -164,6 +164,11 @@ impl Page {
         hasher.finalize()
     }
 
+    /// Return the total serialized byte size of this page (header + data payload).
+    pub fn total_size(&self) -> usize {
+        HEADER_SIZE + self.data.len()
+    }
+
     /// Recompute and update the header checksum from current data contents.
     pub fn update_checksum(&mut self) {
         self.header.checksum = Self::compute_checksum(&self.data);

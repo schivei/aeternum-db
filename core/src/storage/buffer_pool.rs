@@ -22,20 +22,41 @@ use std::sync::Arc;
 /// Errors returned by [`BufferPool`] operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BufferPoolError {
-    /// The pool is full and every resident page is pinned; no eviction is possible.
+    /// The pool is full and every resident page is either pinned or dirty;
+    /// no eviction is possible.  Flush dirty pages and retry.
     PoolFull,
     /// The requested page is not present in the pool.
     PageNotFound(PageId),
     /// Attempted to unpin a page whose pin count is already zero.
     NotPinned(PageId),
+    /// The page's total byte size does not match the pool's configured page size.
+    PageSizeMismatch {
+        /// Page that caused the mismatch.
+        page_id: PageId,
+        /// Size the pool expects for each page.
+        expected: usize,
+        /// Actual size of the provided page.
+        actual: usize,
+    },
 }
 
 impl std::fmt::Display for BufferPoolError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            BufferPoolError::PoolFull => write!(f, "buffer pool is full; all pages are pinned"),
+            BufferPoolError::PoolFull => write!(
+                f,
+                "buffer pool is full; all pages are pinned or dirty — flush dirty pages and retry"
+            ),
             BufferPoolError::PageNotFound(id) => write!(f, "page {id} not in buffer pool"),
             BufferPoolError::NotPinned(id) => write!(f, "page {id} is not pinned"),
+            BufferPoolError::PageSizeMismatch {
+                page_id,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "page {page_id} size mismatch: pool expects {expected} bytes, page has {actual}"
+            ),
         }
     }
 }
@@ -58,8 +79,10 @@ pub enum EvictionPolicy {
 pub struct BufferPoolConfig {
     /// Maximum number of pages held in memory simultaneously.
     pub capacity: usize,
-    /// Page size in bytes.  Stored for validation; the pool keeps full
-    /// [`Page`] objects as returned by the [`FileManager`](super::file_manager::FileManager).
+    /// Page size in bytes.  Every page inserted via
+    /// [`insert_and_pin`](BufferPool::insert_and_pin) is validated against
+    /// this value; mismatched pages are rejected with
+    /// [`BufferPoolError::PageSizeMismatch`].
     pub page_size: usize,
     /// Which eviction algorithm to use when the pool is full.
     pub eviction_policy: EvictionPolicy,
@@ -123,10 +146,20 @@ impl BufferPool {
     /// Insert `page` into the pool and pin it.
     ///
     /// If the page is already present its pin count is incremented.  If the
-    /// pool is full an LRU unpinned victim is evicted.  Returns an error when
-    /// the pool is full and every page is pinned.
+    /// pool is full an LRU unpinned page that is also clean (not dirty) is
+    /// evicted.  Returns an error when the pool is full and every page is
+    /// pinned or dirty, or when the page's byte size does not match the pool's
+    /// configured `page_size`.
     pub fn insert_and_pin(&mut self, page: Page) -> Result<(), BufferPoolError> {
         let id = page.id();
+        let actual = page.total_size();
+        if actual != self.config.page_size {
+            return Err(BufferPoolError::PageSizeMismatch {
+                page_id: id,
+                expected: self.config.page_size,
+                actual,
+            });
+        }
         if self.repin_existing(id) {
             return Ok(());
         }
