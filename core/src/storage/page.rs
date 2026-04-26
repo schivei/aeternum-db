@@ -164,6 +164,23 @@ impl Page {
         hasher.finalize()
     }
 
+    /// Compute the CRC-32 checksum for an all-zero data payload of `data_size`
+    /// bytes without allocating a buffer.
+    ///
+    /// Used by [`FileManager`](crate::storage::file_manager::FileManager) to
+    /// write correct checksums for freshly-initialised free page slots.
+    pub fn zero_data_checksum(data_size: usize) -> u32 {
+        let mut hasher = Crc32Hasher::new();
+        let chunk = [0u8; 64];
+        let mut remaining = data_size;
+        while remaining > 0 {
+            let n = remaining.min(chunk.len());
+            hasher.update(&chunk[..n]);
+            remaining -= n;
+        }
+        hasher.finalize()
+    }
+
     /// Return the total serialized byte size of this page (header + data payload).
     pub fn total_size(&self) -> usize {
         HEADER_SIZE + self.data.len()

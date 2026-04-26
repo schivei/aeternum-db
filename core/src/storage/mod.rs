@@ -162,7 +162,8 @@ impl EngineInner {
 
     /// Apply `data` bytes at `offset` to the in-pool copy of page `id`.
     ///
-    /// The pool automatically marks the page dirty.
+    /// The page is marked dirty only after the write succeeds; if
+    /// [`Page::write_data`] returns an error the dirty flag is left unchanged.
     fn write_to_page(
         &mut self,
         id: PageId,
@@ -171,10 +172,12 @@ impl EngineInner {
     ) -> Result<(), StorageError> {
         let page = self
             .buffer_pool
-            .get_mut(id)
+            .get_page_no_dirty(id)
             .ok_or(BufferPoolError::PageNotFound(id))?;
         page.write_data(offset, data)
-            .map_err(|_| StorageError::OutOfBounds)
+            .map_err(|_| StorageError::OutOfBounds)?;
+        self.buffer_pool.mark_dirty(id);
+        Ok(())
     }
 
     /// Write the in-pool copy of page `id` to disk, mark it clean, and unpin it.

@@ -145,13 +145,17 @@ impl BufferPool {
 
     /// Insert `page` into the pool and pin it.
     ///
-    /// If the page is already present its pin count is incremented.  If the
-    /// pool is full an LRU unpinned page that is also clean (not dirty) is
-    /// evicted.  Returns an error when the pool is full and every page is
+    /// If the page is already present its pin count is incremented and the
+    /// function returns immediately without validating the provided page's size.
+    /// If the pool is full an LRU unpinned page that is also clean (not dirty)
+    /// is evicted.  Returns an error when the pool is full and every page is
     /// pinned or dirty, or when the page's byte size does not match the pool's
     /// configured `page_size`.
     pub fn insert_and_pin(&mut self, page: Page) -> Result<(), BufferPoolError> {
         let id = page.id();
+        if self.repin_existing(id) {
+            return Ok(());
+        }
         let actual = page.total_size();
         if actual != self.config.page_size {
             return Err(BufferPoolError::PageSizeMismatch {
@@ -159,9 +163,6 @@ impl BufferPool {
                 expected: self.config.page_size,
                 actual,
             });
-        }
-        if self.repin_existing(id) {
-            return Ok(());
         }
         let fi = self.get_free_frame()?;
         self.frames[fi] = Some(Frame {
@@ -223,6 +224,26 @@ impl BufferPool {
         let frame = self.frames[fi].as_mut()?;
         frame.dirty = true;
         Some(&mut frame.page)
+    }
+
+    /// Return a mutable reference to the page without setting the dirty flag.
+    ///
+    /// Use when a write may fail partway and the frame should only be marked
+    /// dirty after the operation succeeds.  Pair with [`mark_dirty`](Self::mark_dirty).
+    pub fn get_page_no_dirty(&mut self, id: PageId) -> Option<&mut Page> {
+        let fi = *self.page_table.get(&id)?;
+        Some(&mut self.frames[fi].as_mut()?.page)
+    }
+
+    /// Mark page `id` dirty without changing its pin count.
+    ///
+    /// No-op when `id` is not in the pool.
+    pub fn mark_dirty(&mut self, id: PageId) {
+        if let Some(&fi) = self.page_table.get(&id) {
+            if let Some(frame) = self.frames[fi].as_mut() {
+                frame.dirty = true;
+            }
+        }
     }
 
     /// Returns `true` if the page is currently in the pool.

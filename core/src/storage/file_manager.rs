@@ -230,9 +230,10 @@ impl FileManager {
         if !self.bitmap[id as usize] {
             return Err(FileManagerError::PageAlreadyFree(id));
         }
+        self.write_free_marker(id).await?;
         self.bitmap[id as usize] = false;
         self.free_list.push_front(id);
-        self.write_free_marker(id).await
+        Ok(())
     }
 
     /// Write `page` to disk at the offset corresponding to its page id.
@@ -275,10 +276,17 @@ impl FileManager {
         let Some(id) = self.free_list.pop_front() else {
             return Ok(None);
         };
-        self.bitmap[id as usize] = true;
         let page = Page::new(id, PageType::Data, self.page_size - HEADER_SIZE);
-        self.write_page_to_disk(&page).await?;
-        Ok(Some(id))
+        match self.write_page_to_disk(&page).await {
+            Ok(()) => {
+                self.bitmap[id as usize] = true;
+                Ok(Some(id))
+            }
+            Err(e) => {
+                self.free_list.push_front(id);
+                Err(e)
+            }
+        }
     }
 
     /// Grow the file by [`GROWTH_CHUNK_PAGES`] slots, enqueue the new free
@@ -288,10 +296,17 @@ impl FileManager {
         let new_count = self.page_count + GROWTH_CHUNK_PAGES;
         self.extend_file(new_count).await?;
         self.enqueue_free_slots(id + 1, new_count);
-        self.bitmap[id as usize] = true;
         let page = Page::new(id, PageType::Data, self.page_size - HEADER_SIZE);
-        self.write_page_to_disk(&page).await?;
-        Ok(id)
+        match self.write_page_to_disk(&page).await {
+            Ok(()) => {
+                self.bitmap[id as usize] = true;
+                Ok(id)
+            }
+            Err(e) => {
+                self.free_list.push_front(id);
+                Err(e)
+            }
+        }
     }
 
     /// Seek to the last byte of the target size and write a zero, causing the
@@ -324,7 +339,7 @@ impl FileManager {
         to: PageId,
     ) -> Result<(), FileManagerError> {
         let data_size = self.page_size - HEADER_SIZE;
-        let checksum = Page::compute_checksum(&vec![0u8; data_size]);
+        let checksum = Page::zero_data_checksum(data_size);
         for id in from..to {
             let offset = id * self.page_size as u64;
             self.file.seek(SeekFrom::Start(offset)).await?;
