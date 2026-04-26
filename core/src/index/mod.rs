@@ -31,8 +31,6 @@
 //! ```
 
 pub mod btree;
-pub mod btree_iterator;
-pub mod btree_node;
 
 /// Errors returned by index operations.
 #[derive(Debug)]

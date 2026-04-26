@@ -38,12 +38,15 @@
 //! └─────────────────────────────────┘
 //! ```
 
+pub mod iterator;
+pub mod node;
+
 use std::ops::RangeBounds;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use crate::index::btree_iterator::{BTreeIterator, EndBound};
-use crate::index::btree_node::{InternalNode, LeafNode, Node};
+use self::iterator::{BTreeIterator, EndBound};
+use self::node::{InternalNode, LeafNode, Node};
 use crate::index::IndexError;
 use crate::storage::page::PageId;
 use crate::storage::StorageEngine;

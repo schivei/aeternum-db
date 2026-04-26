@@ -10,7 +10,7 @@
 //! I/O is async, the iterator pre-loads leaves in [`BTreeIterator::new`] and
 //! advances lazily within an already-loaded leaf.
 
-use crate::index::btree_node::LeafNode;
+use super::node::LeafNode;
 use crate::storage::page::PageId;
 
 /// A forward-only iterator over a contiguous range of B-tree leaf entries.
