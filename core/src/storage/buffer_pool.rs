@@ -10,9 +10,9 @@
 //! becomes evictable only when its pin count reaches zero.
 //!
 //! # Thread safety
-//! [`BufferPool`] is not `Sync`.  Use the [`SharedBufferPool`] type alias
-//! (backed by [`parking_lot::RwLock`]) when you need concurrent access from
-//! multiple threads.
+//! [`BufferPool`] requires external synchronisation for concurrent mutation.
+//! Use the [`SharedBufferPool`] type alias (backed by [`parking_lot::RwLock`])
+//! when you need shared access from multiple threads.
 
 use crate::storage::page::{Page, PageId};
 use parking_lot::RwLock;

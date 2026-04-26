@@ -214,13 +214,12 @@ async fn test_deleted_slots_are_reused() {
     let reused_a = engine.allocate_page().await.unwrap();
     let reused_b = engine.allocate_page().await.unwrap();
 
-    assert!(
-        reused_a == pid0 || reused_a == pid2,
-        "expected freed slot reuse"
-    );
-    assert!(
-        reused_b == pid0 || reused_b == pid2,
-        "expected freed slot reuse"
+    assert_ne!(reused_a, reused_b, "freed slots must be distinct");
+    let freed_set: std::collections::HashSet<_> = [pid0, pid2].into_iter().collect();
+    let reused_set: std::collections::HashSet<_> = [reused_a, reused_b].into_iter().collect();
+    assert_eq!(
+        reused_set, freed_set,
+        "both freed slots must be reused, got {reused_a} and {reused_b}"
     );
 
     let still_there = engine

@@ -223,8 +223,10 @@ impl FileManager {
     /// Mark page `id` as free so its slot can be reused by a future
     /// [`allocate_page`](Self::allocate_page) call.
     ///
-    /// Overwrites the on-disk header with a [`PageType::Free`] marker so that
-    /// reopening the file correctly reconstructs allocation state.
+    /// Writes a [`PageType::Free`] header (16 bytes) to the on-disk slot
+    /// **before** updating in-memory state, so that reopening the file
+    /// correctly reconstructs allocation state even if the process crashes
+    /// between the disk write and the bitmap update.
     pub async fn deallocate_page(&mut self, id: PageId) -> Result<(), FileManagerError> {
         self.check_valid_id(id)?;
         if !self.bitmap[id as usize] {
@@ -363,10 +365,23 @@ impl FileManager {
     }
 
     /// Overwrite the on-disk header for page `id` with a [`PageType::Free`]
-    /// marker so the slot is recognised as free after a restart.
+    /// marker (16 bytes only) so the slot is recognised as free after a
+    /// restart.  Only the header is written; the page-data bytes are left
+    /// unchanged and are irrelevant once the slot is marked free.
     async fn write_free_marker(&mut self, id: PageId) -> Result<(), FileManagerError> {
-        let free_page = Page::new(id, PageType::Free, self.page_size - HEADER_SIZE);
-        self.write_page_to_disk(&free_page).await
+        let data_size = self.page_size - HEADER_SIZE;
+        let checksum = Page::zero_data_checksum(data_size);
+        let offset = id * self.page_size as u64;
+        self.file.seek(SeekFrom::Start(offset)).await?;
+        let header = PageHeader {
+            page_id: id,
+            page_type: PageType::Free,
+            free_space: data_size as u16,
+            checksum,
+        };
+        self.file.write_all(&header.serialize()).await?;
+        self.file.flush().await?;
+        Ok(())
     }
 
     /// Return an error if `id` is not a valid page slot in the current file.

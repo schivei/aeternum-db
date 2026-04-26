@@ -262,11 +262,6 @@ impl Page {
         self.header.page_id
     }
 
-    /// Return the total serialized size of this page in bytes.
-    #[inline]
-    pub fn size(&self) -> usize {
-        HEADER_SIZE + self.data.len()
-    }
 }
 
 /// Errors that can occur when reading or writing page data.
@@ -394,7 +389,7 @@ mod tests {
     #[test]
     fn test_page_size() {
         let page = make_page(1);
-        assert_eq!(page.size(), HEADER_SIZE + DATA_SIZE);
+        assert_eq!(page.total_size(), HEADER_SIZE + DATA_SIZE);
     }
 
     #[test]

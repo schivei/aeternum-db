@@ -62,7 +62,7 @@ The `FileManager` owns a single database file on disk and provides:
 - **`allocate_page()`** — Assigns a free slot (reuses freed slots before
   growing) and writes a blank page header to disk.
 - **`deallocate_page(id)`** — Marks the slot free in the in-memory bitmap and
-  overwrites the on-disk header with `PageType::Free`.
+  writes a [`PageType::Free`] header to the on-disk slot (header-only, 16 bytes).
 - **`read_page(id)`** / **`write_page(page)`** — Async seek+read/write at
   offset `id × page_size`.
 
@@ -108,8 +108,9 @@ dirty, the insert returns `BufferPoolError::PoolFull`.
 
 #### Thread Safety
 
-`BufferPool` itself is `!Sync`.  The `StorageEngine` wraps it in a
-`tokio::sync::Mutex` so it can be safely shared across async tasks via `Arc`.
+`BufferPool` requires external synchronisation for concurrent mutation.  The
+`StorageEngine` wraps it in a `tokio::sync::Mutex` so it can be safely shared
+across async tasks via `Arc`.
 
 ---
 
