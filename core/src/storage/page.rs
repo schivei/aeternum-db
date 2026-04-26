@@ -261,7 +261,6 @@ impl Page {
     pub fn id(&self) -> PageId {
         self.header.page_id
     }
-
 }
 
 /// Errors that can occur when reading or writing page data.
