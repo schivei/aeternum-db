@@ -281,9 +281,9 @@ impl StorageEngine {
 
     /// Unpin page `id`.
     ///
-    /// Set `dirty = true` only if you modified the page's data through a
-    /// direct buffer pool reference; for writes via [`write_page_data`] this
-    /// is handled automatically.
+    /// Set `dirty = true` to signal that the page data was modified and must be
+    /// written to disk on the next flush.  For writes performed through
+    /// [`write_page_data`] the dirty flag is managed automatically.
     pub async fn unpin_page(&self, id: PageId, dirty: bool) -> Result<(), StorageError> {
         self.inner.lock().await.buffer_pool.unpin(id, dirty)?;
         Ok(())
