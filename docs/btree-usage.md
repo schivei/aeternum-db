@@ -128,6 +128,7 @@ Range queries accept any `RangeBounds<K>`:
 
 ```rust
 use std::ops::Bound;
+use aeternumdb_core::index::btree::{BTreeKey, BTreeValue};
 
 // Inclusive range: keys 10 to 20 (inclusive).
 let iter = tree.range(10i64..=20i64).await?;
@@ -163,8 +164,9 @@ let entries: Vec<(i64, String)> = (0..1_000_000)
 tree.bulk_load(entries).await?;
 ```
 
-> **Note:** Input must be sorted in ascending key order.  Duplicate keys will
-> return `IndexError::DuplicateKey`.
+> **Note:** Input does not need to be sorted, but ascending key order is
+> recommended for bulk-loading performance.  Duplicate keys will return
+> `IndexError::DuplicateKey`.
 
 ## Reopening an Existing Index
 

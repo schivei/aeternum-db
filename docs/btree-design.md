@@ -112,13 +112,15 @@ natural ordering under lexicographic comparison.  Implementations:
 1. Descend to the target leaf and remove the entry.
 2. If the resulting leaf is empty, remove it from its parent and update
    sibling pointers.
-3. If the parent becomes empty after removal, propagate the cleanup upward.
-4. If the root becomes an empty internal node, collapse to its sole child,
+3. This implementation does **not** recursively remove newly empty non-root
+   internal nodes from their parents.
+4. If the root becomes an empty internal node, collapse it to its sole child,
    decrementing the tree height.
 
 **Note:** This implementation uses *lazy deletion* — nodes may temporarily
-underflow below `⌈fanout/2⌉`.  Full merge/redistribute is planned for a
-future phase.
+underflow below `⌈fanout/2⌉`, and cleanup is limited to unlinking empty
+leaves plus collapsing an empty internal root.  Full merge/redistribute and
+upward internal-node cleanup are planned for a future phase.
 
 ### Range Scan
 
