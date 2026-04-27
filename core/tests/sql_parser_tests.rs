@@ -1361,7 +1361,10 @@ fn test_table_check_constraint() {
         Statement::CreateTable(ct) => ct,
         _ => panic!("expected CreateTable"),
     };
-    let has_check = ct.constraints.iter().any(|c| matches!(c, TableConstraint::Check { .. }));
+    let has_check = ct
+        .constraints
+        .iter()
+        .any(|c| matches!(c, TableConstraint::Check { .. }));
     assert!(has_check);
 }
 
@@ -1375,9 +1378,17 @@ fn test_foreign_key_constraint() {
         Statement::CreateTable(ct) => ct,
         _ => panic!("expected CreateTable"),
     };
-    let fk = ct.constraints.iter().find(|c| matches!(c, TableConstraint::ForeignKey { .. }));
+    let fk = ct
+        .constraints
+        .iter()
+        .find(|c| matches!(c, TableConstraint::ForeignKey { .. }));
     assert!(fk.is_some());
-    if let Some(TableConstraint::ForeignKey { foreign_table, referred_columns, .. }) = fk {
+    if let Some(TableConstraint::ForeignKey {
+        foreign_table,
+        referred_columns,
+        ..
+    }) = fk
+    {
         assert_eq!(foreign_table, "users");
         assert_eq!(referred_columns, &["id".to_string()]);
     }
@@ -1388,9 +1399,7 @@ fn test_foreign_key_constraint() {
 #[test]
 fn test_create_user() {
     use aeternumdb_core::sql::ast::CreateUserStatement;
-    let stmt = parser()
-        .parse_one("CREATE USER alice")
-        .unwrap();
+    let stmt = parser().parse_one("CREATE USER alice").unwrap();
     let cu = match stmt {
         Statement::CreateUser(cu) => cu,
         _ => panic!("expected CreateUser"),

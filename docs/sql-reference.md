@@ -9,9 +9,10 @@ implementation is based on **SQL-92** with a subset of common SQL extensions.
 
 1. [Data Types](#data-types)
 2. [Identifier Quoting](#identifier-quoting)
-3. [Operators](#operators)
-4. [Functions](#functions)
-5. [Statements](#statements)
+3. [System Identifier (objid)](#system-identifier-objid)
+4. [Operators](#operators)
+5. [Functions](#functions)
+6. [Statements](#statements)
    - [SELECT](#select)
    - [INSERT](#insert)
    - [UPDATE](#update)
@@ -21,9 +22,20 @@ implementation is based on **SQL-92** with a subset of common SQL extensions.
    - [CREATE MATERIALIZED VIEW](#create-materialized-view)
    - [DROP TABLE](#drop-table)
    - [ALTER TABLE](#alter-table)
-6. [Transaction Control](#transaction-control)
-7. [Expressions](#expressions)
-8. [Limitations and Future Enhancements](#limitations-and-future-enhancements)
+   - [CREATE INDEX](#create-index)
+   - [DROP INDEX](#drop-index)
+   - [CREATE USER](#create-user)
+   - [DROP USER](#drop-user)
+   - [CREATE TYPE](#create-type)
+   - [GRANT / REVOKE](#grant--revoke)
+7. [Transaction Control](#transaction-control)
+8. [Column Extensions](#column-extensions)
+   - [Text Directive (Multilingual)](#text-directive-multilingual)
+   - [Terms Directives](#terms-directives)
+   - [Vector Columns](#vector-columns)
+   - [Versioned / Temporal Tables](#versioned--temporal-tables)
+9. [Expressions](#expressions)
+10. [Limitations and Future Enhancements](#limitations-and-future-enhancements)
 
 ---
 
@@ -46,19 +58,23 @@ implementation is based on **SQL-92** with a subset of common SQL extensions.
 
 ### Floating-Point Types
 
-| SQL Type                          | Notes                                                                 |
-|-----------------------------------|-----------------------------------------------------------------------|
-| `FLOAT` / `REAL`                  | 32-bit signed IEEE 754                                                |
-| `FLOAT UNSIGNED`                  | MySQL-specific; restricts values to non-negative (≥ 0); not standard IEEE 754 unsigned |
-| `DOUBLE` / `DOUBLE PRECISION`     | 64-bit signed IEEE 754                                                |
-| `DOUBLE UNSIGNED`                 | MySQL-specific; restricts values to non-negative (≥ 0); not standard IEEE 754 unsigned |
+| SQL Type                          | Notes                      |
+|-----------------------------------|----------------------------|
+| `FLOAT` / `REAL`                  | 32-bit signed IEEE 754     |
+| `DOUBLE` / `DOUBLE PRECISION`     | 64-bit signed IEEE 754     |
+
+> **Note**: `FLOAT UNSIGNED` and `DOUBLE UNSIGNED` are **not supported**.
+> IEEE 754 floating-point types are always signed.  Use a `CHECK (col >= 0)`
+> constraint if you need to restrict values to non-negative numbers.
 
 ### Fixed-Precision Types
 
 | SQL Type                             | Notes                                              |
 |--------------------------------------|----------------------------------------------------|
 | `DECIMAL(p, s)` / `NUMERIC(p, s)`   | Fixed-point with precision `p` and scale `s`       |
-| `DECIMAL(p, s) UNSIGNED`            | Unsigned fixed-point (MySQL; deprecated in MySQL 8+) |
+
+> **Note**: `DECIMAL UNSIGNED` is **not supported**.  Use a `CHECK (col >= 0)`
+> table constraint to enforce non-negative decimal values.
 
 ### Character Types
 
@@ -101,6 +117,27 @@ implementation is based on **SQL-92** with a subset of common SQL extensions.
 | `UUID` / `GUID`       | 128-bit universally-unique identifier  |
 | `ENUM('a', 'b', ...)` | Enumerated string values               |
 
+### Vector Types
+
+Any base type can be wrapped in a **vector** — an ordered, variable-length
+sequence of values of that element type.  Vector columns support specialised
+insert, update, delete, and select operations (execution-layer; future phase).
+
+| SQL Syntax       | Meaning                                   |
+|------------------|-------------------------------------------|
+| `[INTEGER]`      | Vector of 32-bit integers                 |
+| `[VARCHAR(100)]` | Vector of variable-length strings         |
+| `[DECIMAL(10,2)]`| Vector of fixed-point decimals            |
+| `[table_name]`   | Vector / array of row references (OO)     |
+
+```sql
+CREATE TABLE product_tags (
+  id       INTEGER PRIMARY KEY AUTO_INCREMENT,
+  tags     [VARCHAR(50)],   -- vector of tag strings
+  scores   [DECIMAL(5,2)]   -- vector of rating scores
+);
+```
+
 ### Reference Types (OO / Graph Paradigm)
 
 AeternumDB extends the SQL type system with reference types for object-oriented
@@ -142,6 +179,38 @@ CREATE TABLE sample2 (
   `children`  ~[sample2](parent) MIN_LENGTH 0     -- virtual inverse array
 );
 ```
+
+---
+
+## System Identifier (objid)
+
+Every row stored in AeternumDB automatically receives a system-assigned
+**`objid`** — a cluster-wide unique identifier that:
+
+- Is unique across all **nodes**, **databases**, **schemas**, and **tables**.
+- Can be used in queries exactly like a user-defined primary key.
+- Is **read-only from SQL** — users cannot `INSERT` or `UPDATE` it.
+  (Backup restoration is the only exception.)
+- Survives `UPDATE` operations — the row keeps its `objid` when columns change.
+
+### Versioned / Temporal Rows
+
+When a table is created with `WITH SYSTEM VERSIONING`, every mutation creates a
+new *version* of the row.  All versions share the same `objid`; the version is
+distinguished by implicit `valid_from` / `valid_to` system columns.
+
+```sql
+-- Query the current state (default)
+SELECT * FROM orders WHERE objid = '01920e3b-…';
+
+-- Query a historical snapshot (future-phase feature)
+SELECT * FROM orders FOR SYSTEM_TIME AS OF '2025-01-01'
+WHERE objid = '01920e3b-…';
+```
+
+> **Execution status**: `objid` generation and temporal row storage are
+> execution-layer features planned for a future phase.  The parser and AST
+> already reserve `objid` as a system column identifier.
 
 ---
 
@@ -536,6 +605,142 @@ ALTER TABLE users RENAME TO customers;
 
 ---
 
+### CREATE INDEX
+
+```sql
+CREATE [UNIQUE] INDEX [IF NOT EXISTS] index_name ON table_name (col1 [ASC|DESC], ...)
+```
+
+**Examples:**
+
+```sql
+-- Single-column index
+CREATE INDEX idx_users_email ON users (email);
+
+-- Unique index
+CREATE UNIQUE INDEX idx_users_username ON users (username);
+
+-- Composite index
+CREATE INDEX idx_orders_user_date ON orders (user_id, created_at DESC);
+```
+
+---
+
+### DROP INDEX
+
+```sql
+DROP INDEX [IF EXISTS] index_name ON table_name
+```
+
+**Example:**
+
+```sql
+DROP INDEX IF EXISTS idx_users_email ON users;
+```
+
+---
+
+### Table-Level Constraints
+
+Constraints can be declared at the table level to support composite keys and cross-column rules:
+
+```sql
+CREATE TABLE order_items (
+  order_id   INTEGER NOT NULL,
+  product_id INTEGER NOT NULL,
+  quantity   INTEGER NOT NULL,
+  price      DECIMAL(10,2) NOT NULL,
+
+  -- Composite primary key
+  PRIMARY KEY (order_id, product_id),
+
+  -- Composite unique constraint
+  UNIQUE (order_id, product_id),
+
+  -- Foreign key constraints
+  FOREIGN KEY (order_id)   REFERENCES orders  (id),
+  FOREIGN KEY (product_id) REFERENCES products(id),
+
+  -- CHECK constraint
+  CHECK (quantity > 0),
+  CHECK (price >= 0)
+);
+```
+
+### Column-Level CHECK Constraint
+
+```sql
+CREATE TABLE products (
+  id    INTEGER PRIMARY KEY AUTO_INCREMENT,
+  price DECIMAL(10,2) NOT NULL CHECK (price >= 0),
+  stock INTEGER       NOT NULL CHECK (stock >= 0)
+);
+```
+
+---
+
+### CREATE USER
+
+> **Scaffolding** — parsed; execution is a future phase.
+
+```sql
+CREATE USER username [WITH PASSWORD 'secret']
+```
+
+**Example:**
+
+```sql
+CREATE USER alice;
+CREATE USER bob WITH PASSWORD 'hunter2';
+```
+
+---
+
+### DROP USER
+
+> **Scaffolding** — parsed; execution is a future phase.
+
+```sql
+DROP USER [IF EXISTS] username [, username2, ...]
+```
+
+---
+
+### CREATE TYPE
+
+**User Type Definitions (UTD)** allow DBAs to define composite types with optional
+read/write/anonymization restrictions that apply per user or group.
+
+> **Scaffolding** — parsed; execution and restrictions are a future phase.
+
+```sql
+CREATE TYPE contact_info AS (
+  phone   VARCHAR(20),
+  email   VARCHAR(255)
+);
+```
+
+---
+
+### GRANT / REVOKE
+
+Column-level grants are supported:
+
+```sql
+-- Grant SELECT on all columns
+GRANT SELECT ON employees TO analyst_role;
+
+-- Grant SELECT on specific columns only (column-level restriction)
+GRANT SELECT (id, name, department) ON employees TO hr_readonly;
+
+-- Revoke column-level permission
+REVOKE SELECT (salary) ON employees FROM hr_readonly;
+```
+
+> **Scaffolding** — parsed; execution is a future phase.
+
+---
+
 ## Transaction Control
 
 AeternumDB supports standard SQL transaction control statements (scaffolding for future execution):
@@ -588,6 +793,126 @@ COMMIT;
 
 ---
 
+## Column Extensions
+
+AeternumDB extends standard SQL column definitions with three powerful features
+for multilingual content, typed metadata, and ordered value sequences.
+
+### Text Directive (Multilingual)
+
+A **text-directive** column stores a map of locale → value rather than a
+single value.  Clients access a specific locale using the `column@'locale'`
+accessor syntax.  When the requested locale is absent the column's
+`DEFAULT_DIRECTIVE` locale is returned.
+
+```sql
+CREATE TABLE articles (
+  id      INTEGER PRIMARY KEY AUTO_INCREMENT,
+  -- Multilingual title; fall back to 'en' when locale is missing
+  title   VARCHAR(255) NOT NULL DEFAULT_DIRECTIVE 'en',
+  summary TEXT         DEFAULT_DIRECTIVE 'en'
+);
+```
+
+**Accessor syntax (future query-layer feature):**
+
+```sql
+-- Retrieve English title (default)
+SELECT title FROM articles WHERE id = 1;
+
+-- Retrieve Brazilian Portuguese translation
+SELECT title@'pt-BR' FROM articles WHERE id = 1;
+
+-- Insert with locale
+INSERT INTO articles (title@'en', title@'pt-BR') VALUES ('Hello', 'Olá');
+```
+
+> **Note**: `DEFAULT_DIRECTIVE` parsing is captured in the AST
+> (`TextDirective { default_locale }`).  Locale-keyed storage and retrieval
+> are execution-layer features planned for a future phase.
+
+---
+
+### Terms Directives
+
+A **terms directive** attaches a named, strictly-typed metadata slot to each
+cell value without adding extra rows.  Possible kinds are `TEXT`, `INTEGER`,
+`FLOAT`, `BOOLEAN`, and `ENUM(...)`.
+
+```sql
+CREATE TABLE prices (
+  id       INTEGER PRIMARY KEY AUTO_INCREMENT,
+  amount   DECIMAL(12,4) NOT NULL
+             TERMS currency TEXT,    -- e.g. 'USD', 'EUR'
+             TERMS precision INTEGER -- significant digits stored
+);
+```
+
+> **Scaffolding** — Terms directive metadata is captured in the AST
+> (`TermsDirective { name, kind }`).  Storage and retrieval are planned
+> for a future phase.
+
+---
+
+### Vector Columns
+
+Any base data type can be declared as a **vector** — an ordered
+variable-length sequence — by wrapping it in square brackets:
+
+```sql
+CREATE TABLE embeddings (
+  id     INTEGER PRIMARY KEY AUTO_INCREMENT,
+  tags   [VARCHAR(50)],       -- vector of text labels
+  scores [FLOAT],             -- similarity scores
+  bits   [BINARY(8)]          -- fixed-width bit vectors
+);
+```
+
+Vector columns support element-level insert, update, delete, and aggregation
+operations.  They can also be used as a JOIN source (similar to
+`ReferenceArray` for scalar data).
+
+> **Scaffolding** — the `DataType::Vector(Box<DataType>)` type is fully
+> parsed.  Element-level DML and query planning are execution-layer features
+> for a future phase.
+
+---
+
+### Versioned / Temporal Tables
+
+Tables created with `WITH SYSTEM VERSIONING` retain the full history of every
+row.  Each row version shares the same `objid` (see
+[System Identifier](#system-identifier-objid)).
+
+```sql
+CREATE TABLE salary_history (
+  id         INTEGER PRIMARY KEY AUTO_INCREMENT,
+  employee_id INTEGER NOT NULL,
+  amount     DECIMAL(10,2) NOT NULL
+) WITH SYSTEM VERSIONING;
+```
+
+**Historical queries (future-phase):**
+
+```sql
+-- View salary as it was on a specific date
+SELECT * FROM salary_history
+FOR SYSTEM_TIME AS OF '2024-01-01'
+WHERE employee_id = 42;
+
+-- View all versions of a row
+SELECT * FROM salary_history
+FOR SYSTEM_TIME ALL
+WHERE objid = '01920e3b-…';
+```
+
+> **Scaffolding** — `versioned: bool` is captured in
+> `CreateTableStatement`.  The system-versioning mechanics (period columns,
+> history table, `FOR SYSTEM_TIME` queries) are execution-layer features
+> planned for a future phase.
+
+---
+
 ## Expressions
 
 ### Literals
@@ -623,22 +948,32 @@ CASE expr WHEN value THEN result [...] [ELSE default] END
 
 The following SQL features are **not yet supported** or are **partially implemented**:
 
-| Feature                                  | Status / Planned Phase |
-|------------------------------------------|----------------------|
-| Window functions (`OVER (...)`)          | Phase 5              |
-| Recursive queries (`WITH RECURSIVE`)     | Phase 5              |
-| `UNION` / `INTERSECT` / `EXCEPT`         | Phase 4              |
-| `GRANT` / `REVOKE` execution             | Phase 6              |
-| Transaction execution                    | Parsed; not yet executed |
-| Temporary table auto-drop enforcement    | Future execution layer |
-| Materialized view refresh               | Future execution layer |
-| Reference type storage + querying        | Future execution layer |
-| Full-text search syntax                  | Extension            |
-| JSON path expressions                    | Extension            |
-| `RETURNING` clause                       | Phase 3              |
-| `ON CONFLICT` / `UPSERT`                 | Phase 3              |
-| `PIVOT` / `UNPIVOT`                      | Phase 6              |
-| COUNT optimization (index metadata)      | Future optimization  |
+| Feature                                     | Status / Planned Phase           |
+|---------------------------------------------|----------------------------------|
+| Window functions (`OVER (...)`)             | Phase 5                          |
+| Recursive queries (`WITH RECURSIVE`)        | Phase 5                          |
+| `UNION` / `INTERSECT` / `EXCEPT`            | Phase 4                          |
+| `GRANT` / `REVOKE` execution               | Phase 6                          |
+| Column-level permission enforcement         | Future execution layer           |
+| Transaction execution                       | Parsed; not yet executed         |
+| Temporary table auto-drop enforcement       | Future execution layer           |
+| Materialized view refresh                  | Future execution layer           |
+| Reference type storage + querying           | Future execution layer           |
+| `objid` generation (cluster-unique ID)      | Future execution layer           |
+| Temporal / versioned table mechanics        | Future execution layer           |
+| `FOR SYSTEM_TIME` historical queries        | Future execution layer           |
+| Backup / restore execution                  | Future execution layer           |
+| `CREATE USER` / `DROP USER` execution       | Future execution layer           |
+| `CREATE TYPE` (UTD) execution               | Future execution layer           |
+| Text Directive locale-keyed storage         | Future execution layer           |
+| Terms Directive storage + retrieval         | Future execution layer           |
+| Vector element-level DML                    | Future execution layer           |
+| Full-text search syntax                     | Extension                        |
+| JSON path expressions                       | Extension                        |
+| `RETURNING` clause                          | Phase 3                          |
+| `ON CONFLICT` / `UPSERT`                    | Phase 3                          |
+| `PIVOT` / `UNPIVOT`                         | Phase 6                          |
+| COUNT optimization (index metadata)         | Future optimization              |
 
 ### Known Dialect Edge Cases
 
@@ -651,9 +986,11 @@ The following SQL features are **not yet supported** or are **partially implemen
   supported, including nested block comments.
 - **Multiple statements**: Semicolon-separated multi-statement strings are
   accepted by `SqlParser::parse`.
+- **UNSIGNED floats/decimals**: `FLOAT UNSIGNED`, `DOUBLE UNSIGNED`, and
+  `DECIMAL UNSIGNED` are rejected with a helpful error.  Use a `CHECK` constraint
+  to enforce non-negative values.
 
 ---
 
 *This document covers PR 1.3. See `docs/prs/PR-1.3-sql-parser.md`
 for the full design specification.*
-

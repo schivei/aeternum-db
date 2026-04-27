@@ -578,10 +578,7 @@ pub enum TableConstraint {
         referred_columns: Vec<String>,
     },
     /// `CHECK (expr)`.
-    Check {
-        name: Option<String>,
-        expr: Expr,
-    },
+    Check { name: Option<String>, expr: Expr },
 }
 
 /// A `CREATE TABLE` statement.
@@ -892,13 +889,11 @@ impl TryFrom<sp::Statement> for Statement {
                     if_not_exists: ci.if_not_exists,
                 }))
             }
-            sp::Statement::CreateUser(cu) => {
-                Ok(Statement::CreateUser(CreateUserStatement {
-                    name: cu.name.value.clone(),
-                    password: None,
-                    roles: vec![],
-                }))
-            }
+            sp::Statement::CreateUser(cu) => Ok(Statement::CreateUser(CreateUserStatement {
+                name: cu.name.value.clone(),
+                password: None,
+                roles: vec![],
+            })),
             sp::Statement::CreateType { name, .. } => {
                 Ok(Statement::CreateType(CreateTypeStatement {
                     name: object_name_to_string(&name),
@@ -1745,25 +1740,37 @@ fn convert_table_constraint(c: sp::TableConstraint) -> Result<TableConstraint, A
     match c {
         sp::TableConstraint::PrimaryKey(pk) => {
             let name = pk.name.as_ref().map(ident_to_string);
-            let columns = pk.columns.iter().map(|c| match &c.column.expr {
-                sp::Expr::Identifier(ident) => ident.value.clone(),
-                other => other.to_string(),
-            }).collect();
+            let columns = pk
+                .columns
+                .iter()
+                .map(|c| match &c.column.expr {
+                    sp::Expr::Identifier(ident) => ident.value.clone(),
+                    other => other.to_string(),
+                })
+                .collect();
             Ok(TableConstraint::PrimaryKey { name, columns })
         }
         sp::TableConstraint::Unique(u) => {
             let name = u.name.as_ref().map(ident_to_string);
-            let columns = u.columns.iter().map(|c| match &c.column.expr {
-                sp::Expr::Identifier(ident) => ident.value.clone(),
-                other => other.to_string(),
-            }).collect();
+            let columns = u
+                .columns
+                .iter()
+                .map(|c| match &c.column.expr {
+                    sp::Expr::Identifier(ident) => ident.value.clone(),
+                    other => other.to_string(),
+                })
+                .collect();
             Ok(TableConstraint::Unique { name, columns })
         }
         sp::TableConstraint::ForeignKey(fk) => {
             let name = fk.name.as_ref().map(ident_to_string);
             let columns = fk.columns.iter().map(|i| i.value.clone()).collect();
             let foreign_table = object_name_to_string(&fk.foreign_table);
-            let referred_columns = fk.referred_columns.iter().map(|i| i.value.clone()).collect();
+            let referred_columns = fk
+                .referred_columns
+                .iter()
+                .map(|i| i.value.clone())
+                .collect();
             Ok(TableConstraint::ForeignKey {
                 name,
                 columns,
