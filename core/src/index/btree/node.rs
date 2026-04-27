@@ -80,14 +80,24 @@ impl InternalNode {
     /// Serialize this node into a byte vector.
     pub fn serialize(&self) -> Vec<u8> {
         let n = self.keys.len();
+        let expected_children = n + 1;
+        assert_eq!(
+            self.children.len(),
+            expected_children,
+            "invalid internal node: expected {} children for {} keys, got {}",
+            expected_children,
+            n,
+            self.children.len()
+        );
+
         let mut buf = Vec::new();
         buf.push(NODE_TYPE_INTERNAL);
         buf.extend_from_slice(&(n as u32).to_le_bytes());
         for key in &self.keys {
             write_bytes(&mut buf, key);
         }
-        // children: n+1 PageIds
-        for &child in &self.children {
+        // children: exactly n+1 PageIds
+        for &child in self.children.iter().take(expected_children) {
             buf.extend_from_slice(&child.to_le_bytes());
         }
         buf
