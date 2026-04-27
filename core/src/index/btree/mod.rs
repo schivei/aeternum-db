@@ -540,8 +540,9 @@ impl<K: BTreeKey, V: BTreeValue> BTree<K, V> {
             // Keep the metadata read lock held while descending from the current
             // root and walking the leaf chain so concurrent writers cannot
             // change tree metadata or reclaim pages during the scan setup.
-            let (_, start_leaf) =
-                self.find_leaf(meta.root_page_id, start_bytes.as_deref(), meta.height).await?;
+            let (_, start_leaf) = self
+                .find_leaf(meta.root_page_id, start_bytes.as_deref(), meta.height)
+                .await?;
 
             // Walk the leaf chain, collecting all leaves that can contribute to
             // the range.  The starting leaf is reused directly to avoid a

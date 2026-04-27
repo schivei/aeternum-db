@@ -28,6 +28,14 @@ use crate::storage::page::PageId;
 const NODE_TYPE_INTERNAL: u8 = 0;
 const NODE_TYPE_LEAF: u8 = 1;
 
+/// Minimum bytes per internal-node entry: 4 bytes for an empty key length
+/// prefix.  Each of the n+1 child pointers adds 8 bytes, but using just this
+/// lower bound keeps the cap conservative and easier to reason about.
+const MIN_BYTES_PER_INTERNAL_ENTRY: usize = 4;
+
+/// Minimum bytes per leaf key-value pair: two 4-byte length prefixes.
+const MIN_BYTES_PER_LEAF_ENTRY: usize = 8;
+
 // ── Internal node ─────────────────────────────────────────────────────────────
 
 /// An internal (non-leaf) B-tree node.
@@ -117,6 +125,17 @@ impl InternalNode {
             )));
         }
         let n = read_u32(data, &mut pos)? as usize;
+        // Sanity check: each key occupies at least MIN_BYTES_PER_INTERNAL_ENTRY
+        // bytes (empty-key length prefix).  Reject values of n that cannot
+        // possibly fit in the buffer to avoid enormous allocations on corrupt
+        // input before the per-element bounds checks in the loop below.
+        let max_n = data.len().saturating_div(MIN_BYTES_PER_INTERNAL_ENTRY);
+        if n > max_n {
+            return Err(IndexError::Serialization(format!(
+                "corrupt internal node: n={n} cannot fit in {} bytes",
+                data.len()
+            )));
+        }
         let mut keys = Vec::with_capacity(n);
         for _ in 0..n {
             keys.push(read_bytes(data, &mut pos)?);
@@ -259,6 +278,18 @@ impl LeafNode {
             )));
         }
         let n = read_u32(data, &mut pos)? as usize;
+        // Sanity check: each key-value pair occupies at least
+        // MIN_BYTES_PER_LEAF_ENTRY bytes (two 4-byte length prefixes for an
+        // empty key and empty value).  Reject values of n that cannot possibly
+        // fit in the buffer to avoid enormous allocations on corrupt input
+        // before the per-element bounds checks in the loop below.
+        let max_n = data.len().saturating_div(MIN_BYTES_PER_LEAF_ENTRY);
+        if n > max_n {
+            return Err(IndexError::Serialization(format!(
+                "corrupt leaf node: n={n} cannot fit in {} bytes",
+                data.len()
+            )));
+        }
         let mut keys = Vec::with_capacity(n);
         let mut values = Vec::with_capacity(n);
         for _ in 0..n {
@@ -466,9 +497,10 @@ fn read_optional_page_id(data: &[u8], pos: &mut usize) -> Result<Option<PageId>,
     match present {
         0 => Ok(None),
         1 => Ok(Some(read_u64(data, pos)?)),
-        _ => Err(IndexError::Serialization(
-            format!("invalid optional page id presence byte: {}", present),
-        )),
+        _ => Err(IndexError::Serialization(format!(
+            "invalid optional page id presence byte: {}",
+            present
+        ))),
     }
 }
 
