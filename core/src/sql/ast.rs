@@ -1161,7 +1161,7 @@ fn convert_join_constraint(constraint: sp::JoinConstraint) -> Result<Option<Expr
             "USING joins are not supported in the internal AST: USING ({})",
             columns
                 .into_iter()
-                .map(|c| ident_to_string(&c))
+                .map(|c| object_name_to_string(&c))
                 .collect::<Vec<_>>()
                 .join(", ")
         ))),

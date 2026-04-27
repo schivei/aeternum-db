@@ -1289,7 +1289,6 @@ fn test_unsigned_float_double_decimal_rejected() {
 
 #[test]
 fn test_create_index() {
-    use aeternumdb_core::sql::ast::CreateIndexStatement;
     let stmt = parser()
         .parse_one("CREATE INDEX idx_name ON users (name)")
         .unwrap();
@@ -1305,7 +1304,6 @@ fn test_create_index() {
 
 #[test]
 fn test_create_unique_index() {
-    use aeternumdb_core::sql::ast::CreateIndexStatement;
     let stmt = parser()
         .parse_one("CREATE UNIQUE INDEX idx_email ON users (email)")
         .unwrap();
@@ -1319,7 +1317,6 @@ fn test_create_unique_index() {
 
 #[test]
 fn test_drop_index() {
-    use aeternumdb_core::sql::ast::DropIndexStatement;
     let stmt = parser()
         .parse_one("DROP INDEX IF EXISTS idx_name ON users")
         .unwrap();
@@ -1398,7 +1395,6 @@ fn test_foreign_key_constraint() {
 
 #[test]
 fn test_create_user() {
-    use aeternumdb_core::sql::ast::CreateUserStatement;
     let stmt = parser().parse_one("CREATE USER alice").unwrap();
     let cu = match stmt {
         Statement::CreateUser(cu) => cu,

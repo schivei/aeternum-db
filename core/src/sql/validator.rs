@@ -229,8 +229,7 @@ impl<'a> Validator<'a> {
                 self.validate_table_reference(right, aliases, table_names)?;
                 Ok(())
             }
-            TableReference::Subquery { subquery, .. } => self.validate_select(subquery),
-            _ => Ok(()),
+            TableReference::Subquery { query, .. } => self.validate_select(query),
         }
     }
 
@@ -245,9 +244,14 @@ impl<'a> Validator<'a> {
                 table: Some(table),
                 name,
             } => {
-                let resolved_table = aliases.get(table).map(|t| t.as_str()).unwrap_or(table.as_str());
+                let resolved_table = aliases
+                    .get(table)
+                    .map(|t| t.as_str())
+                    .unwrap_or(table.as_str());
                 self.require_table(resolved_table)?;
-                self.require_column(resolved_table, name)?;
+                if let Some(schema) = self.catalog.get_table(resolved_table) {
+                    self.require_column(schema, name)?;
+                }
                 Ok(())
             }
             _ => self.validate_expr(expr, default_table_name),
@@ -273,7 +277,10 @@ impl<'a> Validator<'a> {
             match item {
                 SelectItem::Wildcard => {}
                 SelectItem::QualifiedWildcard(name) => {
-                    let resolved_table = aliases.get(name).map(|t| t.as_str()).unwrap_or(name.as_str());
+                    let resolved_table = aliases
+                        .get(name)
+                        .map(|t| t.as_str())
+                        .unwrap_or(name.as_str());
                     self.require_table(resolved_table)?;
                 }
                 SelectItem::Expr { expr, .. } => {
