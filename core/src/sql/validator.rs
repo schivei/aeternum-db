@@ -39,8 +39,8 @@
 use std::collections::HashMap;
 
 use crate::sql::ast::{
-    AlterTableOperation, AlterTableStatement, BeginTransactionStatement, ColumnDef,
-    CommitScope, CommitStatement, CreateTableStatement, DataType, DeleteStatement, Expr,
+    AlterTableOperation, AlterTableStatement, BeginTransactionStatement, ColumnDef, CommitScope,
+    CommitStatement, CreateTableStatement, DataType, DeleteStatement, EnumVariant, Expr,
     InsertStatement, RollbackScope, RollbackStatement, SelectItem, SelectStatement, Statement,
     UpdateStatement,
 };
@@ -70,12 +70,43 @@ impl TableSchema {
     }
 }
 
-/// A simple in-memory schema catalog used for semantic validation.
+// ── User-defined type catalog ─────────────────────────────────────────────────
+
+/// A named user-defined type stored in the catalog.
 ///
-/// The catalog maps table names (case-insensitive) to their [`TableSchema`].
+/// Once created, the resolved numeric values are immutable.  The type cannot
+/// be dropped while any table column references it.
+#[derive(Debug, Clone)]
+pub struct UserTypeSchema {
+    /// Type name (lowercased).
+    pub name: String,
+    /// Kind and body of the type.
+    pub kind: UserTypeKind,
+}
+
+/// The kind of a [`UserTypeSchema`].
+#[derive(Debug, Clone)]
+pub enum UserTypeKind {
+    /// An enumeration type (regular or FLAG).
+    ///
+    /// `resolved_values[i]` is the immutable numeric value for `variants[i]`.
+    Enum {
+        flag: bool,
+        variants: Vec<EnumVariant>,
+        /// System-assigned numeric values, parallel to `variants`.
+        /// These are computed once at creation time and never change.
+        resolved_values: Vec<u64>,
+    },
+    /// A composite (row/struct) type.
+    Composite { fields: Vec<(String, DataType)> },
+}
+
+/// A simple in-memory schema catalog used for semantic validation.
 #[derive(Debug, Default)]
 pub struct Catalog {
     tables: HashMap<String, TableSchema>,
+    /// Named user-defined types (enum and composite).
+    types: HashMap<String, UserTypeSchema>,
 }
 
 impl Catalog {
@@ -83,6 +114,8 @@ impl Catalog {
     pub fn new() -> Self {
         Catalog::default()
     }
+
+    // ── Table management ──────────────────────────────────────────────────
 
     /// Register a table in the catalog.
     pub fn add_table(&mut self, schema: TableSchema) {
@@ -102,6 +135,50 @@ impl Catalog {
     /// Retrieve a table schema.
     pub fn get_table(&self, name: &str) -> Option<&TableSchema> {
         self.tables.get(&name.to_lowercase())
+    }
+
+    // ── User-defined type management ──────────────────────────────────────
+
+    /// Register a user-defined type (enum or composite).
+    ///
+    /// For enum types the catalog computes and permanently stores the
+    /// resolved numeric values — they cannot be changed after this call.
+    pub fn add_type(&mut self, schema: UserTypeSchema) {
+        self.types.insert(schema.name.to_lowercase(), schema);
+    }
+
+    /// Retrieve a user-defined type by name (case-insensitive).
+    pub fn get_type(&self, name: &str) -> Option<&UserTypeSchema> {
+        self.types.get(&name.to_lowercase())
+    }
+
+    /// Check whether a user-defined type exists.
+    pub fn type_exists(&self, name: &str) -> bool {
+        self.types.contains_key(&name.to_lowercase())
+    }
+
+    /// Remove a user-defined type from the catalog.
+    ///
+    /// Returns `Err(TypeInUse)` if any column in any registered table
+    /// still references this type, preventing accidental data loss.
+    pub fn remove_type(&mut self, name: &str) -> Result<(), ValidationError> {
+        let lower = name.to_lowercase();
+        if self.is_type_in_use(&lower) {
+            return Err(ValidationError::TypeInUse(name.to_string()));
+        }
+        self.types.remove(&lower);
+        Ok(())
+    }
+
+    /// Returns `true` if any column in any registered table has
+    /// `DataType::EnumRef(name)` pointing at this type name.
+    pub fn is_type_in_use(&self, name: &str) -> bool {
+        let lower = name.to_lowercase();
+        self.tables.values().any(|t| {
+            t.columns
+                .iter()
+                .any(|c| matches!(&c.data_type, DataType::EnumRef(n) if n.to_lowercase() == lower))
+        })
     }
 }
 
@@ -127,8 +204,23 @@ pub enum ValidationError {
     /// Any other semantic constraint violation.
     ConstraintViolation(String),
 
-    // ── Transaction-nesting errors ─────────────────────────────────────────
+    // ── User-defined type errors ───────────────────────────────────────────
+    /// A column references a user-defined type name that has not been created.
+    ///
+    /// Use `CREATE ENUM name (...)` or `CREATE TYPE name AS (...)` first.
+    TypeNotFound(String),
+    /// A `DROP ENUM` or `DROP TYPE` was attempted but the type is still
+    /// referenced by at least one column in a registered table.
+    ///
+    /// Drop or alter the referencing table(s) first.
+    TypeInUse(String),
+    /// An invalid value was supplied for an enum column.
+    ///
+    /// The value is neither a valid variant name nor a valid numeric value
+    /// for the enum type.
+    InvalidEnumValue { column: String, value: String },
 
+    // ── Transaction-nesting errors ─────────────────────────────────────────
     /// A `COMMIT` or `ROLLBACK` was issued when no transaction is open.
     NoActiveTransaction,
     /// `BEGIN TRANSACTION <name>` was issued but `<name>` is already in use
@@ -182,6 +274,21 @@ impl std::fmt::Display for ValidationError {
             ValidationError::ConstraintViolation(msg) => {
                 write!(f, "constraint violation: {msg}")
             }
+            ValidationError::TypeNotFound(name) => write!(
+                f,
+                "user-defined type '{name}' does not exist; \
+                 create it with CREATE ENUM or CREATE TYPE first"
+            ),
+            ValidationError::TypeInUse(name) => write!(
+                f,
+                "cannot drop type '{name}': it is still referenced by one or more columns; \
+                 drop or alter the referencing tables first"
+            ),
+            ValidationError::InvalidEnumValue { column, value } => write!(
+                f,
+                "invalid enum value '{value}' for column '{column}': \
+                 not a recognised variant name or numeric value"
+            ),
             ValidationError::NoActiveTransaction => {
                 write!(f, "no active transaction")
             }
@@ -246,11 +353,14 @@ impl<'a> Validator<'a> {
             | Statement::CreateUser(_)
             | Statement::DropUser(_)
             | Statement::CreateType(_)
+            | Statement::DropType(_)
             | Statement::CreateDatabase(_)
             | Statement::DropDatabase(_)
             | Statement::UseDatabase(_)
             | Statement::CreateSchema(_)
             | Statement::DropSchema(_) => Ok(()),
+            Statement::CreateEnum(s) => self.validate_create_enum(s),
+            Statement::DropEnum(s) => self.validate_drop_enum(s),
         }
     }
 
@@ -510,8 +620,7 @@ impl<'a> Validator<'a> {
     // ── INSERT ────────────────────────────────────────────────────────────────
 
     fn validate_insert(&self, ins: &InsertStatement) -> Result<(), ValidationError> {
-        self.require_table(&ins.table)?;
-        let schema = self.catalog.get_table(&ins.table).unwrap();
+        let schema = self.get_required_table(&ins.table)?;
 
         // Resolve the effective target columns for this INSERT.
         // If no explicit column list is provided, SQL treats VALUES as mapping
@@ -560,14 +669,19 @@ impl<'a> Validator<'a> {
     // ── UPDATE ────────────────────────────────────────────────────────────────
 
     fn validate_update(&self, upd: &UpdateStatement) -> Result<(), ValidationError> {
-        self.require_table(&upd.table)?;
-        let schema = self.catalog.get_table(&upd.table).unwrap();
+        let schema = self.get_required_table(&upd.table)?;
 
         for (col_name, expr) in &upd.assignments {
             self.require_column(schema, col_name)?;
 
             // Check NOT NULL violation
-            let col_schema = schema.get_column(col_name).unwrap();
+            let col_schema =
+                schema
+                    .get_column(col_name)
+                    .ok_or_else(|| ValidationError::ColumnNotFound {
+                        table: schema.name.clone(),
+                        column: col_name.clone(),
+                    })?;
             if !col_schema.nullable {
                 if let Expr::Literal(crate::sql::ast::Value::Null) = expr {
                     return Err(ValidationError::NullConstraintViolation {
@@ -620,17 +734,76 @@ impl<'a> Validator<'a> {
                     col.name, ct.table
                 )));
             }
+            // Verify that any EnumRef column points to a type in the catalog.
+            if let DataType::EnumRef(type_name) = &col.data_type {
+                if !self.catalog.type_exists(type_name) {
+                    return Err(ValidationError::TypeNotFound(type_name.clone()));
+                }
+            }
             seen_names.push(lower);
         }
 
         Ok(())
     }
 
+    // ── CREATE ENUM / DROP ENUM ───────────────────────────────────────────────
+
+    fn validate_create_enum(
+        &self,
+        ce: &crate::sql::ast::CreateEnumStatement,
+    ) -> Result<(), ValidationError> {
+        if !ce.if_not_exists && self.catalog.type_exists(&ce.name) {
+            return Err(ValidationError::ConstraintViolation(format!(
+                "enum type '{}' already exists",
+                ce.name
+            )));
+        }
+        if ce.variants.is_empty() {
+            return Err(ValidationError::ConstraintViolation(format!(
+                "enum type '{}' must have at least one variant",
+                ce.name
+            )));
+        }
+        // Duplicate variant name check (case-insensitive).
+        let mut seen: Vec<String> = Vec::new();
+        for v in &ce.variants {
+            let lower = v.name.to_lowercase();
+            if seen.contains(&lower) {
+                return Err(ValidationError::ConstraintViolation(format!(
+                    "duplicate variant '{}' in CREATE ENUM '{}'",
+                    v.name, ce.name
+                )));
+            }
+            seen.push(lower);
+        }
+        // FLAG enums can have at most one NONE variant.
+        let none_count = ce.variants.iter().filter(|v| v.is_none).count();
+        if none_count > 1 {
+            return Err(ValidationError::ConstraintViolation(format!(
+                "enum type '{}' has more than one NONE variant",
+                ce.name
+            )));
+        }
+        Ok(())
+    }
+
+    fn validate_drop_enum(
+        &self,
+        de: &crate::sql::ast::DropEnumStatement,
+    ) -> Result<(), ValidationError> {
+        if !de.if_exists && !self.catalog.type_exists(&de.name) {
+            return Err(ValidationError::TypeNotFound(de.name.clone()));
+        }
+        if self.catalog.is_type_in_use(&de.name) {
+            return Err(ValidationError::TypeInUse(de.name.clone()));
+        }
+        Ok(())
+    }
+
     // ── ALTER TABLE ───────────────────────────────────────────────────────────
 
     fn validate_alter_table(&self, alt: &AlterTableStatement) -> Result<(), ValidationError> {
-        self.require_table(&alt.table)?;
-        let schema = self.catalog.get_table(&alt.table).unwrap();
+        let schema = self.get_required_table(&alt.table)?;
 
         for op in &alt.operations {
             match op {
@@ -746,9 +919,7 @@ impl<'a> Validator<'a> {
                 self.validate_expr(in_expr, table)
             }
             Expr::Trim {
-                expr,
-                trim_what,
-                ..
+                expr, trim_what, ..
             } => {
                 self.validate_expr(expr, table)?;
                 if let Some(e) = trim_what {
@@ -756,10 +927,7 @@ impl<'a> Validator<'a> {
                 }
                 Ok(())
             }
-            Expr::MatchAgainst {
-                match_value,
-                ..
-            } => self.validate_expr(match_value, table),
+            Expr::MatchAgainst { match_value, .. } => self.validate_expr(match_value, table),
         }
     }
 
@@ -801,6 +969,14 @@ impl<'a> Validator<'a> {
     }
 
     // ── Catalog helpers ───────────────────────────────────────────────────────
+
+    fn get_required_table<'b>(&'b self, name: &str) -> Result<&'b TableSchema, ValidationError> {
+        self.catalog
+            .get_table(name)
+            .ok_or_else(|| ValidationError::TableNotFound {
+                table: name.to_string(),
+            })
+    }
 
     fn require_table(&self, name: &str) -> Result<(), ValidationError> {
         if !self.catalog.table_exists(name) {

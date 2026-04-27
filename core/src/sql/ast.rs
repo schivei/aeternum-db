@@ -139,24 +139,34 @@ pub enum DataType {
     DateTime,
     /// `TIMESTAMP WITH TIME ZONE`.
     TimestampTz,
-    /// `ENUM` with named variants.
+    /// Anonymous inline `ENUM` with named variants (MySQL-compatible syntax).
     ///
-    /// Each variant has an optional explicit numeric value.  If omitted,
-    /// values are auto-assigned:
-    /// - Regular enum: sequential integers starting at 0 (`0`, `1`, `2`, …).
-    /// - FLAG enum: powers of 2 (`1`, `2`, `4`, `8`, …), with the NONE
-    ///   variant always getting value `0`.
+    /// The system **automatically assigns** numeric values to variants —
+    /// users supply only the names (and the optional `NONE` marker for
+    /// FLAG enums).  Values are:
+    /// - Regular enum: sequential integers `0, 1, 2, …` in declaration order.
+    /// - FLAG enum: `NONE = 0`; other variants get powers of 2 (`1, 2, 4, …`).
     ///
-    /// **Storage**: the underlying column always stores the numeric `u64`
-    /// value, never the string name.  The engine auto-casts:
-    /// - `'active'` → looks up the variant, stores its number.
-    /// - `1` → stored as-is (validated against known variant values).
-    /// - `'read' | 'write'` (FLAG only) → bitwise OR of their numbers.
+    /// For a **named, reusable** enum type that can be shared across tables
+    /// and is protected from deletion when in use, use
+    /// `CREATE TYPE name AS ENUM [FLAG] (...)` and reference it via
+    /// [`DataType::EnumRef`].
+    ///
+    /// **Storage**: the column always stores the numeric `u64` value.
+    /// The engine auto-casts `'active'` → its assigned number, and
+    /// for FLAG enums `'read' | 'write'` → bitwise OR of their numbers.
     Enum {
         variants: Vec<EnumVariant>,
-        /// `true` for bitmask / flag enumerations.
+        /// `true` for bitmask / flag enumerations (`[Flags]` in C# terms).
         flag: bool,
     },
+    /// Reference to a **named user-defined type** created with
+    /// `CREATE TYPE name AS ENUM [FLAG] (...)` or
+    /// `CREATE TYPE name AS (field type, ...)`.
+    ///
+    /// The catalog resolves the type and its auto-assigned values.
+    /// The type cannot be dropped while any column references it.
+    EnumRef(String),
     /// `UUID` / `GUID`.
     Uuid,
     /// `BINARY(n)` — fixed-length binary string.
@@ -173,27 +183,64 @@ pub enum DataType {
     LongBlob,
     /// A vector of values of the given element type: `[DataType]`.
     /// Elements can be any base type, e.g. `[INTEGER]`, `[VARCHAR(100)]`.
-    /// Supports custom insert, update, delete and select operations.
     Vector(Box<DataType>),
 }
 
 // ── EnumVariant ───────────────────────────────────────────────────────────────
 
-/// A single variant in an [`DataType::Enum`] definition.
+/// A single named variant in an [`DataType::Enum`] or a
+/// [`TypeDefinition::Enum`] type body.
+///
+/// **Users supply only the name** (and the `NONE` marker for FLAG enums).
+/// Numeric values are assigned automatically by the system and are **immutable**
+/// once the type is created — they can never be edited to prevent data corruption.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EnumVariant {
     /// Variant name (normalized to lowercase).
     pub name: String,
-    /// Explicit numeric value.  When `None` the engine auto-assigns a value
-    /// (sequential for regular enums; powers of 2 for FLAG enums).
-    pub value: Option<u64>,
-    /// Marks the zero/null-state variant for FLAG enums.
+    /// Marks the zero/empty-state variant for FLAG enums.
     ///
-    /// A NONE variant always gets value `0`.  When a FLAG column holds `0`
-    /// it displays as `"none"` rather than as an empty flag set.  A column
-    /// whose enum has a NONE variant is implicitly non-nullable (the NONE
-    /// state already represents *absence of a value*).
+    /// Write `NONE` (case-insensitive) as the variant name to create this
+    /// marker.  The system assigns value `0` to the NONE variant and
+    /// powers-of-2 to the remaining variants.  A column whose enum type has
+    /// a NONE variant is implicitly non-nullable — the NONE state already
+    /// represents *absence of a value*.
     pub is_none: bool,
+}
+
+// ── TypeDefinition ────────────────────────────────────────────────────────────
+
+/// Body of a `CREATE TYPE … AS …` statement.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TypeDefinition {
+    /// `AS ENUM [FLAG] ('name1', 'name2', …)`
+    ///
+    /// Declares a C#-style enumeration.  The system assigns the numeric
+    /// values automatically (sequential for regular; powers-of-2 for FLAG)
+    /// and stores them permanently in the catalog.  Values cannot be changed
+    /// after creation.
+    Enum {
+        /// Whether this is a FLAG (bitmask) enum.
+        flag: bool,
+        /// Variant names in declaration order.  The system assigns values
+        /// in this order; the order is therefore significant and immutable.
+        variants: Vec<EnumVariant>,
+    },
+    /// `AS (field_name data_type [NOT NULL], …)`
+    ///
+    /// A composite / row type whose fields each have a name and data type.
+    Composite(Vec<CompositeField>),
+}
+
+/// A single field in a [`TypeDefinition::Composite`] type.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompositeField {
+    /// Field name (normalized to lowercase).
+    pub name: String,
+    /// Field data type.
+    pub data_type: DataType,
+    /// Whether the field is non-nullable.
+    pub not_null: bool,
 }
 
 impl std::fmt::Display for DataType {
@@ -235,43 +282,21 @@ impl std::fmt::Display for DataType {
             DataType::DateTime => write!(f, "DATETIME"),
             DataType::TimestampTz => write!(f, "TIMESTAMP WITH TIME ZONE"),
             DataType::Enum { variants, flag } => {
-                let resolved = {
-                    let mut out = vec![0u64; variants.len()];
-                    let mut next: u64 = if *flag { 1 } else { 0 };
-                    for (i, v) in variants.iter().enumerate() {
-                        if v.is_none {
-                            out[i] = 0;
-                        } else if let Some(explicit) = v.value {
-                            out[i] = explicit;
-                            if *flag {
-                                while next <= explicit {
-                                    next <<= 1;
-                                }
-                            } else if explicit >= next {
-                                next = explicit + 1;
-                            }
-                        } else {
-                            out[i] = next;
-                            next = if *flag { next << 1 } else { next + 1 };
-                        }
-                    }
-                    out
-                };
                 let kw = if *flag { "ENUM FLAG" } else { "ENUM" };
                 let list = variants
                     .iter()
-                    .zip(resolved.iter())
-                    .map(|(v, val)| {
+                    .map(|v| {
                         if v.is_none {
-                            format!("NONE = {val}")
+                            "NONE".to_string()
                         } else {
-                            format!("'{}' = {val}", v.name)
+                            format!("'{}'", v.name)
                         }
                     })
                     .collect::<Vec<_>>()
                     .join(", ");
                 write!(f, "{kw}({list})")
             }
+            DataType::EnumRef(name) => write!(f, "{name}"),
             DataType::Uuid => write!(f, "UUID"),
             DataType::Binary(Some(n)) => write!(f, "BINARY({n})"),
             DataType::Binary(None) => write!(f, "BINARY"),
@@ -306,15 +331,6 @@ impl DataType {
         for (i, v) in variants.iter().enumerate() {
             if v.is_none {
                 out[i] = 0;
-            } else if let Some(explicit) = v.value {
-                out[i] = explicit;
-                if flag {
-                    while next <= explicit {
-                        next <<= 1;
-                    }
-                } else if explicit >= next {
-                    next = explicit + 1;
-                }
             } else {
                 out[i] = next;
                 next = if flag { next << 1 } else { next + 1 };
@@ -354,7 +370,13 @@ impl DataType {
             .into_iter()
             .zip(variants.iter())
             .find(|(v, _)| *v == value)
-            .map(|(_, var)| if var.is_none { "none" } else { var.name.as_str() })
+            .map(|(_, var)| {
+                if var.is_none {
+                    "none"
+                } else {
+                    var.name.as_str()
+                }
+            })
     }
 
     /// For a FLAG enum, decompose a bitmask `value` into the list of
@@ -479,6 +501,32 @@ pub enum BinaryOperator {
     // ── String concatenation ─────────────────────────────────────────────
     /// `||` — string concatenation (SQL standard / PostgreSQL).
     StringConcat,
+    // ── Reverse pattern matching ─────────────────────────────────────────
+    /// `pattern REVLIKE string` — reverse LIKE: the **left** side is the
+    /// pattern and the **right** side is the value being tested.
+    ///
+    /// Useful when a column *contains* patterns and you want to check which
+    /// stored patterns match a given string:
+    /// ```sql
+    /// -- Do any patterns in `rules.pattern_col` match the string 'hello world'?
+    /// 'hello world' REVLIKE ANY (SELECT pattern_col FROM rules)
+    /// ```
+    RevLike,
+    /// `pattern NOT REVLIKE string`.
+    NotRevLike,
+    /// `pattern REVILIKE string` — case-insensitive reverse LIKE.
+    RevILike,
+    /// `pattern NOT REVILIKE string`.
+    NotRevILike,
+    /// `pattern REVREGEXP string` — reverse REGEXP: the left side is the
+    /// regex pattern, the right side is the value being tested.
+    RevRegexp,
+    /// `pattern NOT REVREGEXP string`.
+    NotRevRegexp,
+    /// `pattern REVREGEXP* string` — case-insensitive reverse REGEXP.
+    RevRegexpIMatch,
+    /// `pattern NOT REVREGEXP* string`.
+    NotRevRegexpIMatch,
 }
 
 impl std::fmt::Display for BinaryOperator {
@@ -515,6 +563,14 @@ impl std::fmt::Display for BinaryOperator {
             BinaryOperator::ShiftLeft => "<<",
             BinaryOperator::ShiftRight => ">>",
             BinaryOperator::StringConcat => "||",
+            BinaryOperator::RevLike => "REVLIKE",
+            BinaryOperator::NotRevLike => "NOT REVLIKE",
+            BinaryOperator::RevILike => "REVILIKE",
+            BinaryOperator::NotRevILike => "NOT REVILIKE",
+            BinaryOperator::RevRegexp => "REVREGEXP",
+            BinaryOperator::NotRevRegexp => "NOT REVREGEXP",
+            BinaryOperator::RevRegexpIMatch => "REVREGEXP*",
+            BinaryOperator::NotRevRegexpIMatch => "NOT REVREGEXP*",
         };
         write!(f, "{s}")
     }
@@ -1257,16 +1313,91 @@ pub struct DropUserStatement {
     pub if_exists: bool,
 }
 
-/// A `CREATE TYPE` / User Type Definition (UTD) statement (scaffolding; not yet executed).
+/// A `CREATE TYPE` (composite/row user-defined type) statement.
+///
+/// Used for composite types only.  To create an enumeration, use
+/// [`CreateEnumStatement`] via `CREATE ENUM`.
 ///
 /// UTDs allow DBAs to define custom composite types with read/write/anonymization
-/// restrictions that can be applied per user or group.
+/// restrictions that can be applied per user or group.  Like enums, composite
+/// types cannot be dropped while any column references them.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CreateTypeStatement {
-    /// Type name.
+    /// Type name (lowercased).
     pub name: String,
-    /// Attributes / columns of the type.
-    pub attributes: Vec<ColumnDef>,
+    /// Type body.
+    pub definition: TypeDefinition,
+}
+
+/// A `DROP TYPE` statement for composite user-defined types.
+///
+/// Returns [`ValidationError::TypeInUse`] if any table column still
+/// references this type.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DropTypeStatement {
+    /// Type name (lowercased).
+    pub name: String,
+    /// `IF EXISTS` flag — suppresses error if the type does not exist.
+    pub if_exists: bool,
+}
+
+// ── Enum DDL ──────────────────────────────────────────────────────────────────
+
+/// `CREATE ENUM [FLAG] name ('variant1', 'variant2', …)`
+///
+/// Defines a **named, reusable enumeration type** that can be referenced in
+/// column definitions.  Users supply only the variant **names**; the system
+/// auto-assigns the numeric values and stores them permanently:
+///
+/// - Regular enum: `0, 1, 2, …` in declaration order.
+/// - FLAG enum: `NONE = 0` (if present), then `1, 2, 4, 8, …` for the rest.
+///
+/// Assigned values are **immutable** — they cannot be changed after creation
+/// to prevent data loss.  The type cannot be dropped while any column
+/// references it (see [`DropEnumStatement`]).
+///
+/// ```sql
+/// -- Regular enum (system assigns 0, 1, 2)
+/// CREATE ENUM status ('active', 'inactive', 'pending')
+///
+/// -- FLAG enum (system assigns none=0, read=1, write=2, admin=4)
+/// CREATE ENUM FLAG permissions (NONE, 'read', 'write', 'admin')
+///
+/// -- Reference in a table
+/// CREATE TABLE users (
+///     id    INTEGER,
+///     state status,
+///     perms permissions
+/// )
+/// ```
+///
+/// Parsed from `CREATE TYPE name AS ENUM [FLAG] (...)` when the underlying
+/// SQL parser is used; AeternumDB's native `CREATE ENUM` keyword is a
+/// Phase 4 grammar extension.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CreateEnumStatement {
+    /// Enum type name (lowercased).
+    pub name: String,
+    /// `true` for a FLAG (bitmask) enum.
+    pub flag: bool,
+    /// Variant names in declaration order.
+    /// Users supply names only; numeric values are assigned by the system.
+    pub variants: Vec<EnumVariant>,
+    /// `IF NOT EXISTS` flag.
+    pub if_not_exists: bool,
+}
+
+/// `DROP ENUM [IF EXISTS] name`
+///
+/// Removes a named enum type from the catalog.  Fails with
+/// [`ValidationError::TypeInUse`] if any table column still references
+/// this enum.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DropEnumStatement {
+    /// Enum type name (lowercased).
+    pub name: String,
+    /// `IF EXISTS` flag — suppresses error if the enum does not exist.
+    pub if_exists: bool,
 }
 
 // ── Database / Schema DDL scaffolding ─────────────────────────────────────────
@@ -1355,8 +1486,14 @@ pub enum Statement {
     CreateUser(CreateUserStatement),
     /// `DROP USER` scaffolding.
     DropUser(DropUserStatement),
-    /// `CREATE TYPE` (User Type Definition) scaffolding.
+    /// `CREATE ENUM [FLAG] name (...)` — define a named enumeration type.
+    CreateEnum(CreateEnumStatement),
+    /// `DROP ENUM [IF EXISTS] name` — remove a named enumeration type.
+    DropEnum(DropEnumStatement),
+    /// `CREATE TYPE name AS (field type, …)` — composite user-defined type.
     CreateType(CreateTypeStatement),
+    /// `DROP TYPE [IF EXISTS] name` — remove a composite user-defined type.
+    DropType(DropTypeStatement),
     /// `CREATE DATABASE` statement.
     CreateDatabase(CreateDatabaseStatement),
     /// `DROP DATABASE` statement.
@@ -1491,11 +1628,57 @@ impl TryFrom<sp::Statement> for Statement {
                 password: None,
                 roles: vec![],
             })),
-            sp::Statement::CreateType { name, .. } => {
-                Ok(Statement::CreateType(CreateTypeStatement {
-                    name: object_name_to_string(&name),
-                    attributes: vec![],
-                }))
+            sp::Statement::CreateType {
+                name,
+                representation,
+            } => {
+                let type_name = object_name_to_string(&name);
+                match representation {
+                    // `CREATE TYPE name AS ENUM ('a', 'b', 'c')` →
+                    // mapped to `CreateEnum` (the canonical AeternumDB form).
+                    // Users specify names only; system assigns numeric values.
+                    Some(sp::UserDefinedTypeRepresentation::Enum { labels }) => {
+                        let variants = labels
+                            .into_iter()
+                            .map(|lbl| {
+                                let n = lbl.value.to_lowercase();
+                                EnumVariant {
+                                    is_none: n == "none",
+                                    name: n,
+                                }
+                            })
+                            .collect();
+                        Ok(Statement::CreateEnum(CreateEnumStatement {
+                            name: type_name,
+                            flag: false,
+                            variants,
+                            if_not_exists: false,
+                        }))
+                    }
+                    // `CREATE TYPE name AS (field type, …)` → composite type.
+                    Some(sp::UserDefinedTypeRepresentation::Composite { attributes }) => {
+                        let fields = attributes
+                            .into_iter()
+                            .map(|attr| {
+                                let dt = convert_data_type(attr.data_type)?;
+                                Ok(CompositeField {
+                                    name: attr.name.value.to_lowercase(),
+                                    data_type: dt,
+                                    not_null: false,
+                                })
+                            })
+                            .collect::<Result<Vec<_>, AstError>>()?;
+                        Ok(Statement::CreateType(CreateTypeStatement {
+                            name: type_name,
+                            definition: TypeDefinition::Composite(fields),
+                        }))
+                    }
+                    // Other representations (Range, etc.) — scaffold as empty composite.
+                    _ => Ok(Statement::CreateType(CreateTypeStatement {
+                        name: type_name,
+                        definition: TypeDefinition::Composite(vec![]),
+                    })),
+                }
             }
             sp::Statement::CreateDatabase {
                 db_name,
@@ -2306,42 +2489,19 @@ fn convert_data_type(dt: sp::DataType) -> Result<DataType, AstError> {
         // ── Misc ───────────────────────────────────────────────────────────
         sp::DataType::Uuid => Ok(DataType::Uuid),
         sp::DataType::Enum(members, _) => {
-            let mut next_auto: u64 = 0;
             let variants = members
                 .into_iter()
-                .map(|m| match m {
-                    sp::EnumMember::Name(s) => {
-                        let is_none = s.to_lowercase() == "none";
-                        let v = if is_none { 0 } else { next_auto };
-                        if !is_none {
-                            next_auto += 1;
-                        }
-                        EnumVariant {
-                            name: s.to_lowercase(),
-                            value: None,
-                            is_none,
-                        }
-                    }
-                    sp::EnumMember::NamedValue(s, expr) => {
-                        let is_none = s.to_lowercase() == "none";
-                        // Extract the numeric value from the expression if it's a literal.
-                        let explicit: Option<u64> = match &expr {
-                            sp::Expr::Value(vs) => match &vs.value {
-                                sp::Value::Number(n, _) => n.parse::<u64>().ok(),
-                                _ => None,
-                            },
-                            _ => None,
-                        };
-                        if let Some(v) = explicit {
-                            if !is_none && v >= next_auto {
-                                next_auto = v + 1;
-                            }
-                        }
-                        EnumVariant {
-                            name: s.to_lowercase(),
-                            value: explicit,
-                            is_none,
-                        }
+                .map(|m| {
+                    let name_str = match &m {
+                        sp::EnumMember::Name(s) => s.to_lowercase(),
+                        sp::EnumMember::NamedValue(s, _) => s.to_lowercase(),
+                    };
+                    // Users supply names only — system assigns values at creation time.
+                    // Any explicit value from NamedValue syntax is silently ignored
+                    // to enforce the "system-assigned, immutable" contract.
+                    EnumVariant {
+                        is_none: name_str == "none",
+                        name: name_str,
                     }
                 })
                 .collect();
@@ -2351,6 +2511,10 @@ fn convert_data_type(dt: sp::DataType) -> Result<DataType, AstError> {
         | sp::DataType::Array(sp::ArrayElemTypeDef::SquareBracket(inner, _)) => {
             Ok(DataType::Vector(Box::new(convert_data_type(*inner)?)))
         }
+        // Custom type name — treated as a reference to a user-defined enum or
+        // composite type registered in the catalog.  The validator resolves the
+        // type and enforces existence checks.
+        sp::DataType::Custom(name, _) => Ok(DataType::EnumRef(object_name_to_string(&name))),
         other => Ok(DataType::Other(format!("{other}"))),
     }
 }
@@ -2680,6 +2844,18 @@ fn convert_drop(
                 name: schema_name,
                 if_exists,
             }))
+        }
+        // `DROP TYPE name` — could be a composite type or an enum.
+        // The validator resolves which catalog object to remove.
+        // We map to `DropType`; `DropEnum` is produced only by the
+        // AeternumDB-native `DROP ENUM` grammar (Phase 4).
+        sp::ObjectType::Type => {
+            let name = names
+                .iter()
+                .map(object_name_to_string)
+                .next()
+                .unwrap_or_default();
+            Ok(Statement::DropType(DropTypeStatement { name, if_exists }))
         }
         other => Err(AstError::Unsupported(format!("DROP {other} not supported"))),
     }
