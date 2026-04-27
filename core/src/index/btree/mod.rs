@@ -501,14 +501,14 @@ impl<K: BTreeKey, V: BTreeValue> BTree<K, V> {
                     let old_root = meta.root_page_id;
                     meta.root_page_id = internal.children[0];
                     meta.height -= 1;
-                    drop(meta);
                     self.write_meta().await?;
                     self.storage.deallocate_page(old_root).await?;
+                    drop(meta);
                     return Ok(true);
                 }
             }
-            drop(meta);
             self.write_meta().await?;
+            drop(meta);
         }
 
         Ok(deleted)
