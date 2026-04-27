@@ -214,9 +214,13 @@ impl SqlParser {
                     match sel.columns.remove(0) {
                         SelectItem::Expr { expr, .. } => Ok(expr),
                         SelectItem::Wildcard => Ok(crate::sql::ast::Expr::Wildcard),
-                        SelectItem::QualifiedWildcard(t) => Ok(crate::sql::ast::Expr::Column {
-                            table: Some(t),
-                            name: "*".to_string(),
+                        SelectItem::QualifiedWildcard(t) => Err(SqlError::ParseError {
+                            message: format!(
+                                "qualified wildcard is not a scalar expression: {}.*",
+                                t
+                            ),
+                            line: None,
+                            col: None,
                         }),
                     }
                 } else {
