@@ -159,7 +159,10 @@ quoted using:
   SELECT "select", "from" FROM "table";
   ```
 
-Unquoted identifiers are case-sensitive.
+Unquoted identifiers are matched case-insensitively (for example, `users`,
+`Users`, and `USERS` refer to the same table or column). Use quoting when you
+need to write an identifier exactly as defined or when it would otherwise
+conflict with a SQL keyword.
 
 ---
 
