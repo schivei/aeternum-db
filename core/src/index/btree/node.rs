@@ -463,10 +463,13 @@ fn read_optional_page_id(data: &[u8], pos: &mut usize) -> Result<Option<PageId>,
     }
     let present = data[*pos];
     *pos += 1;
-    if present == 0 {
-        return Ok(None);
+    match present {
+        0 => Ok(None),
+        1 => Ok(Some(read_u64(data, pos)?)),
+        _ => Err(IndexError::Serialization(
+            format!("invalid optional page id presence byte: {}", present),
+        )),
     }
-    Ok(Some(read_u64(data, pos)?))
 }
 
 // ── Unit tests ────────────────────────────────────────────────────────────────
