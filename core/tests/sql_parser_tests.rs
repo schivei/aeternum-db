@@ -1101,10 +1101,11 @@ fn test_new_data_types() {
     assert_eq!(col("f").data_type, DataType::DateTime);
     assert_eq!(col("g").data_type, DataType::TimestampTz);
     assert_eq!(col("h").data_type, DataType::Uuid);
-    assert_eq!(
-        col("i").data_type,
-        DataType::Enum(vec!["x".to_string(), "y".to_string(), "z".to_string()])
-    );
+    // ENUM variants are now EnumVariant structs with auto-assigned values
+    assert!(matches!(
+        &col("i").data_type,
+        DataType::Enum { variants, flag: false } if variants.len() == 3
+    ));
 }
 
 #[test]

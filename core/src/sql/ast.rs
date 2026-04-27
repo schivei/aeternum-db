@@ -139,8 +139,24 @@ pub enum DataType {
     DateTime,
     /// `TIMESTAMP WITH TIME ZONE`.
     TimestampTz,
-    /// `ENUM('a','b','c')`.
-    Enum(Vec<String>),
+    /// `ENUM` with named variants.
+    ///
+    /// Each variant has an optional explicit numeric value.  If omitted,
+    /// values are auto-assigned:
+    /// - Regular enum: sequential integers starting at 0 (`0`, `1`, `2`, …).
+    /// - FLAG enum: powers of 2 (`1`, `2`, `4`, `8`, …), with the NONE
+    ///   variant always getting value `0`.
+    ///
+    /// **Storage**: the underlying column always stores the numeric `u64`
+    /// value, never the string name.  The engine auto-casts:
+    /// - `'active'` → looks up the variant, stores its number.
+    /// - `1` → stored as-is (validated against known variant values).
+    /// - `'read' | 'write'` (FLAG only) → bitwise OR of their numbers.
+    Enum {
+        variants: Vec<EnumVariant>,
+        /// `true` for bitmask / flag enumerations.
+        flag: bool,
+    },
     /// `UUID` / `GUID`.
     Uuid,
     /// `BINARY(n)` — fixed-length binary string.
@@ -159,6 +175,25 @@ pub enum DataType {
     /// Elements can be any base type, e.g. `[INTEGER]`, `[VARCHAR(100)]`.
     /// Supports custom insert, update, delete and select operations.
     Vector(Box<DataType>),
+}
+
+// ── EnumVariant ───────────────────────────────────────────────────────────────
+
+/// A single variant in an [`DataType::Enum`] definition.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnumVariant {
+    /// Variant name (normalized to lowercase).
+    pub name: String,
+    /// Explicit numeric value.  When `None` the engine auto-assigns a value
+    /// (sequential for regular enums; powers of 2 for FLAG enums).
+    pub value: Option<u64>,
+    /// Marks the zero/null-state variant for FLAG enums.
+    ///
+    /// A NONE variant always gets value `0`.  When a FLAG column holds `0`
+    /// it displays as `"none"` rather than as an empty flag set.  A column
+    /// whose enum has a NONE variant is implicitly non-nullable (the NONE
+    /// state already represents *absence of a value*).
+    pub is_none: bool,
 }
 
 impl std::fmt::Display for DataType {
@@ -199,13 +234,43 @@ impl std::fmt::Display for DataType {
             DataType::TimeTz => write!(f, "TIME WITH TIME ZONE"),
             DataType::DateTime => write!(f, "DATETIME"),
             DataType::TimestampTz => write!(f, "TIMESTAMP WITH TIME ZONE"),
-            DataType::Enum(vals) => {
-                let list = vals
+            DataType::Enum { variants, flag } => {
+                let resolved = {
+                    let mut out = vec![0u64; variants.len()];
+                    let mut next: u64 = if *flag { 1 } else { 0 };
+                    for (i, v) in variants.iter().enumerate() {
+                        if v.is_none {
+                            out[i] = 0;
+                        } else if let Some(explicit) = v.value {
+                            out[i] = explicit;
+                            if *flag {
+                                while next <= explicit {
+                                    next <<= 1;
+                                }
+                            } else if explicit >= next {
+                                next = explicit + 1;
+                            }
+                        } else {
+                            out[i] = next;
+                            next = if *flag { next << 1 } else { next + 1 };
+                        }
+                    }
+                    out
+                };
+                let kw = if *flag { "ENUM FLAG" } else { "ENUM" };
+                let list = variants
                     .iter()
-                    .map(|v| format!("'{v}'"))
+                    .zip(resolved.iter())
+                    .map(|(v, val)| {
+                        if v.is_none {
+                            format!("NONE = {val}")
+                        } else {
+                            format!("'{}' = {val}", v.name)
+                        }
+                    })
                     .collect::<Vec<_>>()
                     .join(", ");
-                write!(f, "ENUM({list})")
+                write!(f, "{kw}({list})")
             }
             DataType::Uuid => write!(f, "UUID"),
             DataType::Binary(Some(n)) => write!(f, "BINARY({n})"),
@@ -223,30 +288,197 @@ impl std::fmt::Display for DataType {
     }
 }
 
+impl DataType {
+    /// Compute the resolved numeric value for every variant in one pass.
+    ///
+    /// Auto-assignment rules:
+    /// - Regular enum: sequential integers `0, 1, 2, …` (explicit values
+    ///   advance the counter past themselves).
+    /// - FLAG enum: powers of 2 `1, 2, 4, 8, …`; a NONE variant is always
+    ///   `0` regardless of position.
+    pub fn enum_resolved_values(&self) -> Vec<u64> {
+        let (variants, flag) = match self {
+            DataType::Enum { variants, flag } => (variants, *flag),
+            _ => return vec![],
+        };
+        let mut out = vec![0u64; variants.len()];
+        let mut next: u64 = if flag { 1 } else { 0 };
+        for (i, v) in variants.iter().enumerate() {
+            if v.is_none {
+                out[i] = 0;
+            } else if let Some(explicit) = v.value {
+                out[i] = explicit;
+                if flag {
+                    while next <= explicit {
+                        next <<= 1;
+                    }
+                } else if explicit >= next {
+                    next = explicit + 1;
+                }
+            } else {
+                out[i] = next;
+                next = if flag { next << 1 } else { next + 1 };
+            }
+        }
+        out
+    }
+
+    /// Look up the stored numeric value for an enum variant by name
+    /// (case-insensitive).  Returns `None` if `self` is not an `Enum` or
+    /// the name does not match any variant.
+    pub fn enum_value_of(&self, name: &str) -> Option<u64> {
+        let (variants, _) = match self {
+            DataType::Enum { variants, flag } => (variants, *flag),
+            _ => return None,
+        };
+        let lower = name.to_lowercase();
+        let resolved = self.enum_resolved_values();
+        variants
+            .iter()
+            .zip(resolved.iter())
+            .find(|(v, _)| {
+                (v.is_none && lower == "none") || (!v.is_none && v.name.to_lowercase() == lower)
+            })
+            .map(|(_, &val)| val)
+    }
+
+    /// Return the variant name for a stored numeric value (regular enums).
+    /// Returns `None` if `self` is not an `Enum` or the value does not
+    /// match any variant exactly.
+    pub fn enum_name_of(&self, value: u64) -> Option<&str> {
+        let variants = match self {
+            DataType::Enum { variants, .. } => variants,
+            _ => return None,
+        };
+        self.enum_resolved_values()
+            .into_iter()
+            .zip(variants.iter())
+            .find(|(v, _)| *v == value)
+            .map(|(_, var)| if var.is_none { "none" } else { var.name.as_str() })
+    }
+
+    /// For a FLAG enum, decompose a bitmask `value` into the list of
+    /// matching variant names.  For a regular enum returns a single-element
+    /// vec (or empty if invalid).  Returns `[]` for `self` not being `Enum`.
+    pub fn enum_decompose_flags(&self, value: u64) -> Vec<String> {
+        let (variants, flag) = match self {
+            DataType::Enum { variants, flag } => (variants, *flag),
+            _ => return vec![],
+        };
+        if value == 0 {
+            return variants
+                .iter()
+                .find(|v| v.is_none)
+                .map(|_| vec!["none".to_string()])
+                .unwrap_or_default();
+        }
+        if !flag {
+            return self
+                .enum_name_of(value)
+                .map(|n| vec![n.to_string()])
+                .unwrap_or_default();
+        }
+        self.enum_resolved_values()
+            .into_iter()
+            .zip(variants.iter())
+            .filter(|(v, var)| !var.is_none && *v != 0 && (value & v) == *v)
+            .map(|(_, var)| var.name.clone())
+            .collect()
+    }
+
+    /// Check whether a numeric value is valid for this enum.
+    ///
+    /// - Regular enum: `value` must equal exactly one variant's resolved value.
+    /// - FLAG enum: `value` must be a valid combination of variant bits;
+    ///   `0` is valid only when a NONE variant exists.
+    pub fn enum_is_valid_value(&self, value: u64) -> bool {
+        let (variants, flag) = match self {
+            DataType::Enum { variants, flag } => (variants, *flag),
+            _ => return false,
+        };
+        if value == 0 {
+            return variants.iter().any(|v| v.is_none);
+        }
+        if !flag {
+            return self.enum_name_of(value).is_some();
+        }
+        let all_bits: u64 = self
+            .enum_resolved_values()
+            .into_iter()
+            .zip(variants.iter())
+            .filter(|(_, v)| !v.is_none)
+            .fold(0, |acc, (v, _)| acc | v);
+        (value & !all_bits) == 0
+    }
+
+    /// Check whether a string name is a valid variant for this enum
+    /// (case-insensitive).
+    pub fn enum_is_valid_name(&self, name: &str) -> bool {
+        self.enum_value_of(name).is_some()
+    }
+}
+
 // ── Expressions ───────────────────────────────────────────────────────────────
 
 /// Binary operators used in expressions.
 #[derive(Debug, Clone, PartialEq)]
 pub enum BinaryOperator {
-    // Arithmetic
+    // ── Arithmetic ────────────────────────────────────────────────────────
     Plus,
     Minus,
     Multiply,
     Divide,
     Modulo,
-    // Comparison
+    // ── Comparison ───────────────────────────────────────────────────────
     Eq,
     NotEq,
     Lt,
     LtEq,
     Gt,
     GtEq,
-    // Logical
+    // ── Logical ──────────────────────────────────────────────────────────
     And,
     Or,
-    // String
+    // ── Pattern matching ─────────────────────────────────────────────────
+    /// `LIKE` — case-sensitive wildcard match (`%`, `_`).
     Like,
+    /// `NOT LIKE`.
     NotLike,
+    /// `ILIKE` — case-insensitive wildcard match (PostgreSQL / AeternumDB).
+    ILike,
+    /// `NOT ILIKE`.
+    NotILike,
+    /// `SIMILAR TO` — SQL-standard regex-like pattern match.
+    SimilarTo,
+    /// `NOT SIMILAR TO`.
+    NotSimilarTo,
+    // ── Regular expression ────────────────────────────────────────────────
+    /// `REGEXP` / `RLIKE` — case-sensitive regex match (MySQL-style).
+    Regexp,
+    /// `NOT REGEXP` / `NOT RLIKE`.
+    NotRegexp,
+    /// `~` — case-sensitive POSIX regex match (PostgreSQL-style).
+    RegexpMatch,
+    /// `~*` — case-insensitive POSIX regex match.
+    RegexpIMatch,
+    /// `!~` — case-sensitive POSIX regex non-match.
+    NotRegexpMatch,
+    /// `!~*` — case-insensitive POSIX regex non-match.
+    NotRegexpIMatch,
+    // ── Bitwise ──────────────────────────────────────────────────────────
+    /// `&` — bitwise AND (also used to test FLAG enum bits).
+    BitwiseAnd,
+    /// `|` — bitwise OR (also used to combine FLAG enum variants).
+    BitwiseOr,
+    /// `^` — bitwise XOR.
+    BitwiseXor,
+    /// `<<` — left shift.
+    ShiftLeft,
+    /// `>>` — right shift.
+    ShiftRight,
+    // ── String concatenation ─────────────────────────────────────────────
+    /// `||` — string concatenation (SQL standard / PostgreSQL).
+    StringConcat,
 }
 
 impl std::fmt::Display for BinaryOperator {
@@ -267,6 +499,22 @@ impl std::fmt::Display for BinaryOperator {
             BinaryOperator::Or => "OR",
             BinaryOperator::Like => "LIKE",
             BinaryOperator::NotLike => "NOT LIKE",
+            BinaryOperator::ILike => "ILIKE",
+            BinaryOperator::NotILike => "NOT ILIKE",
+            BinaryOperator::SimilarTo => "SIMILAR TO",
+            BinaryOperator::NotSimilarTo => "NOT SIMILAR TO",
+            BinaryOperator::Regexp => "REGEXP",
+            BinaryOperator::NotRegexp => "NOT REGEXP",
+            BinaryOperator::RegexpMatch => "~",
+            BinaryOperator::RegexpIMatch => "~*",
+            BinaryOperator::NotRegexpMatch => "!~",
+            BinaryOperator::NotRegexpIMatch => "!~*",
+            BinaryOperator::BitwiseAnd => "&",
+            BinaryOperator::BitwiseOr => "|",
+            BinaryOperator::BitwiseXor => "^",
+            BinaryOperator::ShiftLeft => "<<",
+            BinaryOperator::ShiftRight => ">>",
+            BinaryOperator::StringConcat => "||",
         };
         write!(f, "{s}")
     }
@@ -275,10 +523,91 @@ impl std::fmt::Display for BinaryOperator {
 /// Unary operators.
 #[derive(Debug, Clone, PartialEq)]
 pub enum UnaryOperator {
-    /// Negation (`-expr`).
+    /// Arithmetic negation (`-expr`).
     Minus,
     /// Logical NOT (`NOT expr`).
     Not,
+    /// `~expr` — bitwise NOT (ones-complement).  Used with integer columns
+    /// and FLAG enum bitmasks.
+    BitwiseNot,
+}
+
+impl std::fmt::Display for UnaryOperator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            UnaryOperator::Minus => write!(f, "-"),
+            UnaryOperator::Not => write!(f, "NOT"),
+            UnaryOperator::BitwiseNot => write!(f, "~"),
+        }
+    }
+}
+
+// ── Quantifier for array/list operators ──────────────────────────────────────
+
+/// Controls which elements of an array/list must satisfy a predicate in an
+/// [`Expr::ArrayOp`] expression.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ArrayQuantifier {
+    /// True if **at least one** element satisfies the condition (`ANY` /
+    /// `SOME`).  Equivalent to `IN` when the operator is `=`.
+    Any,
+    /// True if **every** element satisfies the condition (`ALL`).
+    All,
+}
+
+// ── Text-function helpers ─────────────────────────────────────────────────────
+
+/// Direction for [`Expr::Trim`].
+#[derive(Debug, Clone, PartialEq)]
+pub enum TrimWhereField {
+    /// `TRIM(LEADING … FROM …)` — strip from the left.
+    Leading,
+    /// `TRIM(TRAILING … FROM …)` — strip from the right.
+    Trailing,
+    /// `TRIM(BOTH … FROM …)` — strip from both ends (default).
+    Both,
+}
+
+// ── Full-text search ──────────────────────────────────────────────────────────
+
+/// Search modifier for [`Expr::MatchAgainst`].
+#[derive(Debug, Clone, PartialEq)]
+pub enum TextSearchModifier {
+    /// `IN NATURAL LANGUAGE MODE` (default, MySQL-style).
+    NaturalLanguage,
+    /// `IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION`.
+    NaturalLanguageWithExpansion,
+    /// `IN BOOLEAN MODE` — supports `+`, `-`, `*`, `"…"` operators.
+    Boolean,
+    /// `WITH QUERY EXPANSION`.
+    WithExpansion,
+}
+
+/// The kind of index to create.  Controls physical storage and search
+/// algorithm.  Defaults to [`IndexType::BTree`].
+#[derive(Debug, Clone, PartialEq)]
+pub enum IndexType {
+    /// B-Tree index — default; efficient for equality and range queries.
+    BTree,
+    /// Hash index — O(1) equality lookups; no range queries.
+    Hash,
+    /// Generalized Inverted Index — full-text and array containment.
+    Gin,
+    /// Generalized Search Tree — geometric / range / full-text types.
+    Gist,
+    /// Space-partitioned GiST.
+    SpGist,
+    /// Block Range Index — very compact; for append-only / monotone data.
+    Brin,
+    /// Bloom filter — probabilistic; low false-negative rate.
+    Bloom,
+    /// MySQL-style `FULLTEXT` index (uses inverted word lists).
+    FullText,
+    /// Trigram index (`pg_trgm`-style) — fast `LIKE`/`REGEXP` substring
+    /// search by storing all 3-character substrings of text values.
+    Trigram,
+    /// Any other index type forwarded as a string.
+    Other(String),
 }
 
 /// A SQL expression node.
@@ -295,15 +624,21 @@ pub enum Expr {
     },
     /// `*` – select all columns (used inside [`SelectItem::Wildcard`]).
     Wildcard,
-    /// A binary operation (`a + b`, `x = y`).
+    /// A binary operation (`a + b`, `x = y`, `name LIKE '%foo%'`).
     BinaryOp {
         left: Box<Expr>,
         op: BinaryOperator,
         right: Box<Expr>,
     },
-    /// A unary operation (`-x`, `NOT b`).
+    /// A unary operation (`-x`, `NOT b`, `~flags`).
     UnaryOp { op: UnaryOperator, expr: Box<Expr> },
-    /// A function call (`COUNT(*)`, `SUM(price)`).
+    /// A function call (`COUNT(*)`, `SUM(price)`, `UPPER(name)`).
+    ///
+    /// Standard text functions (`REPLACE`, `SUBSTRING`, `POSITION`, `TRIM`,
+    /// `UPPER`, `LOWER`, `LENGTH`, `CONCAT`, `LEFT`, `RIGHT`, `LPAD`,
+    /// `RPAD`, `CHAR_LENGTH`) and their regex variants (`REGEXP_REPLACE`,
+    /// `REGEXP_SUBSTR`, `REGEXP_INSTR`, `REGEXP_LIKE`, `REGEXP_COUNT`) are
+    /// captured here with the function name normalized to uppercase.
     Function {
         /// Function name (normalized to uppercase).
         name: String,
@@ -321,30 +656,101 @@ pub enum Expr {
         high: Box<Expr>,
         negated: bool,
     },
-    /// `expr IN (list)`.
+    /// `expr [NOT] IN (list)`.
     InList {
         expr: Box<Expr>,
         list: Vec<Expr>,
         negated: bool,
     },
-    /// `expr IN (subquery)`.
+    /// `expr [NOT] IN (subquery)`.
     InSubquery {
         expr: Box<Expr>,
         subquery: Box<SelectStatement>,
         negated: bool,
     },
+    /// `expr <op> ANY|ALL (list | subquery | array_column)`
+    ///
+    /// Applies `op` between `expr` and **each element** of a list or the
+    /// result of a subquery; the overall result depends on the quantifier:
+    ///
+    /// - `ANY` — true if at least one element satisfies the condition.
+    /// - `ALL` — true if every element satisfies the condition.
+    ///
+    /// AeternumDB extends this beyond equality to any [`BinaryOperator`],
+    /// including `LIKE`, `REGEXP`, bitwise operators, etc.:
+    ///
+    /// ```sql
+    /// -- Standard SQL
+    /// price > ALL (SELECT max_price FROM limits)
+    ///
+    /// -- AeternumDB extension (Phase 4 custom grammar)
+    /// tag LIKE ANY ['%rust%', '%python%']
+    /// score REGEXP ANY ['^A', '^B']
+    /// ```
+    ArrayOp {
+        /// The left-hand expression tested against each element.
+        expr: Box<Expr>,
+        /// The operator applied between `expr` and each element.
+        op: BinaryOperator,
+        /// `ANY` or `ALL`.
+        quantifier: ArrayQuantifier,
+        /// The array elements or subquery.
+        right: Box<Expr>,
+    },
     /// A scalar subquery used as an expression: `(SELECT …)`.
     Subquery(Box<SelectStatement>),
-    /// A `CAST(expr AS type)` expression.
+    /// `CAST(expr AS type)`.
     Cast {
         expr: Box<Expr>,
         data_type: DataType,
     },
-    /// A conditional `CASE WHEN … THEN … ELSE … END` expression.
+    /// `CASE [operand] WHEN … THEN … [ELSE …] END`.
     Case {
         operand: Option<Box<Expr>>,
         conditions: Vec<(Expr, Expr)>,
         else_result: Option<Box<Expr>>,
+    },
+    // ── SQL-standard text-function syntax ─────────────────────────────────
+    /// `SUBSTRING(expr [FROM pos] [FOR len])` / `SUBSTR(expr, pos [, len])`.
+    ///
+    /// - `from_pos`: starting position (1-based).
+    /// - `len`: maximum number of characters to return.
+    Substring {
+        expr: Box<Expr>,
+        from_pos: Option<Box<Expr>>,
+        len: Option<Box<Expr>>,
+    },
+    /// `POSITION(substr IN expr)` — 1-based index of first occurrence, or 0
+    /// if not found.
+    Position {
+        substr: Box<Expr>,
+        in_expr: Box<Expr>,
+    },
+    /// `TRIM([LEADING|TRAILING|BOTH] [trim_what] FROM expr)`.
+    Trim {
+        expr: Box<Expr>,
+        /// Trim direction; defaults to `BOTH` when absent.
+        trim_where: Option<TrimWhereField>,
+        /// Characters to strip; defaults to space when `None`.
+        trim_what: Option<Box<Expr>>,
+    },
+    // ── Full-text search ──────────────────────────────────────────────────
+    /// `MATCH (col1, col2, …) AGAINST ('pattern' [modifier])`.
+    ///
+    /// MySQL-style full-text search.  Column names must reference indexed
+    /// full-text or trigram columns.  Use [`TextSearchModifier::Boolean`]
+    /// for boolean-mode queries (`+word -word "phrase" word*`).
+    ///
+    /// AeternumDB also supports the `@@` operator for PostgreSQL-compatible
+    /// `tsquery` / `tsvector` style search; that is mapped to this node with
+    /// `modifier: None` and the pattern in `match_value`.
+    MatchAgainst {
+        /// Columns to search (must have a FULLTEXT or TRIGRAM index).
+        columns: Vec<String>,
+        /// Search pattern / query string.
+        match_value: Box<Expr>,
+        /// Optional search modifier.
+        modifier: Option<TextSearchModifier>,
     },
 }
 
@@ -673,6 +1079,12 @@ pub struct CreateIndexStatement {
     pub unique: bool,
     /// `IF NOT EXISTS` flag.
     pub if_not_exists: bool,
+    /// Physical index type.  Defaults to [`IndexType::BTree`].
+    ///
+    /// Use [`IndexType::FullText`] for `MATCH … AGAINST` queries,
+    /// [`IndexType::Trigram`] for fast `LIKE`/`REGEXP` substring searches,
+    /// [`IndexType::Gin`] for array-containment or JSONB queries.
+    pub index_type: IndexType,
 }
 
 /// A `DROP INDEX` statement.
@@ -1054,6 +1466,24 @@ impl TryFrom<sp::Statement> for Statement {
                     columns,
                     unique: ci.unique,
                     if_not_exists: ci.if_not_exists,
+                    index_type: match ci.using {
+                        Some(sp::IndexType::BTree) => IndexType::BTree,
+                        Some(sp::IndexType::Hash) => IndexType::Hash,
+                        Some(sp::IndexType::GIN) => IndexType::Gin,
+                        Some(sp::IndexType::GiST) => IndexType::Gist,
+                        Some(sp::IndexType::SPGiST) => IndexType::SpGist,
+                        Some(sp::IndexType::BRIN) => IndexType::Brin,
+                        Some(sp::IndexType::Bloom) => IndexType::Bloom,
+                        Some(sp::IndexType::Custom(ident)) => {
+                            let name_lc = ident.value.to_lowercase();
+                            match name_lc.as_str() {
+                                "fulltext" | "full_text" => IndexType::FullText,
+                                "trigram" | "gin_trgm" | "gist_trgm" => IndexType::Trigram,
+                                _ => IndexType::Other(ident.value.clone()),
+                            }
+                        }
+                        None => IndexType::BTree,
+                    },
                 }))
             }
             sp::Statement::CreateUser(cu) => Ok(Statement::CreateUser(CreateUserStatement {
@@ -1551,6 +1981,116 @@ pub fn convert_expr(expr: sp::Expr) -> Result<Expr, AstError> {
                 else_result: els.map(Box::new),
             })
         }
+        sp::Expr::ILike {
+            expr,
+            negated,
+            pattern,
+            ..
+        } => Ok(Expr::BinaryOp {
+            left: Box::new(convert_expr(*expr)?),
+            op: if negated {
+                BinaryOperator::NotILike
+            } else {
+                BinaryOperator::ILike
+            },
+            right: Box::new(convert_expr(*pattern)?),
+        }),
+        sp::Expr::SimilarTo {
+            expr,
+            negated,
+            pattern,
+            ..
+        } => Ok(Expr::BinaryOp {
+            left: Box::new(convert_expr(*expr)?),
+            op: if negated {
+                BinaryOperator::NotSimilarTo
+            } else {
+                BinaryOperator::SimilarTo
+            },
+            right: Box::new(convert_expr(*pattern)?),
+        }),
+        sp::Expr::AnyOp {
+            left,
+            compare_op,
+            right,
+            ..
+        } => Ok(Expr::ArrayOp {
+            expr: Box::new(convert_expr(*left)?),
+            op: convert_binary_op(compare_op)?,
+            quantifier: ArrayQuantifier::Any,
+            right: Box::new(convert_expr(*right)?),
+        }),
+        sp::Expr::AllOp {
+            left,
+            compare_op,
+            right,
+        } => Ok(Expr::ArrayOp {
+            expr: Box::new(convert_expr(*left)?),
+            op: convert_binary_op(compare_op)?,
+            quantifier: ArrayQuantifier::All,
+            right: Box::new(convert_expr(*right)?),
+        }),
+        sp::Expr::Substring {
+            expr,
+            substring_from,
+            substring_for,
+            ..
+        } => Ok(Expr::Substring {
+            expr: Box::new(convert_expr(*expr)?),
+            from_pos: substring_from
+                .map(|e| convert_expr(*e))
+                .transpose()?
+                .map(Box::new),
+            len: substring_for
+                .map(|e| convert_expr(*e))
+                .transpose()?
+                .map(Box::new),
+        }),
+        sp::Expr::Position { expr, r#in } => Ok(Expr::Position {
+            substr: Box::new(convert_expr(*expr)?),
+            in_expr: Box::new(convert_expr(*r#in)?),
+        }),
+        sp::Expr::Trim {
+            expr,
+            trim_where,
+            trim_what,
+            ..
+        } => Ok(Expr::Trim {
+            expr: Box::new(convert_expr(*expr)?),
+            trim_where: trim_where.map(|tw| match tw {
+                sp::TrimWhereField::Leading => TrimWhereField::Leading,
+                sp::TrimWhereField::Trailing => TrimWhereField::Trailing,
+                sp::TrimWhereField::Both => TrimWhereField::Both,
+            }),
+            trim_what: trim_what
+                .map(|e| convert_expr(*e))
+                .transpose()?
+                .map(Box::new),
+        }),
+        sp::Expr::MatchAgainst {
+            columns,
+            match_value,
+            opt_search_modifier,
+        } => {
+            let cols = columns
+                .into_iter()
+                .map(|c| object_name_to_string(&c))
+                .collect();
+            let pattern = convert_value(match_value)?;
+            let modifier = opt_search_modifier.map(|m| match m {
+                sp::SearchModifier::InNaturalLanguageMode => TextSearchModifier::NaturalLanguage,
+                sp::SearchModifier::InNaturalLanguageModeWithQueryExpansion => {
+                    TextSearchModifier::NaturalLanguageWithExpansion
+                }
+                sp::SearchModifier::InBooleanMode => TextSearchModifier::Boolean,
+                sp::SearchModifier::WithQueryExpansion => TextSearchModifier::WithExpansion,
+            });
+            Ok(Expr::MatchAgainst {
+                columns: cols,
+                match_value: Box::new(Expr::Literal(pattern)),
+                modifier,
+            })
+        }
         other => Err(AstError::Unsupported(format!(
             "expression not supported: {other}"
         ))),
@@ -1594,6 +2134,22 @@ fn convert_binary_op(op: sp::BinaryOperator) -> Result<BinaryOperator, AstError>
         sp::BinaryOperator::GtEq => Ok(BinaryOperator::GtEq),
         sp::BinaryOperator::And => Ok(BinaryOperator::And),
         sp::BinaryOperator::Or => Ok(BinaryOperator::Or),
+        sp::BinaryOperator::StringConcat => Ok(BinaryOperator::StringConcat),
+        // ── Bitwise ──────────────────────────────────────────────────────────
+        sp::BinaryOperator::BitwiseAnd => Ok(BinaryOperator::BitwiseAnd),
+        sp::BinaryOperator::BitwiseOr => Ok(BinaryOperator::BitwiseOr),
+        sp::BinaryOperator::BitwiseXor | sp::BinaryOperator::PGBitwiseXor => {
+            Ok(BinaryOperator::BitwiseXor)
+        }
+        sp::BinaryOperator::PGBitwiseShiftLeft => Ok(BinaryOperator::ShiftLeft),
+        sp::BinaryOperator::PGBitwiseShiftRight => Ok(BinaryOperator::ShiftRight),
+        // ── Regex ────────────────────────────────────────────────────────────
+        // NOT REGEXP is expressed as UnaryOp(Not, BinaryOp(Regexp, …)) in sqlparser.
+        sp::BinaryOperator::Regexp => Ok(BinaryOperator::Regexp),
+        sp::BinaryOperator::PGRegexMatch => Ok(BinaryOperator::RegexpMatch),
+        sp::BinaryOperator::PGRegexIMatch => Ok(BinaryOperator::RegexpIMatch),
+        sp::BinaryOperator::PGRegexNotMatch => Ok(BinaryOperator::NotRegexpMatch),
+        sp::BinaryOperator::PGRegexNotIMatch => Ok(BinaryOperator::NotRegexpIMatch),
         other => Err(AstError::Unsupported(format!(
             "binary operator not supported: {other}"
         ))),
@@ -1604,6 +2160,7 @@ fn convert_unary_op(op: sp::UnaryOperator) -> Result<UnaryOperator, AstError> {
     match op {
         sp::UnaryOperator::Minus => Ok(UnaryOperator::Minus),
         sp::UnaryOperator::Not => Ok(UnaryOperator::Not),
+        sp::UnaryOperator::BitwiseNot => Ok(UnaryOperator::BitwiseNot),
         other => Err(AstError::Unsupported(format!(
             "unary operator not supported: {other}"
         ))),
@@ -1749,14 +2306,46 @@ fn convert_data_type(dt: sp::DataType) -> Result<DataType, AstError> {
         // ── Misc ───────────────────────────────────────────────────────────
         sp::DataType::Uuid => Ok(DataType::Uuid),
         sp::DataType::Enum(members, _) => {
-            let vals = members
+            let mut next_auto: u64 = 0;
+            let variants = members
                 .into_iter()
                 .map(|m| match m {
-                    sp::EnumMember::Name(s) => s,
-                    sp::EnumMember::NamedValue(s, _) => s,
+                    sp::EnumMember::Name(s) => {
+                        let is_none = s.to_lowercase() == "none";
+                        let v = if is_none { 0 } else { next_auto };
+                        if !is_none {
+                            next_auto += 1;
+                        }
+                        EnumVariant {
+                            name: s.to_lowercase(),
+                            value: None,
+                            is_none,
+                        }
+                    }
+                    sp::EnumMember::NamedValue(s, expr) => {
+                        let is_none = s.to_lowercase() == "none";
+                        // Extract the numeric value from the expression if it's a literal.
+                        let explicit: Option<u64> = match &expr {
+                            sp::Expr::Value(vs) => match &vs.value {
+                                sp::Value::Number(n, _) => n.parse::<u64>().ok(),
+                                _ => None,
+                            },
+                            _ => None,
+                        };
+                        if let Some(v) = explicit {
+                            if !is_none && v >= next_auto {
+                                next_auto = v + 1;
+                            }
+                        }
+                        EnumVariant {
+                            name: s.to_lowercase(),
+                            value: explicit,
+                            is_none,
+                        }
+                    }
                 })
                 .collect();
-            Ok(DataType::Enum(vals))
+            Ok(DataType::Enum { variants, flag: false })
         }
         sp::DataType::Array(sp::ArrayElemTypeDef::AngleBracket(inner))
         | sp::DataType::Array(sp::ArrayElemTypeDef::SquareBracket(inner, _)) => {

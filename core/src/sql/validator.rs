@@ -723,6 +723,43 @@ impl<'a> Validator<'a> {
                 }
                 Ok(())
             }
+            Expr::ArrayOp { expr, right, .. } => {
+                self.validate_expr(expr, table)?;
+                self.validate_expr(right, table)
+            }
+            Expr::Substring {
+                expr,
+                from_pos,
+                len,
+            } => {
+                self.validate_expr(expr, table)?;
+                if let Some(e) = from_pos {
+                    self.validate_expr(e, table)?;
+                }
+                if let Some(e) = len {
+                    self.validate_expr(e, table)?;
+                }
+                Ok(())
+            }
+            Expr::Position { substr, in_expr } => {
+                self.validate_expr(substr, table)?;
+                self.validate_expr(in_expr, table)
+            }
+            Expr::Trim {
+                expr,
+                trim_what,
+                ..
+            } => {
+                self.validate_expr(expr, table)?;
+                if let Some(e) = trim_what {
+                    self.validate_expr(e, table)?;
+                }
+                Ok(())
+            }
+            Expr::MatchAgainst {
+                match_value,
+                ..
+            } => self.validate_expr(match_value, table),
         }
     }
 
