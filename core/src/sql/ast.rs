@@ -98,15 +98,9 @@ pub enum DataType {
     ReferenceArray(String),
     /// Virtual reverse reference (computed): `~table_name(column)`.
     /// Provides inverse navigation without storing data.
-    VirtualReference {
-        table: String,
-        column: String,
-    },
+    VirtualReference { table: String, column: String },
     /// Virtual reverse reference array: `~[table_name](column)`.
-    VirtualReferenceArray {
-        table: String,
-        column: String,
-    },
+    VirtualReferenceArray { table: String, column: String },
     /// Any other type forwarded as a string (for forward-compatibility).
     Other(String),
     /// `TINYINT` (1 byte).
@@ -169,7 +163,11 @@ impl std::fmt::Display for DataType {
             DataType::DateTime => write!(f, "DATETIME"),
             DataType::TimestampTz => write!(f, "TIMESTAMP WITH TIME ZONE"),
             DataType::Enum(vals) => {
-                let list = vals.iter().map(|v| format!("'{v}'")).collect::<Vec<_>>().join(", ");
+                let list = vals
+                    .iter()
+                    .map(|v| format!("'{v}'"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 write!(f, "ENUM({list})")
             }
             DataType::Uuid => write!(f, "UUID"),
@@ -555,7 +553,7 @@ pub struct ReleaseSavepointStatement {
 /// A fully lowered SQL statement ready for the query planner.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Statement {
-    Select(SelectStatement),
+    Select(Box<SelectStatement>),
     Insert(InsertStatement),
     Update(UpdateStatement),
     Delete(DeleteStatement),
@@ -583,12 +581,14 @@ impl TryFrom<sp::Statement> for Statement {
 
     fn try_from(stmt: sp::Statement) -> Result<Self, Self::Error> {
         match stmt {
-            sp::Statement::Query(q) => Ok(Statement::Select(convert_query(*q)?)),
+            sp::Statement::Query(q) => Ok(Statement::Select(Box::new(convert_query(*q)?))),
             sp::Statement::Insert(insert) => convert_insert(insert),
             sp::Statement::Update(update) => convert_update(update),
             sp::Statement::Delete(delete) => convert_delete(delete),
             sp::Statement::CreateTable(ct) => convert_create_table(ct),
-            sp::Statement::CreateView(cv) if cv.materialized => convert_create_materialized_view(cv),
+            sp::Statement::CreateView(cv) if cv.materialized => {
+                convert_create_materialized_view(cv)
+            }
             sp::Statement::Drop {
                 object_type,
                 if_exists,
@@ -602,28 +602,49 @@ impl TryFrom<sp::Statement> for Statement {
                 let isolation_level = modes.iter().find_map(|m| {
                     if let sp::TransactionMode::IsolationLevel(lvl) = m {
                         Some(match lvl {
-                            sp::TransactionIsolationLevel::ReadUncommitted => IsolationLevel::ReadUncommitted,
-                            sp::TransactionIsolationLevel::ReadCommitted => IsolationLevel::ReadCommitted,
-                            sp::TransactionIsolationLevel::RepeatableRead => IsolationLevel::RepeatableRead,
-                            sp::TransactionIsolationLevel::Serializable | sp::TransactionIsolationLevel::Snapshot => IsolationLevel::Serializable,
+                            sp::TransactionIsolationLevel::ReadUncommitted => {
+                                IsolationLevel::ReadUncommitted
+                            }
+                            sp::TransactionIsolationLevel::ReadCommitted => {
+                                IsolationLevel::ReadCommitted
+                            }
+                            sp::TransactionIsolationLevel::RepeatableRead => {
+                                IsolationLevel::RepeatableRead
+                            }
+                            sp::TransactionIsolationLevel::Serializable
+                            | sp::TransactionIsolationLevel::Snapshot => {
+                                IsolationLevel::Serializable
+                            }
                         })
-                    } else { None }
+                    } else {
+                        None
+                    }
                 });
                 let read_only = modes.iter().any(|m| {
-                    matches!(m, sp::TransactionMode::AccessMode(sp::TransactionAccessMode::ReadOnly))
+                    matches!(
+                        m,
+                        sp::TransactionMode::AccessMode(sp::TransactionAccessMode::ReadOnly)
+                    )
                 });
-                Ok(Statement::BeginTransaction(BeginTransactionStatement { isolation_level, read_only }))
+                Ok(Statement::BeginTransaction(BeginTransactionStatement {
+                    isolation_level,
+                    read_only,
+                }))
             }
             sp::Statement::Commit { .. } => Ok(Statement::Commit(CommitStatement)),
-            sp::Statement::Rollback { savepoint, .. } => Ok(Statement::Rollback(RollbackStatement {
-                savepoint: savepoint.as_ref().map(|i| i.value.clone()),
-            })),
+            sp::Statement::Rollback { savepoint, .. } => {
+                Ok(Statement::Rollback(RollbackStatement {
+                    savepoint: savepoint.as_ref().map(|i| i.value.clone()),
+                }))
+            }
             sp::Statement::Savepoint { name } => Ok(Statement::Savepoint(SavepointStatement {
                 name: ident_to_string(&name),
             })),
-            sp::Statement::ReleaseSavepoint { name } => Ok(Statement::ReleaseSavepoint(ReleaseSavepointStatement {
-                name: ident_to_string(&name),
-            })),
+            sp::Statement::ReleaseSavepoint { name } => {
+                Ok(Statement::ReleaseSavepoint(ReleaseSavepointStatement {
+                    name: ident_to_string(&name),
+                }))
+            }
             other => Err(AstError::Unsupported(format!(
                 "statement type not supported: {other}"
             ))),
@@ -662,9 +683,7 @@ fn convert_query(query: sp::Query) -> Result<SelectStatement, AstError> {
     };
 
     let mut stmt = match *query.body {
-        sp::SetExpr::Select(select) => {
-            convert_select(*select, query.order_by, query.limit_clause)?
-        }
+        sp::SetExpr::Select(select) => convert_select(*select, query.order_by, query.limit_clause)?,
         other => {
             return Err(AstError::Unsupported(format!(
                 "query body not supported: {other}"
@@ -1122,15 +1141,32 @@ fn convert_function(f: sp::Function) -> Result<Expr, AstError> {
 
 fn convert_data_type(dt: sp::DataType) -> Result<DataType, AstError> {
     match dt {
-        sp::DataType::TinyInt(_) | sp::DataType::TinyIntUnsigned(_) | sp::DataType::UTinyInt => Ok(DataType::TinyInt),
-        sp::DataType::SmallInt(_) | sp::DataType::SmallIntUnsigned(_) | sp::DataType::USmallInt | sp::DataType::Int2(_) => Ok(DataType::SmallInt),
+        sp::DataType::TinyInt(_) | sp::DataType::TinyIntUnsigned(_) | sp::DataType::UTinyInt => {
+            Ok(DataType::TinyInt)
+        }
+        sp::DataType::SmallInt(_)
+        | sp::DataType::SmallIntUnsigned(_)
+        | sp::DataType::USmallInt
+        | sp::DataType::Int2(_) => Ok(DataType::SmallInt),
         sp::DataType::MediumInt(_) | sp::DataType::MediumIntUnsigned(_) => Ok(DataType::Integer),
-        sp::DataType::Int(_) | sp::DataType::Integer(_) | sp::DataType::Int4(_) => Ok(DataType::Integer),
-        sp::DataType::BigInt(_) | sp::DataType::BigIntUnsigned(_) | sp::DataType::UBigInt | sp::DataType::Int8(_) | sp::DataType::Int64 => Ok(DataType::BigInt),
+        sp::DataType::Int(_) | sp::DataType::Integer(_) | sp::DataType::Int4(_) => {
+            Ok(DataType::Integer)
+        }
+        sp::DataType::BigInt(_)
+        | sp::DataType::BigIntUnsigned(_)
+        | sp::DataType::UBigInt
+        | sp::DataType::Int8(_)
+        | sp::DataType::Int64 => Ok(DataType::BigInt),
         sp::DataType::Float(_) | sp::DataType::Float4 | sp::DataType::Real => Ok(DataType::Float),
-        sp::DataType::Double(_) | sp::DataType::DoublePrecision | sp::DataType::Float8 | sp::DataType::Float64 => Ok(DataType::Float),
+        sp::DataType::Double(_)
+        | sp::DataType::DoublePrecision
+        | sp::DataType::Float8
+        | sp::DataType::Float64 => Ok(DataType::Float),
         sp::DataType::Varchar(n) => Ok(DataType::Varchar(char_length_to_u64(n))),
-        sp::DataType::Char(n) | sp::DataType::Character(n) | sp::DataType::CharVarying(n) | sp::DataType::CharacterVarying(n) => Ok(DataType::Char(char_length_to_u64(n))),
+        sp::DataType::Char(n)
+        | sp::DataType::Character(n)
+        | sp::DataType::CharVarying(n)
+        | sp::DataType::CharacterVarying(n) => Ok(DataType::Char(char_length_to_u64(n))),
         sp::DataType::Text => Ok(DataType::Varchar(None)),
         sp::DataType::TinyText => Ok(DataType::TinyText),
         sp::DataType::MediumText => Ok(DataType::MediumText),
@@ -1138,16 +1174,23 @@ fn convert_data_type(dt: sp::DataType) -> Result<DataType, AstError> {
         sp::DataType::Boolean | sp::DataType::Bool => Ok(DataType::Boolean),
         sp::DataType::Date => Ok(DataType::Date),
         sp::DataType::Datetime(_) => Ok(DataType::DateTime),
-        sp::DataType::Timestamp(_, sp::TimezoneInfo::None) | sp::DataType::Timestamp(_, sp::TimezoneInfo::WithoutTimeZone) => Ok(DataType::Timestamp),
-        sp::DataType::Timestamp(_, sp::TimezoneInfo::WithTimeZone) | sp::DataType::Timestamp(_, sp::TimezoneInfo::Tz) => Ok(DataType::TimestampTz),
-        sp::DataType::Time(_, sp::TimezoneInfo::None) | sp::DataType::Time(_, sp::TimezoneInfo::WithoutTimeZone) => Ok(DataType::Time),
-        sp::DataType::Time(_, sp::TimezoneInfo::WithTimeZone) | sp::DataType::Time(_, sp::TimezoneInfo::Tz) => Ok(DataType::TimeTz),
+        sp::DataType::Timestamp(_, sp::TimezoneInfo::None)
+        | sp::DataType::Timestamp(_, sp::TimezoneInfo::WithoutTimeZone) => Ok(DataType::Timestamp),
+        sp::DataType::Timestamp(_, sp::TimezoneInfo::WithTimeZone)
+        | sp::DataType::Timestamp(_, sp::TimezoneInfo::Tz) => Ok(DataType::TimestampTz),
+        sp::DataType::Time(_, sp::TimezoneInfo::None)
+        | sp::DataType::Time(_, sp::TimezoneInfo::WithoutTimeZone) => Ok(DataType::Time),
+        sp::DataType::Time(_, sp::TimezoneInfo::WithTimeZone)
+        | sp::DataType::Time(_, sp::TimezoneInfo::Tz) => Ok(DataType::TimeTz),
         sp::DataType::Uuid => Ok(DataType::Uuid),
         sp::DataType::Enum(members, _) => {
-            let vals = members.into_iter().map(|m| match m {
-                sp::EnumMember::Name(s) => s,
-                sp::EnumMember::NamedValue(s, _) => s,
-            }).collect();
+            let vals = members
+                .into_iter()
+                .map(|m| match m {
+                    sp::EnumMember::Name(s) => s,
+                    sp::EnumMember::NamedValue(s, _) => s,
+                })
+                .collect();
             Ok(DataType::Enum(vals))
         }
         sp::DataType::Decimal(info) | sp::DataType::Numeric(info) => {
@@ -1465,10 +1508,12 @@ fn convert_revoke(revoke: sp::Revoke) -> Result<Statement, AstError> {
 fn convert_create_materialized_view(cv: sp::CreateView) -> Result<Statement, AstError> {
     let name = object_name_to_string(&cv.name);
     let query = Box::new(convert_query(*cv.query)?);
-    Ok(Statement::CreateMaterializedView(CreateMaterializedViewStatement {
-        name,
-        query,
-        if_not_exists: cv.if_not_exists,
-        or_replace: cv.or_replace,
-    }))
+    Ok(Statement::CreateMaterializedView(
+        CreateMaterializedViewStatement {
+            name,
+            query,
+            if_not_exists: cv.if_not_exists,
+            or_replace: cv.or_replace,
+        },
+    ))
 }

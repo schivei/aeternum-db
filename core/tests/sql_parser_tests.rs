@@ -975,9 +975,7 @@ fn test_apply_create_table_to_catalog() {
 #[test]
 fn test_backtick_identifiers() {
     use aeternumdb_core::sql::ast::TableReference;
-    let stmt = parser()
-        .parse_one("SELECT `name` FROM `users`")
-        .unwrap();
+    let stmt = parser().parse_one("SELECT `name` FROM `users`").unwrap();
     let sel = match &stmt {
         Statement::Select(s) => s,
         _ => panic!("expected Select"),
@@ -1074,7 +1072,10 @@ fn test_transaction_parsing() {
     let stmt = parser().parse_one("BEGIN TRANSACTION").unwrap();
     assert!(matches!(
         stmt,
-        Statement::BeginTransaction(BeginTransactionStatement { isolation_level: None, read_only: false })
+        Statement::BeginTransaction(BeginTransactionStatement {
+            isolation_level: None,
+            read_only: false
+        })
     ));
 
     // COMMIT
@@ -1108,16 +1109,31 @@ fn test_transaction_isolation_levels() {
     use aeternumdb_core::sql::ast::IsolationLevel;
 
     let cases = [
-        ("START TRANSACTION ISOLATION LEVEL READ UNCOMMITTED", IsolationLevel::ReadUncommitted),
-        ("START TRANSACTION ISOLATION LEVEL READ COMMITTED", IsolationLevel::ReadCommitted),
-        ("START TRANSACTION ISOLATION LEVEL REPEATABLE READ", IsolationLevel::RepeatableRead),
-        ("START TRANSACTION ISOLATION LEVEL SERIALIZABLE", IsolationLevel::Serializable),
+        (
+            "START TRANSACTION ISOLATION LEVEL READ UNCOMMITTED",
+            IsolationLevel::ReadUncommitted,
+        ),
+        (
+            "START TRANSACTION ISOLATION LEVEL READ COMMITTED",
+            IsolationLevel::ReadCommitted,
+        ),
+        (
+            "START TRANSACTION ISOLATION LEVEL REPEATABLE READ",
+            IsolationLevel::RepeatableRead,
+        ),
+        (
+            "START TRANSACTION ISOLATION LEVEL SERIALIZABLE",
+            IsolationLevel::Serializable,
+        ),
     ];
 
     for (sql, expected_level) in cases {
         let stmt = parser().parse_one(sql).unwrap();
         match stmt {
-            Statement::BeginTransaction(BeginTransactionStatement { isolation_level, read_only }) => {
+            Statement::BeginTransaction(BeginTransactionStatement {
+                isolation_level,
+                read_only,
+            }) => {
                 assert_eq!(isolation_level, Some(expected_level), "failed for: {sql}");
                 assert!(!read_only, "expected read_write for: {sql}");
             }
@@ -1128,11 +1144,12 @@ fn test_transaction_isolation_levels() {
 
 #[test]
 fn test_transaction_read_only() {
-    let stmt = parser()
-        .parse_one("START TRANSACTION READ ONLY")
-        .unwrap();
+    let stmt = parser().parse_one("START TRANSACTION READ ONLY").unwrap();
     match stmt {
-        Statement::BeginTransaction(BeginTransactionStatement { isolation_level, read_only }) => {
+        Statement::BeginTransaction(BeginTransactionStatement {
+            isolation_level,
+            read_only,
+        }) => {
             assert_eq!(isolation_level, None);
             assert!(read_only);
         }
