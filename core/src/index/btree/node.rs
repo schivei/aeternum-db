@@ -72,8 +72,8 @@ impl InternalNode {
     pub fn find_child(&self, key: &[u8]) -> usize {
         // Binary search: find the first key >= search key.
         match self.keys.binary_search_by(|k| k.as_slice().cmp(key)) {
-            Ok(i) => i + 1,   // key found → go right of that separator
-            Err(i) => i,      // key not found → go to the child before insertion point
+            Ok(i) => i + 1, // key found → go right of that separator
+            Err(i) => i,    // key not found → go to the child before insertion point
         }
     }
 
@@ -376,10 +376,7 @@ impl InternalNode {
             children: right_children,
         };
 
-        InternalSplitResult {
-            right,
-            push_up_key,
-        }
+        InternalSplitResult { right, push_up_key }
     }
 }
 
@@ -405,7 +402,9 @@ fn write_optional_page_id(buf: &mut Vec<u8>, id: Option<PageId>) {
 fn read_u32(data: &[u8], pos: &mut usize) -> Result<u32, IndexError> {
     let end = *pos + 4;
     if end > data.len() {
-        return Err(IndexError::Serialization("unexpected end of data (u32)".into()));
+        return Err(IndexError::Serialization(
+            "unexpected end of data (u32)".into(),
+        ));
     }
     let v = u32::from_le_bytes(data[*pos..end].try_into().unwrap());
     *pos = end;
@@ -415,7 +414,9 @@ fn read_u32(data: &[u8], pos: &mut usize) -> Result<u32, IndexError> {
 fn read_u64(data: &[u8], pos: &mut usize) -> Result<u64, IndexError> {
     let end = *pos + 8;
     if end > data.len() {
-        return Err(IndexError::Serialization("unexpected end of data (u64)".into()));
+        return Err(IndexError::Serialization(
+            "unexpected end of data (u64)".into(),
+        ));
     }
     let v = u64::from_le_bytes(data[*pos..end].try_into().unwrap());
     *pos = end;
@@ -426,7 +427,9 @@ fn read_bytes(data: &[u8], pos: &mut usize) -> Result<Vec<u8>, IndexError> {
     let len = read_u32(data, pos)? as usize;
     let end = *pos + len;
     if end > data.len() {
-        return Err(IndexError::Serialization("unexpected end of data (bytes)".into()));
+        return Err(IndexError::Serialization(
+            "unexpected end of data (bytes)".into(),
+        ));
     }
     let bytes = data[*pos..end].to_vec();
     *pos = end;

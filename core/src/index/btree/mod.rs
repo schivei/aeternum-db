@@ -178,7 +178,9 @@ impl BTreeValue for u64 {
 
     fn from_bytes(bytes: &[u8]) -> Result<Self, IndexError> {
         if bytes.len() != 8 {
-            return Err(IndexError::Serialization("u64 value must be 8 bytes".into()));
+            return Err(IndexError::Serialization(
+                "u64 value must be 8 bytes".into(),
+            ));
         }
         Ok(u64::from_le_bytes(bytes.try_into().unwrap()))
     }
@@ -191,7 +193,9 @@ impl BTreeValue for i64 {
 
     fn from_bytes(bytes: &[u8]) -> Result<Self, IndexError> {
         if bytes.len() != 8 {
-            return Err(IndexError::Serialization("i64 value must be 8 bytes".into()));
+            return Err(IndexError::Serialization(
+                "i64 value must be 8 bytes".into(),
+            ));
         }
         Ok(i64::from_le_bytes(bytes.try_into().unwrap()))
     }
@@ -255,10 +259,7 @@ impl<K: BTreeKey, V: BTreeValue> BTree<K, V> {
     /// Create a new, empty B-tree with the given storage engine and config.
     ///
     /// Allocates a metadata page and a root leaf page.
-    pub async fn new(
-        storage: Arc<StorageEngine>,
-        config: BTreeConfig,
-    ) -> Result<Self, IndexError> {
+    pub async fn new(storage: Arc<StorageEngine>, config: BTreeConfig) -> Result<Self, IndexError> {
         if config.fanout < 4 || config.fanout > 1000 {
             return Err(IndexError::InvalidFanout(config.fanout));
         }
@@ -306,10 +307,26 @@ impl<K: BTreeKey, V: BTreeValue> BTree<K, V> {
             .await
             .map_err(IndexError::Storage)?;
 
-        let root_page_id = u64::from_le_bytes(data[META_ROOT_OFFSET..META_ROOT_OFFSET + 8].try_into().unwrap());
-        let height = u64::from_le_bytes(data[META_HEIGHT_OFFSET..META_HEIGHT_OFFSET + 8].try_into().unwrap()) as usize;
-        let num_keys = u64::from_le_bytes(data[META_NUM_KEYS_OFFSET..META_NUM_KEYS_OFFSET + 8].try_into().unwrap());
-        let fanout = u32::from_le_bytes(data[META_FANOUT_OFFSET..META_FANOUT_OFFSET + 4].try_into().unwrap()) as usize;
+        let root_page_id = u64::from_le_bytes(
+            data[META_ROOT_OFFSET..META_ROOT_OFFSET + 8]
+                .try_into()
+                .unwrap(),
+        );
+        let height = u64::from_le_bytes(
+            data[META_HEIGHT_OFFSET..META_HEIGHT_OFFSET + 8]
+                .try_into()
+                .unwrap(),
+        ) as usize;
+        let num_keys = u64::from_le_bytes(
+            data[META_NUM_KEYS_OFFSET..META_NUM_KEYS_OFFSET + 8]
+                .try_into()
+                .unwrap(),
+        );
+        let fanout = u32::from_le_bytes(
+            data[META_FANOUT_OFFSET..META_FANOUT_OFFSET + 4]
+                .try_into()
+                .unwrap(),
+        ) as usize;
 
         if !(4..=1000).contains(&fanout) {
             return Err(IndexError::InvalidFanout(fanout));
@@ -347,7 +364,13 @@ impl<K: BTreeKey, V: BTreeValue> BTree<K, V> {
         let val_bytes = value.to_bytes();
         let mut meta = self.meta.write().await;
         let result = self
-            .insert_recursive(meta.root_page_id, &key_bytes, &val_bytes, meta.height, meta.fanout)
+            .insert_recursive(
+                meta.root_page_id,
+                &key_bytes,
+                &val_bytes,
+                meta.height,
+                meta.fanout,
+            )
             .await?;
 
         if let Some((push_up_key, new_right_page_id)) = result {
@@ -414,14 +437,7 @@ impl<K: BTreeKey, V: BTreeValue> BTree<K, V> {
         let key_bytes = key.to_bytes();
         let mut meta = self.meta.write().await;
         let deleted = self
-            .delete_recursive(
-                meta.root_page_id,
-                &key_bytes,
-                meta.height,
-                meta.fanout,
-                None,  // no parent
-                0,
-            )
+            .delete_recursive(meta.root_page_id, &key_bytes, meta.height)
             .await?;
 
         if deleted {
@@ -453,10 +469,7 @@ impl<K: BTreeKey, V: BTreeValue> BTree<K, V> {
     ///
     /// The entire leaf chain within the range is pre-loaded at call time, so
     /// iteration itself is synchronous.
-    pub async fn range<R: RangeBounds<K>>(
-        &self,
-        range: R,
-    ) -> Result<BTreeIterator, IndexError> {
+    pub async fn range<R: RangeBounds<K>>(&self, range: R) -> Result<BTreeIterator, IndexError> {
         use std::ops::Bound;
 
         let start_bytes: Option<Vec<u8>> = match range.start_bound() {
@@ -482,9 +495,7 @@ impl<K: BTreeKey, V: BTreeValue> BTree<K, V> {
         drop(meta);
 
         // Descend to the leaf that contains the start key (or the leftmost leaf).
-        let (_, mut current_leaf) = self
-            .find_leaf(root, start_bytes.as_deref(), height)
-            .await?;
+        let (_, mut current_leaf) = self.find_leaf(root, start_bytes.as_deref(), height).await?;
 
         // Load all leaves in the range, reusing the starting leaf returned by
         // `find_leaf` to avoid an immediate redundant reload.
@@ -494,12 +505,14 @@ impl<K: BTreeKey, V: BTreeValue> BTree<K, V> {
             // Check if this leaf can contribute any keys within the range.
             let done = match &end_bound {
                 EndBound::Unbounded => false,
-                EndBound::Included(end) => {
-                    current_leaf.keys.first().is_some_and(|k| k.as_slice() > end.as_slice())
-                }
-                EndBound::Excluded(end) => {
-                    current_leaf.keys.first().is_some_and(|k| k.as_slice() >= end.as_slice())
-                }
+                EndBound::Included(end) => current_leaf
+                    .keys
+                    .first()
+                    .is_some_and(|k| k.as_slice() > end.as_slice()),
+                EndBound::Excluded(end) => current_leaf
+                    .keys
+                    .first()
+                    .is_some_and(|k| k.as_slice() >= end.as_slice()),
             };
             if done {
                 break;
@@ -529,9 +542,7 @@ impl<K: BTreeKey, V: BTreeValue> BTree<K, V> {
         let start_pos = match start_bytes.as_deref() {
             None => 0,
             Some(start) => {
-                let pos = first_leaf
-                    .keys
-                    .partition_point(|k| k.as_slice() < start);
+                let pos = first_leaf.keys.partition_point(|k| k.as_slice() < start);
                 if start_excluded {
                     // skip entries equal to the exclusive start bound
                     let mut p = pos;
@@ -651,14 +662,9 @@ impl<K: BTreeKey, V: BTreeValue> BTree<K, V> {
                 let child_idx = internal.find_child(key);
                 let child_page_id = internal.children[child_idx];
 
-                let result = Box::pin(self.insert_recursive(
-                    child_page_id,
-                    key,
-                    value,
-                    height - 1,
-                    fanout,
-                ))
-                .await?;
+                let result =
+                    Box::pin(self.insert_recursive(child_page_id, key, value, height - 1, fanout))
+                        .await?;
 
                 if let Some((push_up_key, new_right_page_id)) = result {
                     // Insert the pushed-up key and new child pointer.
@@ -699,15 +705,13 @@ impl<K: BTreeKey, V: BTreeValue> BTree<K, V> {
     ) -> Result<Option<V>, IndexError> {
         let node = load_node(&self.storage, page_id).await?;
         match node {
-            Node::Leaf(leaf) => {
-                match leaf.find_key(key) {
-                    Ok(i) => {
-                        let value = V::from_bytes(&leaf.values[i])?;
-                        Ok(Some(value))
-                    }
-                    Err(_) => Ok(None),
+            Node::Leaf(leaf) => match leaf.find_key(key) {
+                Ok(i) => {
+                    let value = V::from_bytes(&leaf.values[i])?;
+                    Ok(Some(value))
                 }
-            }
+                Err(_) => Ok(None),
+            },
             Node::Internal(internal) => {
                 if height == 0 {
                     return Err(IndexError::Corrupt(format!(
@@ -748,8 +752,7 @@ impl<K: BTreeKey, V: BTreeValue> BTree<K, V> {
                 }
                 let child_idx = internal.find_child(key);
                 let child_page_id = internal.children[child_idx];
-                Box::pin(self.update_recursive(child_page_id, key, value, height - 1, fanout))
-                    .await
+                Box::pin(self.update_recursive(child_page_id, key, value, height - 1, fanout)).await
             }
         }
     }
@@ -767,9 +770,6 @@ impl<K: BTreeKey, V: BTreeValue> BTree<K, V> {
         page_id: PageId,
         key: &[u8],
         height: usize,
-        fanout: usize,
-        parent_page_id: Option<PageId>,
-        child_index_in_parent: usize,
     ) -> Result<bool, IndexError> {
         let node = load_node(&self.storage, page_id).await?;
 
@@ -790,15 +790,8 @@ impl<K: BTreeKey, V: BTreeValue> BTree<K, V> {
                 let child_idx = internal.find_child(key);
                 let child_page_id = internal.children[child_idx];
 
-                let deleted = Box::pin(self.delete_recursive(
-                    child_page_id,
-                    key,
-                    height - 1,
-                    fanout,
-                    Some(page_id),
-                    child_idx,
-                ))
-                .await?;
+                let deleted =
+                    Box::pin(self.delete_recursive(child_page_id, key, height - 1)).await?;
 
                 if deleted {
                     // Check if the child is now empty (leaf case).
@@ -828,18 +821,14 @@ impl<K: BTreeKey, V: BTreeValue> BTree<K, V> {
                             }
                         }
 
-                        let key_to_remove = if child_idx > 0 { child_idx - 1 } else { 0 };
                         if child_idx > 0 {
-                            internal.keys.remove(key_to_remove);
+                            internal.keys.remove(child_idx - 1);
                         } else if !internal.keys.is_empty() {
                             internal.keys.remove(0);
                         }
                         internal.children.remove(child_idx);
                         write_node(&self.storage, page_id, &Node::Internal(internal)).await?;
                         self.storage.deallocate_page(child_page_id).await?;
-                    } else {
-                        // No structural change needed in the parent.
-                        let _ = (parent_page_id, child_index_in_parent, fanout);
                     }
                 }
 

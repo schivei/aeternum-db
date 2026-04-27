@@ -150,12 +150,7 @@ mod tests {
     #[test]
     fn iterate_with_inclusive_end_bound() {
         let leaf = make_leaf(&[("a", "1"), ("b", "2"), ("c", "3"), ("d", "4")]);
-        let mut it = BTreeIterator::new(
-            leaf,
-            0,
-            vec![],
-            EndBound::Included(b"c".to_vec()),
-        );
+        let mut it = BTreeIterator::new(leaf, 0, vec![], EndBound::Included(b"c".to_vec()));
         let keys: Vec<_> = it.by_ref().map(|(k, _)| k).collect();
         assert_eq!(keys, vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()]);
     }
@@ -163,12 +158,7 @@ mod tests {
     #[test]
     fn iterate_with_exclusive_end_bound() {
         let leaf = make_leaf(&[("a", "1"), ("b", "2"), ("c", "3")]);
-        let mut it = BTreeIterator::new(
-            leaf,
-            0,
-            vec![],
-            EndBound::Excluded(b"c".to_vec()),
-        );
+        let mut it = BTreeIterator::new(leaf, 0, vec![], EndBound::Excluded(b"c".to_vec()));
         let keys: Vec<_> = it.by_ref().map(|(k, _)| k).collect();
         assert_eq!(keys, vec![b"a".to_vec(), b"b".to_vec()]);
     }
@@ -195,12 +185,7 @@ mod tests {
         let keys: Vec<_> = it.by_ref().map(|(k, _)| k).collect();
         assert_eq!(
             keys,
-            vec![
-                b"a".to_vec(),
-                b"b".to_vec(),
-                b"c".to_vec(),
-                b"d".to_vec()
-            ]
+            vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec(), b"d".to_vec()]
         );
     }
 
@@ -208,12 +193,7 @@ mod tests {
     fn iterate_across_leaves_with_bound() {
         let leaf1 = make_leaf(&[("a", "1"), ("b", "2")]);
         let leaf2 = make_leaf(&[("c", "3"), ("d", "4")]);
-        let mut it = BTreeIterator::new(
-            leaf1,
-            0,
-            vec![leaf2],
-            EndBound::Included(b"c".to_vec()),
-        );
+        let mut it = BTreeIterator::new(leaf1, 0, vec![leaf2], EndBound::Included(b"c".to_vec()));
         let keys: Vec<_> = it.by_ref().map(|(k, _)| k).collect();
         assert_eq!(keys, vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()]);
     }

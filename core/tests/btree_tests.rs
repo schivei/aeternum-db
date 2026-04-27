@@ -4,6 +4,7 @@
 //! storage engine, reading and writing to temporary files.
 
 use aeternumdb_core::index::btree::{BTree, BTreeConfig, BTreeKey};
+use aeternumdb_core::index::IndexError;
 use aeternumdb_core::storage::{StorageConfig, StorageEngine};
 use std::sync::Arc;
 use tempfile::NamedTempFile;
@@ -67,10 +68,7 @@ async fn test_upsert_insert_and_update() {
     let (tree, _tmp) = make_tree(10).await;
     tree.upsert(42i64, "v1".to_string()).await.unwrap();
     tree.upsert(42i64, "v2".to_string()).await.unwrap();
-    assert_eq!(
-        tree.search(&42i64).await.unwrap().as_deref(),
-        Some("v2")
-    );
+    assert_eq!(tree.search(&42i64).await.unwrap().as_deref(), Some("v2"));
 }
 
 // ── Sequential inserts ────────────────────────────────────────────────────────
@@ -214,9 +212,7 @@ async fn test_persist_and_reopen() {
     };
 
     // Reopen the tree using the same engine (simulates crash-recovery).
-    let tree2 = BTree::<i64, String>::open(engine, meta_id)
-        .await
-        .unwrap();
+    let tree2 = BTree::<i64, String>::open(engine, meta_id).await.unwrap();
 
     for i in 0..20i64 {
         let v = tree2.search(&i).await.unwrap();
@@ -313,4 +309,55 @@ async fn test_concurrent_reads_50_tasks() {
     for h in handles {
         h.await.unwrap();
     }
+}
+
+// ── Error paths ───────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_invalid_fanout_too_small() {
+    let (engine, _tmp) = make_engine(64).await;
+    let result = BTree::<i64, String>::new(engine, BTreeConfig { fanout: 2 }).await;
+    assert!(matches!(result, Err(IndexError::InvalidFanout(2))));
+}
+
+#[tokio::test]
+async fn test_invalid_fanout_too_large() {
+    let (engine, _tmp) = make_engine(64).await;
+    let result = BTree::<i64, String>::new(engine, BTreeConfig { fanout: 9999 }).await;
+    assert!(matches!(result, Err(IndexError::InvalidFanout(9999))));
+}
+
+#[tokio::test]
+async fn test_duplicate_key_returns_error() {
+    let (tree, _tmp) = make_tree(10).await;
+    tree.insert(1i64, "a".to_string()).await.unwrap();
+    let err = tree.insert(1i64, "b".to_string()).await.unwrap_err();
+    assert!(matches!(err, IndexError::DuplicateKey));
+}
+
+#[tokio::test]
+async fn test_delete_nonexistent_key_returns_false() {
+    let (tree, _tmp) = make_tree(10).await;
+    assert!(!tree.delete(&999i64).await.unwrap());
+}
+
+#[tokio::test]
+async fn test_is_empty_and_len() {
+    let (tree, _tmp) = make_tree(10).await;
+    assert!(tree.is_empty().await);
+    assert_eq!(tree.len().await, 0);
+    tree.insert(1i64, "x".to_string()).await.unwrap();
+    assert!(!tree.is_empty().await);
+    assert_eq!(tree.len().await, 1);
+}
+
+#[tokio::test]
+async fn test_update_existing_key() {
+    let (tree, _tmp) = make_tree(10).await;
+    tree.insert(7i64, "original".to_string()).await.unwrap();
+    tree.update(7i64, "updated".to_string()).await.unwrap();
+    assert_eq!(
+        tree.search(&7i64).await.unwrap().as_deref(),
+        Some("updated")
+    );
 }
