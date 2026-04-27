@@ -32,9 +32,10 @@ const NODE_TYPE_LEAF: u8 = 1;
 
 /// An internal (non-leaf) B-tree node.
 ///
-/// Contains `n` keys and `n+1` child pointers.  Children with index `i < k`
-/// hold keys strictly less than `keys[i]`; children with index `i >= k` hold
-/// keys greater than or equal to `keys[k-1]`.
+/// Contains `n` keys and `n + 1` child pointers.  Child `0` holds keys less
+/// than `keys[0]`; for `0 < i < n`, child `i` holds keys in the range
+/// `[keys[i - 1], keys[i])`; and child `n` holds keys greater than or equal
+/// to `keys[n - 1]`.
 #[derive(Debug, Clone)]
 pub struct InternalNode {
     /// Separator keys (sorted, ascending).

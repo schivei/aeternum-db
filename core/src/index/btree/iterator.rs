@@ -10,6 +10,8 @@
 //! I/O is async, the iterator pre-loads leaves in [`BTreeIterator::new`] and
 //! advances lazily within an already-loaded leaf.
 
+use std::collections::VecDeque;
+
 use super::node::LeafNode;
 use crate::storage::page::PageId;
 
@@ -21,12 +23,10 @@ pub struct BTreeIterator {
     current_leaf: LeafNode,
     /// Index within `current_leaf` for the next entry to yield.
     pos: usize,
-    /// Remaining leaves to load (page IDs, in order).
+    /// Remaining pre-loaded leaf nodes to consume after `current_leaf` is exhausted.
     ///
-    /// The iterator follows `next_leaf` pointers.  To avoid async I/O inside
-    /// `next()`, additional leaves are loaded by the async helper
-    /// [`BTreeIterator::advance_leaf`] which is called from [`BTree`].
-    remaining_leaves: Vec<LeafNode>,
+    /// Stored as a deque so `pop_front` is O(1).
+    remaining_leaves: VecDeque<LeafNode>,
     /// Upper bound (exclusive or inclusive) as raw bytes.
     end_bound: EndBound,
 }
@@ -56,7 +56,7 @@ impl BTreeIterator {
         BTreeIterator {
             current_leaf: leaf,
             pos,
-            remaining_leaves: additional_leaves,
+            remaining_leaves: VecDeque::from(additional_leaves),
             end_bound,
         }
     }
@@ -66,7 +66,7 @@ impl BTreeIterator {
         BTreeIterator {
             current_leaf: LeafNode::new(),
             pos: 0,
-            remaining_leaves: Vec::new(),
+            remaining_leaves: VecDeque::new(),
             end_bound: EndBound::Unbounded,
         }
     }
@@ -78,8 +78,7 @@ impl BTreeIterator {
 
     /// Advance to the next leaf in the chain.
     ///
-    /// Returns `true` if a leaf was available, `false` if the chain is
-    /// exhausted.
+    /// Replaces `current_leaf` with `leaf` and resets the position to 0.
     pub fn advance_to_next_leaf(&mut self, leaf: LeafNode) {
         self.current_leaf = leaf;
         self.pos = 0;
@@ -113,8 +112,7 @@ impl Iterator for BTreeIterator {
 
             // Current leaf exhausted or past the upper bound.
             // Try the pre-loaded remaining leaves.
-            if let Some(next_leaf) = self.remaining_leaves.first().cloned() {
-                self.remaining_leaves.remove(0);
+            if let Some(next_leaf) = self.remaining_leaves.pop_front() {
                 self.current_leaf = next_leaf;
                 self.pos = 0;
                 // Check if the first key in the new leaf is still within bound.

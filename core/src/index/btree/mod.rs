@@ -27,7 +27,10 @@
 //!
 //! ## Metadata page
 //!
-//! Page 0 of the B-tree file stores tree-level metadata:
+//! One storage page is reserved at tree creation time to hold tree-level
+//! metadata.  Its page ID is returned by [`BTree::meta_page_id`] and must be
+//! passed to [`BTree::open`] to reopen an existing tree.  This page is **not**
+//! fixed at page 0; it is the first page allocated by [`BTree::new`].
 //!
 //! ```text
 //! ┌─────────────────────────────────┐
@@ -308,6 +311,10 @@ impl<K: BTreeKey, V: BTreeValue> BTree<K, V> {
         let num_keys = u64::from_le_bytes(data[META_NUM_KEYS_OFFSET..META_NUM_KEYS_OFFSET + 8].try_into().unwrap());
         let fanout = u32::from_le_bytes(data[META_FANOUT_OFFSET..META_FANOUT_OFFSET + 4].try_into().unwrap()) as usize;
 
+        if !(4..=1000).contains(&fanout) {
+            return Err(IndexError::InvalidFanout(fanout));
+        }
+
         let meta = TreeMeta {
             meta_page_id,
             root_page_id,
@@ -475,32 +482,37 @@ impl<K: BTreeKey, V: BTreeValue> BTree<K, V> {
         drop(meta);
 
         // Descend to the leaf that contains the start key (or the leftmost leaf).
-        let (start_leaf_id, _) = self
+        let (_, mut current_leaf) = self
             .find_leaf(root, start_bytes.as_deref(), height)
             .await?;
 
-        // Load all leaves in the range.
+        // Load all leaves in the range, reusing the starting leaf returned by
+        // `find_leaf` to avoid an immediate redundant reload.
         let mut leaves: Vec<LeafNode> = Vec::new();
-        let mut current_id = Some(start_leaf_id);
-        while let Some(leaf_id) = current_id {
+        loop {
+            let next = current_leaf.next_leaf;
+            // Check if this leaf can contribute any keys within the range.
+            let done = match &end_bound {
+                EndBound::Unbounded => false,
+                EndBound::Included(end) => {
+                    current_leaf.keys.first().is_some_and(|k| k.as_slice() > end.as_slice())
+                }
+                EndBound::Excluded(end) => {
+                    current_leaf.keys.first().is_some_and(|k| k.as_slice() >= end.as_slice())
+                }
+            };
+            if done {
+                break;
+            }
+            leaves.push(current_leaf);
+
+            let Some(leaf_id) = next else {
+                break;
+            };
+
             let node = load_node(&self.storage, leaf_id).await?;
             if let Node::Leaf(leaf) = node {
-                let next = leaf.next_leaf;
-                // Check if this leaf can contribute any keys within the range.
-                let done = match &end_bound {
-                    EndBound::Unbounded => false,
-                    EndBound::Included(end) => {
-                        leaf.keys.first().is_some_and(|k| k.as_slice() > end.as_slice())
-                    }
-                    EndBound::Excluded(end) => {
-                        leaf.keys.first().is_some_and(|k| k.as_slice() >= end.as_slice())
-                    }
-                };
-                if done {
-                    break;
-                }
-                leaves.push(leaf);
-                current_id = next;
+                current_leaf = leaf;
             } else {
                 return Err(IndexError::Corrupt(format!(
                     "expected leaf at page {leaf_id}"
@@ -536,13 +548,14 @@ impl<K: BTreeKey, V: BTreeValue> BTree<K, V> {
         Ok(BTreeIterator::new(first_leaf, start_pos, leaves, end_bound))
     }
 
-    /// Bulk-load key-value pairs into the tree efficiently.
+    /// Bulk-load key-value pairs into the tree.
     ///
-    /// Input **must** be sorted by key in ascending order.  Duplicate keys are
-    /// not allowed and will cause `IndexError::DuplicateKey`.
+    /// Entries are inserted using the normal insert path, so input does not
+    /// need to be sorted for correctness.  However, providing entries sorted by
+    /// ascending key may offer better performance.  Duplicate keys are not
+    /// allowed and will cause `IndexError::DuplicateKey`.
     ///
-    /// This method inserts entries in batches using the normal insert path.  A
-    /// future optimisation can use a bottom-up bulk-load algorithm.
+    /// A future optimisation can use a bottom-up bulk-load algorithm.
     pub async fn bulk_load(&self, entries: Vec<(K, V)>) -> Result<(), IndexError> {
         for (k, v) in entries {
             self.insert(k, v).await?;
