@@ -82,12 +82,8 @@ pub enum DataType {
     UnsignedInt,
     /// `FLOAT` / `REAL` — 32-bit signed floating-point (IEEE 754).
     Float,
-    /// `FLOAT UNSIGNED` — 32-bit MySQL-specific unsigned float (non-negative only).
-    UnsignedFloat,
     /// `DOUBLE` / `DOUBLE PRECISION` — 64-bit signed floating-point (IEEE 754).
     Double,
-    /// `DOUBLE UNSIGNED` — 64-bit MySQL-specific unsigned double (non-negative only).
-    UnsignedDouble,
     /// `VARCHAR(n)` / `TEXT` / `CHAR(n)`.
     Varchar(Option<u64>),
     /// `BOOLEAN` / `BOOL`.
@@ -98,8 +94,6 @@ pub enum DataType {
     Timestamp,
     /// `DECIMAL(p, s)` / `NUMERIC(p, s)`.
     Decimal(Option<u64>, Option<u64>),
-    /// `DECIMAL UNSIGNED`.
-    UnsignedDecimal(Option<u64>, Option<u64>),
     /// Reference to a single row in another table: `table_name`.
     /// Used for foreign key relationships and OO-style references.
     Reference(String),
@@ -161,6 +155,10 @@ pub enum DataType {
     MediumBlob,
     /// MySQL `LONGBLOB`.
     LongBlob,
+    /// A vector of values of the given element type: `[DataType]`.
+    /// Elements can be any base type, e.g. `[INTEGER]`, `[VARCHAR(100)]`.
+    /// Supports custom insert, update, delete and select operations.
+    Vector(Box<DataType>),
 }
 
 impl std::fmt::Display for DataType {
@@ -169,9 +167,7 @@ impl std::fmt::Display for DataType {
             DataType::Integer => write!(f, "INTEGER"),
             DataType::UnsignedInt => write!(f, "INTEGER UNSIGNED"),
             DataType::Float => write!(f, "FLOAT"),
-            DataType::UnsignedFloat => write!(f, "FLOAT UNSIGNED"),
             DataType::Double => write!(f, "DOUBLE"),
-            DataType::UnsignedDouble => write!(f, "DOUBLE UNSIGNED"),
             DataType::Varchar(Some(n)) => write!(f, "VARCHAR({n})"),
             DataType::Varchar(None) => write!(f, "TEXT"),
             DataType::Boolean => write!(f, "BOOLEAN"),
@@ -180,11 +176,6 @@ impl std::fmt::Display for DataType {
             DataType::Decimal(Some(p), Some(s)) => write!(f, "DECIMAL({p},{s})"),
             DataType::Decimal(Some(p), None) => write!(f, "DECIMAL({p})"),
             DataType::Decimal(None, _) => write!(f, "DECIMAL"),
-            DataType::UnsignedDecimal(Some(p), Some(s)) => {
-                write!(f, "DECIMAL({p},{s}) UNSIGNED")
-            }
-            DataType::UnsignedDecimal(Some(p), None) => write!(f, "DECIMAL({p}) UNSIGNED"),
-            DataType::UnsignedDecimal(None, _) => write!(f, "DECIMAL UNSIGNED"),
             DataType::Reference(table) => write!(f, "{table}"),
             DataType::ReferenceArray(table) => write!(f, "[{table}]"),
             DataType::VirtualReference { table, column } => write!(f, "~{table}({column})"),
@@ -226,6 +217,7 @@ impl std::fmt::Display for DataType {
             DataType::TinyBlob => write!(f, "TINYBLOB"),
             DataType::MediumBlob => write!(f, "MEDIUMBLOB"),
             DataType::LongBlob => write!(f, "LONGBLOB"),
+            DataType::Vector(elem) => write!(f, "[{elem}]"),
             DataType::Other(s) => write!(f, "{s}"),
         }
     }
@@ -493,6 +485,48 @@ pub struct ColumnDef {
     pub max_length: Option<u64>,
     /// UNIQUES constraint for ReferenceArray (all references must be distinct).
     pub uniques: bool,
+    /// `CHECK (expr)` constraint on this column.
+    pub check: Option<Expr>,
+    /// Multilingual text directive for this column (optional).
+    /// When set the column stores a map of locale → value instead of a plain value.
+    pub text_directive: Option<TextDirective>,
+    /// Named typed metadata directives attached to each value of this column.
+    pub terms_directives: Vec<TermsDirective>,
+}
+
+/// Directive for multilingual/localized text columns.
+///
+/// A text-directive column stores translations keyed by locale tag.
+/// Clients access a specific locale with `column_name@'locale'` syntax.
+/// When a requested locale is not present the `default_locale` is returned.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextDirective {
+    /// The locale tag used when no directive is specified or the requested
+    /// locale does not exist (e.g. `"en"`, `"pt-BR"`).
+    pub default_locale: String,
+}
+
+/// Kind of value stored inside a terms-directive slot.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TermsDirectiveKind {
+    Text,
+    Integer,
+    Float,
+    Boolean,
+    Enum(Vec<String>),
+}
+
+/// A named terms-directive slot on a column.
+///
+/// Terms directives attach typed metadata to each cell value without
+/// adding extra rows.  For example a price column could carry a
+/// `currency` terms directive of kind `Text`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TermsDirective {
+    /// Directive name (e.g. `"currency"`, `"unit"`).
+    pub name: String,
+    /// Type of value this directive accepts.
+    pub kind: TermsDirectiveKind,
 }
 
 /// Behavior for a temporary table when the transaction that created it commits.
@@ -516,6 +550,40 @@ pub enum OnCommitBehavior {
     Drop,
 }
 
+/// An index column: column name + optional ordering.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IndexColumn {
+    pub name: String,
+    pub ascending: Option<bool>,
+}
+
+/// A table-level constraint.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TableConstraint {
+    /// `PRIMARY KEY (col1, col2, ...)`.
+    PrimaryKey {
+        name: Option<String>,
+        columns: Vec<String>,
+    },
+    /// `UNIQUE [name] (col1, col2, ...)`.
+    Unique {
+        name: Option<String>,
+        columns: Vec<String>,
+    },
+    /// `FOREIGN KEY (cols) REFERENCES other_table (other_cols)`.
+    ForeignKey {
+        name: Option<String>,
+        columns: Vec<String>,
+        foreign_table: String,
+        referred_columns: Vec<String>,
+    },
+    /// `CHECK (expr)`.
+    Check {
+        name: Option<String>,
+        expr: Expr,
+    },
+}
+
 /// A `CREATE TABLE` statement.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CreateTableStatement {
@@ -532,6 +600,12 @@ pub struct CreateTableStatement {
     /// `None` means "default" (`PRESERVE ROWS` for temporary tables, ignored
     /// for permanent tables).  See [`OnCommitBehavior`].
     pub on_commit: Option<OnCommitBehavior>,
+    /// Table-level constraints (composite primary keys, unique, foreign keys, checks).
+    pub constraints: Vec<TableConstraint>,
+    /// Whether this table uses system versioning (temporal/versioned data).
+    /// When `true` each row is versioned and historical values are retained.
+    /// Corresponds to SQL-standard `WITH SYSTEM VERSIONING`.
+    pub versioned: bool,
 }
 
 /// A `DROP TABLE` statement.
@@ -545,7 +619,7 @@ pub struct DropTableStatement {
 /// An `ALTER TABLE` operation.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AlterTableOperation {
-    AddColumn(ColumnDef),
+    AddColumn(Box<ColumnDef>),
     DropColumn { name: String, if_exists: bool },
     RenameColumn { old_name: String, new_name: String },
     RenameTable { new_name: String },
@@ -558,12 +632,38 @@ pub struct AlterTableStatement {
     pub operations: Vec<AlterTableOperation>,
 }
 
+/// A `CREATE INDEX` statement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CreateIndexStatement {
+    /// Index name (optional).
+    pub name: Option<String>,
+    /// Table the index is on.
+    pub table: String,
+    /// Indexed columns.
+    pub columns: Vec<IndexColumn>,
+    /// Whether this is a UNIQUE index.
+    pub unique: bool,
+    /// `IF NOT EXISTS` flag.
+    pub if_not_exists: bool,
+}
+
+/// A `DROP INDEX` statement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DropIndexStatement {
+    /// Index names to drop.
+    pub names: Vec<String>,
+    /// `IF EXISTS` flag.
+    pub if_exists: bool,
+}
+
 // ── DCL scaffolding ─────────────────────────────────────────────────────────
 
 /// A `GRANT` statement (scaffolding; not yet executed).
 #[derive(Debug, Clone, PartialEq)]
 pub struct GrantStatement {
     pub privileges: Vec<String>,
+    /// Optional column list for column-level grants (e.g. `GRANT SELECT(col1) ON t TO u`).
+    pub columns: Vec<String>,
     pub on: String,
     pub to: Vec<String>,
 }
@@ -572,6 +672,8 @@ pub struct GrantStatement {
 #[derive(Debug, Clone, PartialEq)]
 pub struct RevokeStatement {
     pub privileges: Vec<String>,
+    /// Optional column list for column-level revokes.
+    pub columns: Vec<String>,
     pub on: String,
     pub from: Vec<String>,
 }
@@ -629,6 +731,38 @@ pub struct ReleaseSavepointStatement {
     pub name: String,
 }
 
+// ── User management scaffolding ────────────────────────────────────────────
+
+/// A `CREATE USER` statement (scaffolding; not yet executed).
+#[derive(Debug, Clone, PartialEq)]
+pub struct CreateUserStatement {
+    /// User name.
+    pub name: String,
+    /// Optional password hash / authentication string.
+    pub password: Option<String>,
+    /// Optional list of roles to grant immediately.
+    pub roles: Vec<String>,
+}
+
+/// A `DROP USER` statement (scaffolding; not yet executed).
+#[derive(Debug, Clone, PartialEq)]
+pub struct DropUserStatement {
+    pub names: Vec<String>,
+    pub if_exists: bool,
+}
+
+/// A `CREATE TYPE` / User Type Definition (UTD) statement (scaffolding; not yet executed).
+///
+/// UTDs allow DBAs to define custom composite types with read/write/anonymization
+/// restrictions that can be applied per user or group.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CreateTypeStatement {
+    /// Type name.
+    pub name: String,
+    /// Attributes / columns of the type.
+    pub attributes: Vec<ColumnDef>,
+}
+
 // ── Top-level statement ────────────────────────────────────────────────────────
 
 /// A fully lowered SQL statement ready for the query planner.
@@ -653,6 +787,16 @@ pub enum Statement {
     Rollback(RollbackStatement),
     Savepoint(SavepointStatement),
     ReleaseSavepoint(ReleaseSavepointStatement),
+    /// `CREATE INDEX` statement.
+    CreateIndex(CreateIndexStatement),
+    /// `DROP INDEX` statement.
+    DropIndex(DropIndexStatement),
+    /// `CREATE USER` scaffolding.
+    CreateUser(CreateUserStatement),
+    /// `DROP USER` scaffolding.
+    DropUser(DropUserStatement),
+    /// `CREATE TYPE` (User Type Definition) scaffolding.
+    CreateType(CreateTypeStatement),
 }
 
 // ── Conversion from sqlparser AST ─────────────────────────────────────────────
@@ -724,6 +868,41 @@ impl TryFrom<sp::Statement> for Statement {
             sp::Statement::ReleaseSavepoint { name } => {
                 Ok(Statement::ReleaseSavepoint(ReleaseSavepointStatement {
                     name: ident_to_string(&name),
+                }))
+            }
+            sp::Statement::CreateIndex(ci) => {
+                let name = ci.name.as_ref().map(object_name_to_string);
+                let table = object_name_to_string(&ci.table_name);
+                let columns = ci
+                    .columns
+                    .into_iter()
+                    .map(|c| IndexColumn {
+                        name: match &c.column.expr {
+                            sp::Expr::Identifier(ident) => ident.value.clone(),
+                            other => other.to_string(),
+                        },
+                        ascending: c.column.options.asc,
+                    })
+                    .collect();
+                Ok(Statement::CreateIndex(CreateIndexStatement {
+                    name,
+                    table,
+                    columns,
+                    unique: ci.unique,
+                    if_not_exists: ci.if_not_exists,
+                }))
+            }
+            sp::Statement::CreateUser(cu) => {
+                Ok(Statement::CreateUser(CreateUserStatement {
+                    name: cu.name.value.clone(),
+                    password: None,
+                    roles: vec![],
+                }))
+            }
+            sp::Statement::CreateType { name, .. } => {
+                Ok(Statement::CreateType(CreateTypeStatement {
+                    name: object_name_to_string(&name),
+                    attributes: vec![],
                 }))
             }
             other => Err(AstError::Unsupported(format!(
@@ -1266,21 +1445,24 @@ fn convert_data_type(dt: sp::DataType) -> Result<DataType, AstError> {
         | sp::DataType::UHugeInt => Ok(DataType::UnsignedBigInt),
         // ── Floating-point ─────────────────────────────────────────────────
         sp::DataType::Float(_) | sp::DataType::Float4 | sp::DataType::Real => Ok(DataType::Float),
-        sp::DataType::FloatUnsigned(_) => Ok(DataType::UnsignedFloat),
+        sp::DataType::FloatUnsigned(_) => Err(AstError::Invalid(
+            "FLOAT UNSIGNED is not supported; use FLOAT with a CHECK constraint for non-negative values".to_string(),
+        )),
         sp::DataType::Double(_)
         | sp::DataType::DoublePrecision
         | sp::DataType::Float8
         | sp::DataType::Float64 => Ok(DataType::Double),
-        sp::DataType::DoubleUnsigned(_) => Ok(DataType::UnsignedDouble),
+        sp::DataType::DoubleUnsigned(_) => Err(AstError::Invalid(
+            "DOUBLE UNSIGNED is not supported; use DOUBLE with a CHECK constraint for non-negative values".to_string(),
+        )),
         // ── Decimal / numeric ──────────────────────────────────────────────
         sp::DataType::Decimal(info) | sp::DataType::Numeric(info) | sp::DataType::Dec(info) => {
             let (p, s) = exact_number_info(info);
             Ok(DataType::Decimal(p, s))
         }
-        sp::DataType::DecimalUnsigned(info) | sp::DataType::DecUnsigned(info) => {
-            let (p, s) = exact_number_info(info);
-            Ok(DataType::UnsignedDecimal(p, s))
-        }
+        sp::DataType::DecimalUnsigned(_) | sp::DataType::DecUnsigned(_) => Err(AstError::Invalid(
+            "DECIMAL UNSIGNED is not supported; use DECIMAL with a CHECK constraint for non-negative values".to_string(),
+        )),
         // ── Character ──────────────────────────────────────────────────────
         sp::DataType::Varchar(n)
         | sp::DataType::CharVarying(n)
@@ -1330,6 +1512,10 @@ fn convert_data_type(dt: sp::DataType) -> Result<DataType, AstError> {
                 })
                 .collect();
             Ok(DataType::Enum(vals))
+        }
+        sp::DataType::Array(sp::ArrayElemTypeDef::AngleBracket(inner))
+        | sp::DataType::Array(sp::ArrayElemTypeDef::SquareBracket(inner, _)) => {
+            Ok(DataType::Vector(Box::new(convert_data_type(*inner)?)))
         }
         other => Ok(DataType::Other(format!("{other}"))),
     }
@@ -1486,6 +1672,11 @@ fn convert_create_table(ct: sp::CreateTable) -> Result<Statement, AstError> {
         sp::OnCommit::PreserveRows => OnCommitBehavior::PreserveRows,
         sp::OnCommit::Drop => OnCommitBehavior::Drop,
     });
+    let constraints = ct
+        .constraints
+        .into_iter()
+        .map(convert_table_constraint)
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(Statement::CreateTable(CreateTableStatement {
         table,
         columns,
@@ -1493,6 +1684,8 @@ fn convert_create_table(ct: sp::CreateTable) -> Result<Statement, AstError> {
         temporary: ct.temporary,
         inherits,
         on_commit,
+        constraints,
+        versioned: false,
     }))
 }
 
@@ -1508,6 +1701,7 @@ fn convert_column_def(col: sp::ColumnDef) -> Result<ColumnDef, AstError> {
     let min_length = None;
     let max_length = None;
     let uniques = false;
+    let mut check = None;
 
     for option in col.options {
         match option.option {
@@ -1522,6 +1716,9 @@ fn convert_column_def(col: sp::ColumnDef) -> Result<ColumnDef, AstError> {
             }
             sp::ColumnOption::Default(e) => {
                 default = Some(convert_expr(e)?);
+            }
+            sp::ColumnOption::Check(cc) => {
+                check = Some(convert_expr(*cc.expr)?);
             }
             _ => {}
         }
@@ -1538,7 +1735,53 @@ fn convert_column_def(col: sp::ColumnDef) -> Result<ColumnDef, AstError> {
         min_length,
         max_length,
         uniques,
+        check,
+        text_directive: None,
+        terms_directives: vec![],
     })
+}
+
+fn convert_table_constraint(c: sp::TableConstraint) -> Result<TableConstraint, AstError> {
+    match c {
+        sp::TableConstraint::PrimaryKey(pk) => {
+            let name = pk.name.as_ref().map(ident_to_string);
+            let columns = pk.columns.iter().map(|c| match &c.column.expr {
+                sp::Expr::Identifier(ident) => ident.value.clone(),
+                other => other.to_string(),
+            }).collect();
+            Ok(TableConstraint::PrimaryKey { name, columns })
+        }
+        sp::TableConstraint::Unique(u) => {
+            let name = u.name.as_ref().map(ident_to_string);
+            let columns = u.columns.iter().map(|c| match &c.column.expr {
+                sp::Expr::Identifier(ident) => ident.value.clone(),
+                other => other.to_string(),
+            }).collect();
+            Ok(TableConstraint::Unique { name, columns })
+        }
+        sp::TableConstraint::ForeignKey(fk) => {
+            let name = fk.name.as_ref().map(ident_to_string);
+            let columns = fk.columns.iter().map(|i| i.value.clone()).collect();
+            let foreign_table = object_name_to_string(&fk.foreign_table);
+            let referred_columns = fk.referred_columns.iter().map(|i| i.value.clone()).collect();
+            Ok(TableConstraint::ForeignKey {
+                name,
+                columns,
+                foreign_table,
+                referred_columns,
+            })
+        }
+        sp::TableConstraint::Check(cc) => {
+            let name = cc.name.as_ref().map(ident_to_string);
+            Ok(TableConstraint::Check {
+                name,
+                expr: convert_expr(*cc.expr)?,
+            })
+        }
+        other => Err(AstError::Unsupported(format!(
+            "table constraint not supported: {other}"
+        ))),
+    }
 }
 
 // ── DROP TABLE conversion ──────────────────────────────────────────────────────
@@ -1553,6 +1796,20 @@ fn convert_drop(
             let tables = names.iter().map(object_name_to_string).collect();
             Ok(Statement::DropTable(DropTableStatement {
                 tables,
+                if_exists,
+            }))
+        }
+        sp::ObjectType::Index => {
+            let idx_names = names.iter().map(object_name_to_string).collect();
+            Ok(Statement::DropIndex(DropIndexStatement {
+                names: idx_names,
+                if_exists,
+            }))
+        }
+        sp::ObjectType::User => {
+            let user_names = names.iter().map(object_name_to_string).collect();
+            Ok(Statement::DropUser(DropUserStatement {
+                names: user_names,
                 if_exists,
             }))
         }
@@ -1579,7 +1836,7 @@ fn convert_alter_table(alt: sp::AlterTable) -> Result<Statement, AstError> {
 fn convert_alter_operation(op: sp::AlterTableOperation) -> Result<AlterTableOperation, AstError> {
     match op {
         sp::AlterTableOperation::AddColumn { column_def, .. } => Ok(
-            AlterTableOperation::AddColumn(convert_column_def(column_def)?),
+            AlterTableOperation::AddColumn(Box::new(convert_column_def(column_def)?)),
         ),
         sp::AlterTableOperation::DropColumn {
             column_names,
@@ -1634,6 +1891,7 @@ fn convert_grant(grant: sp::Grant) -> Result<Statement, AstError> {
     let to = grant.grantees.iter().map(|g| format!("{g}")).collect();
     Ok(Statement::Grant(GrantStatement {
         privileges: privs,
+        columns: vec![],
         on,
         to,
     }))
@@ -1651,6 +1909,7 @@ fn convert_revoke(revoke: sp::Revoke) -> Result<Statement, AstError> {
     let from = revoke.grantees.iter().map(|g| format!("{g}")).collect();
     Ok(Statement::Revoke(RevokeStatement {
         privileges: privs,
+        columns: vec![],
         on,
         from,
     }))

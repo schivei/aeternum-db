@@ -196,6 +196,12 @@ impl<'a> Validator<'a> {
             | Statement::Rollback(_)
             | Statement::Savepoint(_)
             | Statement::ReleaseSavepoint(_) => Ok(()),
+            // New DDL/DCL scaffolding — always passes
+            Statement::CreateIndex(_)
+            | Statement::DropIndex(_)
+            | Statement::CreateUser(_)
+            | Statement::DropUser(_)
+            | Statement::CreateType(_) => Ok(()),
         }
     }
 

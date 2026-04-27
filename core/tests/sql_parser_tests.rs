@@ -1223,21 +1223,6 @@ fn test_unsigned_integer_types() {
 }
 
 #[test]
-fn test_unsigned_decimal_type() {
-    let stmt = parser()
-        .parse_one("CREATE TABLE t (price DECIMAL(10,2) UNSIGNED)")
-        .unwrap();
-    let ct = match stmt {
-        Statement::CreateTable(ct) => ct,
-        _ => panic!("expected CreateTable"),
-    };
-    assert_eq!(
-        ct.columns[0].data_type,
-        DataType::UnsignedDecimal(Some(10), Some(2))
-    );
-}
-
-#[test]
 fn test_binary_types() {
     let cases: &[(&str, DataType)] = &[
         ("data BINARY(16)", DataType::Binary(Some(16))),
@@ -1273,12 +1258,6 @@ fn test_unsigned_display() {
     );
     assert_eq!(DataType::UnsignedInt.to_string(), "INTEGER UNSIGNED");
     assert_eq!(DataType::UnsignedBigInt.to_string(), "BIGINT UNSIGNED");
-    assert_eq!(DataType::UnsignedFloat.to_string(), "FLOAT UNSIGNED");
-    assert_eq!(DataType::UnsignedDouble.to_string(), "DOUBLE UNSIGNED");
-    assert_eq!(
-        DataType::UnsignedDecimal(Some(10), Some(2)).to_string(),
-        "DECIMAL(10,2) UNSIGNED"
-    );
 }
 
 #[test]
@@ -1290,4 +1269,142 @@ fn test_binary_display() {
     assert_eq!(DataType::TinyBlob.to_string(), "TINYBLOB");
     assert_eq!(DataType::MediumBlob.to_string(), "MEDIUMBLOB");
     assert_eq!(DataType::LongBlob.to_string(), "LONGBLOB");
+}
+
+#[test]
+fn test_unsigned_float_double_decimal_rejected() {
+    for sql in &[
+        "CREATE TABLE t (x FLOAT UNSIGNED)",
+        "CREATE TABLE t (x DOUBLE UNSIGNED)",
+        "CREATE TABLE t (x DECIMAL(10,2) UNSIGNED)",
+    ] {
+        assert!(
+            parser().parse_one(sql).is_err(),
+            "expected error for: {sql}"
+        );
+    }
+}
+
+// ── CREATE INDEX / DROP INDEX ──────────────────────────────────────────────
+
+#[test]
+fn test_create_index() {
+    use aeternumdb_core::sql::ast::CreateIndexStatement;
+    let stmt = parser()
+        .parse_one("CREATE INDEX idx_name ON users (name)")
+        .unwrap();
+    let ci = match stmt {
+        Statement::CreateIndex(ci) => ci,
+        _ => panic!("expected CreateIndex"),
+    };
+    assert_eq!(ci.name, Some("idx_name".to_string()));
+    assert_eq!(ci.table, "users");
+    assert_eq!(ci.columns.len(), 1);
+    assert!(!ci.unique);
+}
+
+#[test]
+fn test_create_unique_index() {
+    use aeternumdb_core::sql::ast::CreateIndexStatement;
+    let stmt = parser()
+        .parse_one("CREATE UNIQUE INDEX idx_email ON users (email)")
+        .unwrap();
+    let ci = match stmt {
+        Statement::CreateIndex(ci) => ci,
+        _ => panic!("expected CreateIndex"),
+    };
+    assert!(ci.unique);
+    assert_eq!(ci.table, "users");
+}
+
+#[test]
+fn test_drop_index() {
+    use aeternumdb_core::sql::ast::DropIndexStatement;
+    let stmt = parser()
+        .parse_one("DROP INDEX IF EXISTS idx_name ON users")
+        .unwrap();
+    let di = match stmt {
+        Statement::DropIndex(di) => di,
+        _ => panic!("expected DropIndex"),
+    };
+    assert!(di.if_exists);
+}
+
+// ── Table-level constraints ─────────────────────────────────────────────────
+
+#[test]
+fn test_composite_primary_key() {
+    use aeternumdb_core::sql::ast::TableConstraint;
+    let stmt = parser()
+        .parse_one("CREATE TABLE t (a INTEGER, b INTEGER, PRIMARY KEY (a, b))")
+        .unwrap();
+    let ct = match stmt {
+        Statement::CreateTable(ct) => ct,
+        _ => panic!("expected CreateTable"),
+    };
+    assert_eq!(ct.constraints.len(), 1);
+    match &ct.constraints[0] {
+        TableConstraint::PrimaryKey { columns, .. } => {
+            assert_eq!(columns, &["a".to_string(), "b".to_string()]);
+        }
+        _ => panic!("expected PrimaryKey constraint"),
+    }
+}
+
+#[test]
+fn test_table_check_constraint() {
+    use aeternumdb_core::sql::ast::TableConstraint;
+    let stmt = parser()
+        .parse_one("CREATE TABLE t (price DECIMAL(10,2), CHECK (price > 0))")
+        .unwrap();
+    let ct = match stmt {
+        Statement::CreateTable(ct) => ct,
+        _ => panic!("expected CreateTable"),
+    };
+    let has_check = ct.constraints.iter().any(|c| matches!(c, TableConstraint::Check { .. }));
+    assert!(has_check);
+}
+
+#[test]
+fn test_foreign_key_constraint() {
+    use aeternumdb_core::sql::ast::TableConstraint;
+    let stmt = parser()
+        .parse_one("CREATE TABLE orders (id INTEGER, user_id INTEGER, FOREIGN KEY (user_id) REFERENCES users (id))")
+        .unwrap();
+    let ct = match stmt {
+        Statement::CreateTable(ct) => ct,
+        _ => panic!("expected CreateTable"),
+    };
+    let fk = ct.constraints.iter().find(|c| matches!(c, TableConstraint::ForeignKey { .. }));
+    assert!(fk.is_some());
+    if let Some(TableConstraint::ForeignKey { foreign_table, referred_columns, .. }) = fk {
+        assert_eq!(foreign_table, "users");
+        assert_eq!(referred_columns, &["id".to_string()]);
+    }
+}
+
+// ── User management scaffolding ────────────────────────────────────────────
+
+#[test]
+fn test_create_user() {
+    use aeternumdb_core::sql::ast::CreateUserStatement;
+    let stmt = parser()
+        .parse_one("CREATE USER alice")
+        .unwrap();
+    let cu = match stmt {
+        Statement::CreateUser(cu) => cu,
+        _ => panic!("expected CreateUser"),
+    };
+    assert_eq!(cu.name, "alice");
+}
+
+// ── Vector type ────────────────────────────────────────────────────────────
+
+#[test]
+fn test_vector_type_via_array() {
+    // Vector types are exposed through sqlparser's ARRAY type mapping.
+    // Validate the DataType::Vector Display impl.
+    use aeternumdb_core::sql::ast::DataType;
+    let vt = DataType::Vector(Box::new(DataType::Integer));
+    assert_eq!(vt.to_string(), "[INTEGER]");
 }
