@@ -201,7 +201,12 @@ impl<'a> Validator<'a> {
             | Statement::DropIndex(_)
             | Statement::CreateUser(_)
             | Statement::DropUser(_)
-            | Statement::CreateType(_) => Ok(()),
+            | Statement::CreateType(_)
+            | Statement::CreateDatabase(_)
+            | Statement::DropDatabase(_)
+            | Statement::UseDatabase(_)
+            | Statement::CreateSchema(_)
+            | Statement::DropSchema(_) => Ok(()),
         }
     }
 

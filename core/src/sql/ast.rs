@@ -364,19 +364,42 @@ pub enum SelectItem {
 /// A table reference in the FROM clause.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TableReference {
-    /// A plain table name, optionally aliased.
-    Named { name: String, alias: Option<String> },
+    /// A plain table name, optionally qualified with database and/or schema,
+    /// and optionally aliased.
+    ///
+    /// Cross-database joins are not permitted; the `database` field is captured
+    /// for routing but a [`ValidationError`] is raised if two tables in the
+    /// same query reference different databases.
+    Named {
+        /// Database qualifier (e.g. `db` in `db.app.users`).  `None` means
+        /// the active connection database.
+        database: Option<String>,
+        /// Schema qualifier (e.g. `app` in `app.users`).  `None` defaults to
+        /// the `app` schema at execution time.
+        schema: Option<String>,
+        name: String,
+        alias: Option<String>,
+    },
     /// A subquery in the FROM clause, with a mandatory alias.
     Subquery {
         query: Box<SelectStatement>,
         alias: String,
     },
     /// A JOIN between two table references.
+    ///
+    /// AeternumDB joins are driven by **reference column types** — the join
+    /// itself needs no `ON` clause because the relationship is encoded in the
+    /// schema.  `filter_by` carries an *optional* additional predicate that
+    /// further narrows the result set, expressed via the `FILTER BY` clause.
+    ///
+    /// When lowering from standard SQL, sqlparser's `ON` condition is mapped
+    /// to `filter_by` so that existing SQL keeps working.
     Join {
         left: Box<TableReference>,
         right: Box<TableReference>,
         join_type: JoinType,
-        condition: Option<Expr>,
+        /// Optional `FILTER BY` (or legacy `ON`) predicate.
+        filter_by: Option<Expr>,
     },
 }
 
@@ -558,6 +581,11 @@ pub struct IndexColumn {
 }
 
 /// A table-level constraint.
+///
+/// **Note**: `FOREIGN KEY` constraints are not supported in AeternumDB.
+/// Use reference column types (`table_name`, `[table_name]`, `~table_name(col)`)
+/// to express relationships.  Relationships are resolved via `objid` at
+/// execution time rather than through declarative FK constraints.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TableConstraint {
     /// `PRIMARY KEY (col1, col2, ...)`.
@@ -570,13 +598,6 @@ pub enum TableConstraint {
         name: Option<String>,
         columns: Vec<String>,
     },
-    /// `FOREIGN KEY (cols) REFERENCES other_table (other_cols)`.
-    ForeignKey {
-        name: Option<String>,
-        columns: Vec<String>,
-        foreign_table: String,
-        referred_columns: Vec<String>,
-    },
     /// `CHECK (expr)`.
     Check { name: Option<String>, expr: Expr },
 }
@@ -584,6 +605,10 @@ pub enum TableConstraint {
 /// A `CREATE TABLE` statement.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CreateTableStatement {
+    /// Database qualifier (connection-level routing).  `None` = active database.
+    pub database: Option<String>,
+    /// Schema qualifier.  `None` defaults to the `app` schema.
+    pub schema: Option<String>,
     pub table: String,
     pub columns: Vec<ColumnDef>,
     /// `IF NOT EXISTS` flag.
@@ -597,12 +622,18 @@ pub struct CreateTableStatement {
     /// `None` means "default" (`PRESERVE ROWS` for temporary tables, ignored
     /// for permanent tables).  See [`OnCommitBehavior`].
     pub on_commit: Option<OnCommitBehavior>,
-    /// Table-level constraints (composite primary keys, unique, foreign keys, checks).
+    /// Table-level constraints (composite primary keys, unique, checks).
     pub constraints: Vec<TableConstraint>,
     /// Whether this table uses system versioning (temporal/versioned data).
     /// When `true` each row is versioned and historical values are retained.
     /// Corresponds to SQL-standard `WITH SYSTEM VERSIONING`.
     pub versioned: bool,
+    /// Whether this is a FLAT table.
+    ///
+    /// FLAT tables are optimised for fast sequential reads and do **not**
+    /// support joins, reference column types, versioning, or inheritance.
+    /// They are analogous to heap files — the simplest possible storage layout.
+    pub flat: bool,
 }
 
 /// A `DROP TABLE` statement.
@@ -760,6 +791,60 @@ pub struct CreateTypeStatement {
     pub attributes: Vec<ColumnDef>,
 }
 
+// ── Database / Schema DDL scaffolding ─────────────────────────────────────────
+
+/// A `CREATE DATABASE` statement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CreateDatabaseStatement {
+    /// Database name (lowercased).
+    pub name: String,
+    /// `IF NOT EXISTS` flag.
+    pub if_not_exists: bool,
+}
+
+/// A `DROP DATABASE` statement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DropDatabaseStatement {
+    /// Database name (lowercased).
+    pub name: String,
+    /// `IF EXISTS` flag.
+    pub if_exists: bool,
+}
+
+/// A `USE [DATABASE] db_name` statement — switches the active database for the
+/// current connection.  Cross-database JOINs are not supported; all tables in
+/// a query must belong to the same database.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UseDatabaseStatement {
+    /// Target database name (lowercased).
+    pub name: String,
+}
+
+/// A `CREATE SCHEMA` statement.
+///
+/// Schemas group tables within a database.  The default application schema is
+/// `app`.  Several schemas are reserved for system use (see the SQL reference).
+#[derive(Debug, Clone, PartialEq)]
+pub struct CreateSchemaStatement {
+    /// Optional database qualifier (lowercased).
+    pub database: Option<String>,
+    /// Schema name (lowercased).
+    pub name: String,
+    /// `IF NOT EXISTS` flag.
+    pub if_not_exists: bool,
+}
+
+/// A `DROP SCHEMA` statement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DropSchemaStatement {
+    /// Optional database qualifier (lowercased).
+    pub database: Option<String>,
+    /// Schema name (lowercased).
+    pub name: String,
+    /// `IF EXISTS` flag.
+    pub if_exists: bool,
+}
+
 // ── Top-level statement ────────────────────────────────────────────────────────
 
 /// A fully lowered SQL statement ready for the query planner.
@@ -794,6 +879,16 @@ pub enum Statement {
     DropUser(DropUserStatement),
     /// `CREATE TYPE` (User Type Definition) scaffolding.
     CreateType(CreateTypeStatement),
+    /// `CREATE DATABASE` statement.
+    CreateDatabase(CreateDatabaseStatement),
+    /// `DROP DATABASE` statement.
+    DropDatabase(DropDatabaseStatement),
+    /// `USE [DATABASE] db` — switch active database.
+    UseDatabase(UseDatabaseStatement),
+    /// `CREATE SCHEMA` statement.
+    CreateSchema(CreateSchemaStatement),
+    /// `DROP SCHEMA` statement.
+    DropSchema(DropSchemaStatement),
 }
 
 // ── Conversion from sqlparser AST ─────────────────────────────────────────────
@@ -900,6 +995,57 @@ impl TryFrom<sp::Statement> for Statement {
                     attributes: vec![],
                 }))
             }
+            sp::Statement::CreateDatabase {
+                db_name,
+                if_not_exists,
+                ..
+            } => Ok(Statement::CreateDatabase(CreateDatabaseStatement {
+                name: object_name_to_string(&db_name),
+                if_not_exists,
+            })),
+            sp::Statement::CreateSchema {
+                schema_name,
+                if_not_exists,
+                ..
+            } => {
+                let (database, name) = match schema_name {
+                    sp::SchemaName::Simple(n) => {
+                        let full = object_name_to_string(&n);
+                        let mut parts = full.splitn(2, '.').collect::<Vec<_>>();
+                        if parts.len() == 2 {
+                            (Some(parts[0].to_string()), parts[1].to_string())
+                        } else {
+                            (None, parts.remove(0).to_string())
+                        }
+                    }
+                    sp::SchemaName::UnnamedAuthorization(_)
+                    | sp::SchemaName::NamedAuthorization(_, _) => {
+                        return Err(AstError::Unsupported(
+                            "AUTHORIZATION form of CREATE SCHEMA is not supported".to_string(),
+                        ))
+                    }
+                };
+                Ok(Statement::CreateSchema(CreateSchemaStatement {
+                    database,
+                    name,
+                    if_not_exists,
+                }))
+            }
+            sp::Statement::Use(use_expr) => {
+                let name = match use_expr {
+                    sp::Use::Database(n)
+                    | sp::Use::Schema(n)
+                    | sp::Use::Catalog(n)
+                    | sp::Use::Object(n) => object_name_to_string(&n),
+                    sp::Use::Default => "default".to_string(),
+                    other => {
+                        return Err(AstError::Unsupported(format!(
+                            "USE variant not supported: {other}"
+                        )))
+                    }
+                };
+                Ok(Statement::UseDatabase(UseDatabaseStatement { name }))
+            }
             other => Err(AstError::Unsupported(format!(
                 "statement type not supported: {other}"
             ))),
@@ -910,18 +1056,45 @@ impl TryFrom<sp::Statement> for Statement {
 // ── Internal conversion helpers ────────────────────────────────────────────────
 
 fn ident_to_string(ident: &sp::Ident) -> String {
-    ident.value.clone()
+    ident.value.to_lowercase()
 }
 
 fn object_name_to_string(name: &sp::ObjectName) -> String {
     name.0
         .iter()
         .filter_map(|part| match part {
-            sp::ObjectNamePart::Identifier(ident) => Some(ident.value.clone()),
+            sp::ObjectNamePart::Identifier(ident) => Some(ident.value.to_lowercase()),
             sp::ObjectNamePart::Function(_) => None,
         })
         .collect::<Vec<_>>()
         .join(".")
+}
+
+/// Decompose a possibly-qualified object name into `(database, schema, table)`.
+///
+/// | Parts | Result |
+/// |-------|--------|
+/// | `table` | `(None, None, "table")` |
+/// | `schema.table` | `(None, Some("schema"), "table")` |
+/// | `db.schema.table` | `(Some("db"), Some("schema"), "table")` |
+fn parse_qualified_name(name: &sp::ObjectName) -> (Option<String>, Option<String>, String) {
+    let parts: Vec<String> = name
+        .0
+        .iter()
+        .filter_map(|part| match part {
+            sp::ObjectNamePart::Identifier(ident) => Some(ident.value.to_lowercase()),
+            sp::ObjectNamePart::Function(_) => None,
+        })
+        .collect();
+    match parts.len() {
+        3 => (
+            Some(parts[0].clone()),
+            Some(parts[1].clone()),
+            parts[2].clone(),
+        ),
+        2 => (None, Some(parts[0].clone()), parts[1].clone()),
+        _ => (None, None, parts.into_iter().last().unwrap_or_default()),
+    }
 }
 
 // ── SELECT conversion ──────────────────────────────────────────────────────────
@@ -998,7 +1171,7 @@ fn convert_select(
                 left: Box::new(acc),
                 right: Box::new(r),
                 join_type: JoinType::Cross,
-                condition: None,
+                filter_by: None,
             };
         }
         Some(acc)
@@ -1097,12 +1270,12 @@ fn convert_table_with_joins(twj: sp::TableWithJoins) -> Result<TableReference, A
     let mut result = convert_table_factor(twj.relation)?;
     for join in twj.joins {
         let right = convert_table_factor(join.relation)?;
-        let (join_type, condition) = convert_join_operator(join.join_operator)?;
+        let (join_type, filter_by) = convert_join_operator(join.join_operator)?;
         result = TableReference::Join {
             left: Box::new(result),
             right: Box::new(right),
             join_type,
-            condition,
+            filter_by,
         };
     }
     Ok(result)
@@ -1110,10 +1283,15 @@ fn convert_table_with_joins(twj: sp::TableWithJoins) -> Result<TableReference, A
 
 fn convert_table_factor(factor: sp::TableFactor) -> Result<TableReference, AstError> {
     match factor {
-        sp::TableFactor::Table { name, alias, .. } => Ok(TableReference::Named {
-            name: object_name_to_string(&name),
-            alias: alias.map(|a| ident_to_string(&a.name)),
-        }),
+        sp::TableFactor::Table { name, alias, .. } => {
+            let (database, schema, table_name) = parse_qualified_name(&name);
+            Ok(TableReference::Named {
+                database,
+                schema,
+                name: table_name,
+                alias: alias.map(|a| ident_to_string(&a.name)),
+            })
+        }
         sp::TableFactor::Derived {
             subquery, alias, ..
         } => {
@@ -1650,7 +1828,7 @@ fn convert_delete(delete: sp::Delete) -> Result<Statement, AstError> {
 // ── CREATE TABLE conversion ────────────────────────────────────────────────────
 
 fn convert_create_table(ct: sp::CreateTable) -> Result<Statement, AstError> {
-    let table = object_name_to_string(&ct.name);
+    let (database, schema, table) = parse_qualified_name(&ct.name);
     let columns = ct
         .columns
         .into_iter()
@@ -1673,6 +1851,8 @@ fn convert_create_table(ct: sp::CreateTable) -> Result<Statement, AstError> {
         .map(convert_table_constraint)
         .collect::<Result<Vec<_>, _>>()?;
     Ok(Statement::CreateTable(CreateTableStatement {
+        database,
+        schema,
         table,
         columns,
         if_not_exists: ct.if_not_exists,
@@ -1681,6 +1861,7 @@ fn convert_create_table(ct: sp::CreateTable) -> Result<Statement, AstError> {
         on_commit,
         constraints,
         versioned: false,
+        flat: false,
     }))
 }
 
@@ -1744,8 +1925,8 @@ fn convert_table_constraint(c: sp::TableConstraint) -> Result<TableConstraint, A
                 .columns
                 .iter()
                 .map(|c| match &c.column.expr {
-                    sp::Expr::Identifier(ident) => ident.value.clone(),
-                    other => other.to_string(),
+                    sp::Expr::Identifier(ident) => ident.value.to_lowercase(),
+                    other => other.to_string().to_lowercase(),
                 })
                 .collect();
             Ok(TableConstraint::PrimaryKey { name, columns })
@@ -1756,28 +1937,18 @@ fn convert_table_constraint(c: sp::TableConstraint) -> Result<TableConstraint, A
                 .columns
                 .iter()
                 .map(|c| match &c.column.expr {
-                    sp::Expr::Identifier(ident) => ident.value.clone(),
-                    other => other.to_string(),
+                    sp::Expr::Identifier(ident) => ident.value.to_lowercase(),
+                    other => other.to_string().to_lowercase(),
                 })
                 .collect();
             Ok(TableConstraint::Unique { name, columns })
         }
-        sp::TableConstraint::ForeignKey(fk) => {
-            let name = fk.name.as_ref().map(ident_to_string);
-            let columns = fk.columns.iter().map(|i| i.value.clone()).collect();
-            let foreign_table = object_name_to_string(&fk.foreign_table);
-            let referred_columns = fk
-                .referred_columns
-                .iter()
-                .map(|i| i.value.clone())
-                .collect();
-            Ok(TableConstraint::ForeignKey {
-                name,
-                columns,
-                foreign_table,
-                referred_columns,
-            })
-        }
+        sp::TableConstraint::ForeignKey(_) => Err(AstError::Invalid(
+            "FOREIGN KEY constraints are not supported in AeternumDB; \
+             use reference column types (e.g. `col_name table_name`) to express \
+             relationships — they are resolved via objid at execution time"
+                .to_string(),
+        )),
         sp::TableConstraint::Check(cc) => {
             let name = cc.name.as_ref().map(ident_to_string);
             Ok(TableConstraint::Check {
@@ -1817,6 +1988,35 @@ fn convert_drop(
             let user_names = names.iter().map(object_name_to_string).collect();
             Ok(Statement::DropUser(DropUserStatement {
                 names: user_names,
+                if_exists,
+            }))
+        }
+        sp::ObjectType::Database => {
+            let name = names
+                .iter()
+                .map(object_name_to_string)
+                .next()
+                .unwrap_or_default();
+            Ok(Statement::DropDatabase(DropDatabaseStatement {
+                name,
+                if_exists,
+            }))
+        }
+        sp::ObjectType::Schema => {
+            let (database, schema_name) = if let Some(n) = names.first() {
+                let full = object_name_to_string(n);
+                let mut parts = full.splitn(2, '.').collect::<Vec<_>>();
+                if parts.len() == 2 {
+                    (Some(parts[0].to_string()), parts[1].to_string())
+                } else {
+                    (None, parts.remove(0).to_string())
+                }
+            } else {
+                (None, String::new())
+            };
+            Ok(Statement::DropSchema(DropSchemaStatement {
+                database,
+                name: schema_name,
                 if_exists,
             }))
         }
@@ -1860,7 +2060,12 @@ fn convert_alter_operation(op: sp::AlterTableOperation) -> Result<AlterTableOper
                 ));
             }
 
-            let name = column_names.into_iter().next().unwrap().value;
+            let name = column_names
+                .into_iter()
+                .next()
+                .unwrap()
+                .value
+                .to_lowercase();
             Ok(AlterTableOperation::DropColumn { name, if_exists })
         }
         sp::AlterTableOperation::RenameColumn {

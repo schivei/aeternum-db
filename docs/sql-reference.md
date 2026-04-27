@@ -9,15 +9,23 @@ implementation is based on **SQL-92** with a subset of common SQL extensions.
 
 1. [Data Types](#data-types)
 2. [Identifier Quoting](#identifier-quoting)
-3. [System Identifier (objid)](#system-identifier-objid)
-4. [Operators](#operators)
-5. [Functions](#functions)
-6. [Statements](#statements)
+3. [Case Insensitivity](#case-insensitivity)
+4. [Databases and Schemas](#databases-and-schemas)
+5. [System Identifier (objid)](#system-identifier-objid)
+6. [Operators](#operators)
+7. [Functions](#functions)
+8. [Statements](#statements)
    - [SELECT](#select)
    - [INSERT](#insert)
    - [UPDATE](#update)
    - [DELETE](#delete)
+   - [CREATE DATABASE](#create-database)
+   - [DROP DATABASE](#drop-database)
+   - [USE DATABASE](#use-database)
+   - [CREATE SCHEMA](#create-schema)
+   - [DROP SCHEMA](#drop-schema)
    - [CREATE TABLE](#create-table)
+   - [CREATE FLAT TABLE](#create-flat-table)
    - [CREATE TEMPORARY TABLE](#create-temporary-table)
    - [CREATE MATERIALIZED VIEW](#create-materialized-view)
    - [DROP TABLE](#drop-table)
@@ -28,14 +36,16 @@ implementation is based on **SQL-92** with a subset of common SQL extensions.
    - [DROP USER](#drop-user)
    - [CREATE TYPE](#create-type)
    - [GRANT / REVOKE](#grant--revoke)
-7. [Transaction Control](#transaction-control)
-8. [Column Extensions](#column-extensions)
-   - [Text Directive (Multilingual)](#text-directive-multilingual)
-   - [Terms Directives](#terms-directives)
-   - [Vector Columns](#vector-columns)
-   - [Versioned / Temporal Tables](#versioned--temporal-tables)
-9. [Expressions](#expressions)
-10. [Limitations and Future Enhancements](#limitations-and-future-enhancements)
+9. [Transaction Control](#transaction-control)
+10. [Column Extensions](#column-extensions)
+    - [Text Directive (Multilingual)](#text-directive-multilingual)
+    - [Terms Directives](#terms-directives)
+    - [Vector Columns](#vector-columns)
+    - [Reference Column Types](#reference-column-types)
+    - [Versioned / Temporal Tables](#versioned--temporal-tables)
+11. [Joins and FILTER BY](#joins-and-filter-by)
+12. [Expressions](#expressions)
+13. [Limitations and Future Enhancements](#limitations-and-future-enhancements)
 
 ---
 
@@ -235,6 +245,116 @@ conflict with a SQL keyword.
 
 ---
 
+## Case Insensitivity
+
+**All SQL keywords and identifiers are case-insensitive in AeternumDB.**
+
+```sql
+-- All of the following are equivalent:
+SELECT id FROM users;
+select id from users;
+SELECT ID FROM USERS;
+Select Id From Users;
+```
+
+Identifiers (table names, column names, schema names, aliases) are **normalized
+to lowercase** during parsing.  This means that whether you write `Users`,
+`USERS`, or `users`, the engine stores and looks up the name as `users`.
+String *literals* (`'Hello World'`) preserve their original casing.
+
+> **Tip**: For maximum clarity and portability, use lowercase identifiers and
+> uppercase SQL keywords in your SQL source.
+
+---
+
+## Databases and Schemas
+
+AeternumDB supports a two-level namespace below the connection: **databases**
+contain **schemas**, and schemas contain **tables**.
+
+### Multi-Database Architecture
+
+A running AeternumDB cluster can host multiple databases.  Each database is an
+independent unit of storage and access control.
+
+- **Cross-database joins are not supported.**  All tables referenced in a
+  single query must belong to the same database.
+- The active database for a connection is set with `USE [DATABASE] name`.
+- Fully qualified names have the form `database.schema.table`.
+
+### Schemas
+
+A schema is a namespace that groups related tables within a database.
+Cross-schema joins **are** supported within the same database.
+
+| Schema name         | Purpose                                         |
+|---------------------|-------------------------------------------------|
+| `app`               | **Default application schema** (used when no schema is specified) |
+| `sys`               | System metadata and internal catalog tables (reserved) |
+| `information_schema`| SQL-standard information schema views (reserved) |
+| `pg_catalog`        | Reserved for future compatibility views         |
+
+> **Note**: Reserved schemas (`sys`, `information_schema`, `pg_catalog`) cannot
+> be created or dropped by users.  Enforcement is a future execution-layer task.
+
+### Three-Part Identifier Syntax
+
+```sql
+-- Unqualified: uses the active database and default schema (app)
+SELECT * FROM orders;
+
+-- Schema-qualified: explicit schema in the active database
+SELECT * FROM reporting.sales;
+
+-- Fully qualified: explicit database, schema, and table
+SELECT * FROM myapp.reporting.sales;
+```
+
+### CREATE DATABASE
+
+```sql
+CREATE DATABASE [IF NOT EXISTS] database_name;
+```
+
+Creates a new database.  Reserved database names are `sys` and `aeternumdb`.
+
+### DROP DATABASE
+
+```sql
+DROP DATABASE [IF EXISTS] database_name;
+```
+
+Drops a database and all objects it contains.
+
+### USE DATABASE
+
+```sql
+USE [DATABASE] database_name;
+USE database_name;
+```
+
+Switches the active database for the current connection.  Cross-database joins
+are not allowed; all tables in a query must reside in the active database.
+
+### CREATE SCHEMA
+
+```sql
+CREATE SCHEMA [IF NOT EXISTS] [database_name.]schema_name;
+```
+
+Creates a new schema in the specified (or active) database.  Reserved schema
+names (`sys`, `information_schema`, `pg_catalog`) cannot be used.
+
+### DROP SCHEMA
+
+```sql
+DROP SCHEMA [IF EXISTS] [database_name.]schema_name;
+```
+
+Drops a schema and all tables it contains.
+
+---
+
 ## Operators
 
 ### Arithmetic
@@ -365,15 +485,39 @@ SELECT DISTINCT age FROM users;
 
 #### JOIN
 
+AeternumDB joins are driven by **reference column types** — the relationship
+is encoded in the schema and resolved via `objid` at execution time, so no
+explicit `ON` clause is required.  Use `FILTER BY` to add optional additional
+predicates.
+
+> **Cross-database joins are not supported.**  All tables in a query must
+> belong to the same database.  Cross-schema joins within the same database
+> are fully supported.
+
 ```sql
+-- Join via reference column types (preferred AeternumDB style)
+SELECT u.name, o.total
+FROM users u
+INNER JOIN orders o
+[FILTER BY o.total > 100];
+
+-- Legacy ON syntax is accepted and mapped to FILTER BY internally
 SELECT u.name, o.total
 FROM users u
 INNER JOIN orders o ON u.id = o.user_id
 WHERE o.total > 100;
+
+-- Schema-qualified tables
+SELECT a.name, b.amount
+FROM app.accounts a
+LEFT JOIN reporting.transactions b;
 ```
 
 Supported JOIN types: `INNER JOIN`, `LEFT JOIN`, `LEFT OUTER JOIN`,
 `RIGHT JOIN`, `RIGHT OUTER JOIN`, `FULL OUTER JOIN`, `CROSS JOIN`.
+
+> **Note**: `NATURAL JOIN` and `USING` joins are not supported.
+> `FLAT` tables cannot participate in JOINs.
 
 #### Subqueries
 
@@ -451,14 +595,18 @@ DELETE FROM users;
 ### CREATE TABLE
 
 ```sql
-CREATE [IF NOT EXISTS] TABLE table_name (
+CREATE [IF NOT EXISTS] TABLE [[database.]schema.]table_name (
     column_name data_type [NOT NULL | NULL] [PRIMARY KEY] [UNIQUE]
                           [DEFAULT expr] [AUTO_INCREMENT]
                           [MIN_LENGTH n] [MAX_LENGTH n] [UNIQUES],
     ...
 )
 [INHERITS (parent_table [, ...])]
+[VERSIONED]
 ```
+
+Schema and database qualifiers default to `app` and the active database
+respectively when omitted.
 
 **Full-featured example with reference types and inheritance:**
 
@@ -476,7 +624,7 @@ CREATE TABLE employee (
 ) INHERITS (person);
 ```
 
-**Example with reference types:**
+**Example with reference types (instead of FOREIGN KEY):**
 
 ```sql
 CREATE TABLE sample2 (
@@ -484,6 +632,45 @@ CREATE TABLE sample2 (
   `master`   sample1  NOT NULL,
   `parent`   sample2  NULL,
   `children` ~[sample2](parent) MIN_LENGTH 0
+);
+```
+
+---
+
+### CREATE FLAT TABLE
+
+A **FLAT** table is a write-optimised, schema-simple table intended for
+high-throughput sequential reads (event logs, metrics, audit trails, etc.).
+
+```sql
+CREATE [IF NOT EXISTS] FLAT TABLE [[database.]schema.]table_name (
+    column_name data_type [NOT NULL | NULL] [DEFAULT expr],
+    ...
+);
+```
+
+**Restrictions** — a FLAT table:
+
+- Does **not** support JOINs or the `FILTER BY` clause.
+- Does **not** support reference column types (`table_name`, `[table_name]`,
+  `~table_name(col)`).
+- Does **not** support `VERSIONED` / temporal row history.
+- Does **not** support `INHERITS`.
+- Does **not** carry an `objid` — rows are addressed by physical position only.
+
+> **Note**: The `FLAT` keyword is an AeternumDB extension.  The current parser
+> represents the flag as `CreateTableStatement::flat: bool`; the `FLAT`
+> keyword is not yet parsed directly from standard SQL — it is set
+> programmatically at the execution layer.  Full SQL syntax support is planned
+> for a future phase.
+
+**Example:**
+
+```sql
+CREATE FLAT TABLE metrics (
+  recorded_at TIMESTAMP NOT NULL,
+  sensor_id   INTEGER   NOT NULL,
+  value       FLOAT     NOT NULL
 );
 ```
 
@@ -642,7 +829,12 @@ DROP INDEX IF EXISTS idx_users_email ON users;
 
 ### Table-Level Constraints
 
-Constraints can be declared at the table level to support composite keys and cross-column rules:
+Constraints can be declared at the table level to support composite keys and cross-column rules.
+
+> **Note**: `FOREIGN KEY` constraints are **not supported** in AeternumDB.
+> Use [reference column types](#reference-column-types) instead.
+> Relationships are resolved via `objid` at execution time, which is more
+> consistent across distributed nodes than traditional FK constraints.
 
 ```sql
 CREATE TABLE order_items (
@@ -657,14 +849,22 @@ CREATE TABLE order_items (
   -- Composite unique constraint
   UNIQUE (order_id, product_id),
 
-  -- Foreign key constraints
-  FOREIGN KEY (order_id)   REFERENCES orders  (id),
-  FOREIGN KEY (product_id) REFERENCES products(id),
-
   -- CHECK constraint
   CHECK (quantity > 0),
   CHECK (price >= 0)
 );
+```
+
+If you need to model a foreign-key style relationship, use a reference column type:
+
+```sql
+CREATE TABLE order_items (
+  id         INTEGER  PRIMARY KEY AUTO_INCREMENT,
+  order_ref  orders   NOT NULL,    -- reference to orders table (resolved via objid)
+  product_ref products NOT NULL,   -- reference to products table
+  quantity   INTEGER  NOT NULL CHECK (quantity > 0)
+);
+```
 ```
 
 ### Column-Level CHECK Constraint
@@ -913,6 +1113,60 @@ WHERE objid = '01920e3b-…';
 
 ---
 
+---
+
+## Joins and FILTER BY
+
+### How Joins Work in AeternumDB
+
+AeternumDB joins are **schema-driven**, not condition-driven.  When you define
+a column with a reference type (e.g. `orders orders_ref`), the engine already
+knows the relationship: rows are linked via `objid`.  A JOIN over such columns
+requires no explicit `ON` clause.
+
+Use `FILTER BY` to add an **optional extra predicate** that further narrows the
+join result — analogous to SQL's `ON` condition but semantically distinct:
+
+```sql
+-- Join without filter (full cross-reference result)
+SELECT u.name, o.total
+FROM users u
+INNER JOIN orders o;
+
+-- Join with FILTER BY (restrict to orders above a threshold)
+SELECT u.name, o.total
+FROM users u
+INNER JOIN orders o
+FILTER BY o.total > 100;
+```
+
+### Backwards Compatibility
+
+The standard SQL `ON` clause is accepted and internally mapped to `FILTER BY`
+so that existing SQL still parses:
+
+```sql
+-- This is parsed identically to the FILTER BY form above
+SELECT u.name, o.total
+FROM users u
+INNER JOIN orders o ON u.id = o.user_id;
+```
+
+### Cross-Database vs. Cross-Schema
+
+| Scope           | Joins supported? |
+|-----------------|-----------------|
+| Same schema     | ✅ Yes |
+| Cross-schema    | ✅ Yes (same database) |
+| Cross-database  | ❌ No — connection-level routing only |
+
+### FLAT Tables and Joins
+
+`FLAT` tables **cannot participate in JOINs**.  Attempting to join a FLAT table
+at execution time will raise an error.
+
+---
+
 ## Expressions
 
 ### Literals
@@ -974,12 +1228,20 @@ The following SQL features are **not yet supported** or are **partially implemen
 | `ON CONFLICT` / `UPSERT`                    | Phase 3                          |
 | `PIVOT` / `UNPIVOT`                         | Phase 6                          |
 | COUNT optimization (index metadata)         | Future optimization              |
+| `CREATE DATABASE` / `DROP DATABASE` execution | Future execution layer         |
+| `CREATE SCHEMA` / `DROP SCHEMA` execution  | Future execution layer           |
+| `USE DATABASE` connection routing           | Future execution layer           |
+| Reserved schema enforcement (`sys`, etc.)  | Future execution layer           |
+| `FLAT` keyword in SQL (`CREATE FLAT TABLE`)| Phase 4 (parsed programmatically now) |
+| `FILTER BY` keyword in SQL JOIN             | Phase 4 (ON mapped to filter_by now)  |
+| FLAT table join enforcement                 | Future execution layer           |
+| Cross-database join rejection               | Future execution layer           |
 
 ### Known Dialect Edge Cases
 
-- **Case sensitivity**: SQL keywords are case-insensitive; table and column
-  identifiers are currently matched case-insensitively by the
-  catalog/validator logic.
+- **Case insensitivity**: All SQL keywords and identifiers are fully
+  case-insensitive.  Identifiers are normalized to lowercase during parsing.
+  String *literals* preserve their original casing.
 - **Quoted identifiers**: Backticks (`` `name` ``) or double-quotes (`"name"`)
   allow reserved words as identifiers.
 - **Comments**: Both `-- single-line` and `/* block */` comments are
@@ -989,6 +1251,8 @@ The following SQL features are **not yet supported** or are **partially implemen
 - **UNSIGNED floats/decimals**: `FLOAT UNSIGNED`, `DOUBLE UNSIGNED`, and
   `DECIMAL UNSIGNED` are rejected with a helpful error.  Use a `CHECK` constraint
   to enforce non-negative values.
+- **FOREIGN KEY**: `FOREIGN KEY` table constraints are **not supported**.
+  Use reference column types to model relationships.
 
 ---
 

@@ -1366,29 +1366,17 @@ fn test_table_check_constraint() {
 }
 
 #[test]
-fn test_foreign_key_constraint() {
-    use aeternumdb_core::sql::ast::TableConstraint;
-    let stmt = parser()
+fn test_foreign_key_constraint_rejected() {
+    // FOREIGN KEY constraints are not supported in AeternumDB.
+    // Use reference column types to express relationships instead.
+    let err = parser()
         .parse_one("CREATE TABLE orders (id INTEGER, user_id INTEGER, FOREIGN KEY (user_id) REFERENCES users (id))")
-        .unwrap();
-    let ct = match stmt {
-        Statement::CreateTable(ct) => ct,
-        _ => panic!("expected CreateTable"),
-    };
-    let fk = ct
-        .constraints
-        .iter()
-        .find(|c| matches!(c, TableConstraint::ForeignKey { .. }));
-    assert!(fk.is_some());
-    if let Some(TableConstraint::ForeignKey {
-        foreign_table,
-        referred_columns,
-        ..
-    }) = fk
-    {
-        assert_eq!(foreign_table, "users");
-        assert_eq!(referred_columns, &["id".to_string()]);
-    }
+        .unwrap_err();
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("FOREIGN KEY") || msg.contains("foreign key"),
+        "expected FK rejection message, got: {msg}"
+    );
 }
 
 // ── User management scaffolding ────────────────────────────────────────────
@@ -1412,4 +1400,241 @@ fn test_vector_type_via_array() {
     use aeternumdb_core::sql::ast::DataType;
     let vt = DataType::Vector(Box::new(DataType::Integer));
     assert_eq!(vt.to_string(), "[INTEGER]");
+}
+
+// ── Case insensitivity ─────────────────────────────────────────────────────
+
+#[test]
+fn test_keyword_case_insensitive() {
+    // SQL keywords in any case must parse identically.
+    let lower = parser().parse_one("select id from users").unwrap();
+    let upper = parser().parse_one("SELECT ID FROM USERS").unwrap();
+    let mixed = parser().parse_one("Select Id From Users").unwrap();
+    assert_eq!(lower, upper);
+    assert_eq!(lower, mixed);
+}
+
+#[test]
+fn test_identifier_names_lowercased() {
+    // All identifiers (table, column, alias) must be normalized to lowercase.
+    let stmt = parser()
+        .parse_one("SELECT UserId AS UID FROM MyTable MT")
+        .unwrap();
+    let sel = match stmt {
+        Statement::Select(s) => s,
+        _ => panic!("expected Select"),
+    };
+    // Table name and alias must be lowercase.
+    assert!(matches!(
+        &sel.from,
+        Some(aeternumdb_core::sql::ast::TableReference::Named {
+            name,
+            alias: Some(alias),
+            ..
+        }) if name == "mytable" && alias == "mt"
+    ));
+    // Column alias must be lowercase.
+    match &sel.columns[0] {
+        SelectItem::Expr { alias: Some(a), .. } => assert_eq!(a, "uid"),
+        other => panic!("unexpected select item: {other:?}"),
+    }
+}
+
+#[test]
+fn test_create_table_name_lowercased() {
+    let stmt = parser()
+        .parse_one("CREATE TABLE MySchema.MyTable (id INTEGER PRIMARY KEY)")
+        .unwrap();
+    let ct = match stmt {
+        Statement::CreateTable(ct) => ct,
+        _ => panic!("expected CreateTable"),
+    };
+    assert_eq!(ct.table, "mytable");
+    assert_eq!(ct.schema, Some("myschema".to_string()));
+}
+
+// ── Schema-qualified identifiers ───────────────────────────────────────────
+
+#[test]
+fn test_select_schema_qualified_table() {
+    let stmt = parser().parse_one("SELECT id FROM app.users").unwrap();
+    let sel = match stmt {
+        Statement::Select(s) => s,
+        _ => panic!("expected Select"),
+    };
+    assert!(matches!(
+        &sel.from,
+        Some(aeternumdb_core::sql::ast::TableReference::Named {
+            schema: Some(schema),
+            name,
+            ..
+        }) if schema == "app" && name == "users"
+    ));
+}
+
+#[test]
+fn test_select_database_schema_qualified_table() {
+    let stmt = parser().parse_one("SELECT id FROM mydb.app.users").unwrap();
+    let sel = match stmt {
+        Statement::Select(s) => s,
+        _ => panic!("expected Select"),
+    };
+    assert!(matches!(
+        &sel.from,
+        Some(aeternumdb_core::sql::ast::TableReference::Named {
+            database: Some(db),
+            schema: Some(schema),
+            name,
+            ..
+        }) if db == "mydb" && schema == "app" && name == "users"
+    ));
+}
+
+// ── FLAT tables ────────────────────────────────────────────────────────────
+
+#[test]
+fn test_create_flat_table_flat_flag_defaults_false() {
+    // FLAT keyword is an AeternumDB extension not yet representable via
+    // sqlparser's standard CREATE TABLE.  Creating a table without the flag
+    // must leave flat = false.
+    let stmt = parser()
+        .parse_one("CREATE TABLE metrics (ts TIMESTAMP, val FLOAT)")
+        .unwrap();
+    let ct = match stmt {
+        Statement::CreateTable(ct) => ct,
+        _ => panic!("expected CreateTable"),
+    };
+    assert!(!ct.flat);
+    assert!(!ct.versioned);
+}
+
+// ── Database and Schema DDL ────────────────────────────────────────────────
+
+#[test]
+fn test_create_database() {
+    let stmt = parser().parse_one("CREATE DATABASE myapp").unwrap();
+    let cd = match stmt {
+        Statement::CreateDatabase(cd) => cd,
+        _ => panic!("expected CreateDatabase"),
+    };
+    assert_eq!(cd.name, "myapp");
+    assert!(!cd.if_not_exists);
+}
+
+#[test]
+fn test_create_database_if_not_exists() {
+    let stmt = parser()
+        .parse_one("CREATE DATABASE IF NOT EXISTS myapp")
+        .unwrap();
+    let cd = match stmt {
+        Statement::CreateDatabase(cd) => cd,
+        _ => panic!("expected CreateDatabase"),
+    };
+    assert!(cd.if_not_exists);
+}
+
+#[test]
+fn test_drop_database() {
+    let stmt = parser().parse_one("DROP DATABASE myapp").unwrap();
+    let dd = match stmt {
+        Statement::DropDatabase(dd) => dd,
+        _ => panic!("expected DropDatabase"),
+    };
+    assert_eq!(dd.name, "myapp");
+    assert!(!dd.if_exists);
+}
+
+#[test]
+fn test_drop_database_if_exists() {
+    let stmt = parser().parse_one("DROP DATABASE IF EXISTS myapp").unwrap();
+    let dd = match stmt {
+        Statement::DropDatabase(dd) => dd,
+        _ => panic!("expected DropDatabase"),
+    };
+    assert!(dd.if_exists);
+}
+
+#[test]
+fn test_use_database() {
+    let stmt = parser().parse_one("USE myapp").unwrap();
+    let ud = match stmt {
+        Statement::UseDatabase(ud) => ud,
+        _ => panic!("expected UseDatabase"),
+    };
+    assert_eq!(ud.name, "myapp");
+}
+
+#[test]
+fn test_create_schema() {
+    let stmt = parser().parse_one("CREATE SCHEMA reporting").unwrap();
+    let cs = match stmt {
+        Statement::CreateSchema(cs) => cs,
+        _ => panic!("expected CreateSchema"),
+    };
+    assert_eq!(cs.name, "reporting");
+    assert_eq!(cs.database, None);
+    assert!(!cs.if_not_exists);
+}
+
+#[test]
+fn test_create_schema_qualified() {
+    let stmt = parser().parse_one("CREATE SCHEMA mydb.reporting").unwrap();
+    let cs = match stmt {
+        Statement::CreateSchema(cs) => cs,
+        _ => panic!("expected CreateSchema"),
+    };
+    assert_eq!(cs.name, "reporting");
+    assert_eq!(cs.database, Some("mydb".to_string()));
+}
+
+#[test]
+fn test_drop_schema() {
+    let stmt = parser().parse_one("DROP SCHEMA reporting").unwrap();
+    let ds = match stmt {
+        Statement::DropSchema(ds) => ds,
+        _ => panic!("expected DropSchema"),
+    };
+    assert_eq!(ds.name, "reporting");
+    assert!(!ds.if_exists);
+}
+
+// ── FILTER BY in JOINs ────────────────────────────────────────────────────
+
+#[test]
+fn test_join_filter_by_field_name() {
+    // Ensure the join uses filter_by field (not condition).
+    let stmt = parser()
+        .parse_one("SELECT u.id, o.total FROM users u INNER JOIN orders o ON u.id = o.user_id")
+        .unwrap();
+    let sel = match stmt {
+        Statement::Select(s) => s,
+        _ => panic!("expected Select"),
+    };
+    // The join's ON clause is mapped to filter_by.
+    assert!(matches!(
+        &sel.from,
+        Some(aeternumdb_core::sql::ast::TableReference::Join {
+            filter_by: Some(_),
+            ..
+        })
+    ));
+}
+
+#[test]
+fn test_cross_join_no_filter() {
+    let stmt = parser()
+        .parse_one("SELECT a.id, b.id FROM tableA a CROSS JOIN tableB b")
+        .unwrap();
+    let sel = match stmt {
+        Statement::Select(s) => s,
+        _ => panic!("expected Select"),
+    };
+    assert!(matches!(
+        &sel.from,
+        Some(aeternumdb_core::sql::ast::TableReference::Join {
+            join_type: aeternumdb_core::sql::ast::JoinType::Cross,
+            filter_by: None,
+            ..
+        })
+    ));
 }
