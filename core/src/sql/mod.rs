@@ -59,6 +59,6 @@ pub mod parser;
 pub mod validator;
 
 // Convenience re-exports of the most frequently used types.
-pub use ast::Statement;
+pub use ast::{CommitScope, RollbackScope, Statement};
 pub use parser::{SqlError, SqlParser};
 pub use validator::{Catalog, ValidationError, Validator};

@@ -730,30 +730,96 @@ pub enum IsolationLevel {
     Serializable,
 }
 
+/// Scope for a `COMMIT` in a nested-transaction stack.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CommitScope {
+    /// Commit only the current (innermost) open transaction.
+    ///
+    /// This is the default when no explicit scope is given (`COMMIT`).
+    /// If nested transactions exist the outermost transaction remains open;
+    /// the inner nesting level is collapsed.
+    Current,
+    /// Commit a specific named transaction and every transaction nested
+    /// inside it, up to and including that level.
+    ///
+    /// Syntax: `COMMIT TRANSACTION <name>` (AeternumDB extension).
+    Named(String),
+    /// Commit *all* open transactions in the nesting stack at once —
+    /// equivalent to issuing `COMMIT` at every nesting level in sequence.
+    ///
+    /// Syntax: `COMMIT ALL` (AeternumDB extension).
+    All,
+}
+
+/// Scope for a `ROLLBACK` in a nested-transaction stack.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RollbackScope {
+    /// Roll back only the current (innermost) open transaction.
+    ///
+    /// This is the default when no explicit scope is given (`ROLLBACK`).
+    Current,
+    /// Roll back to a named savepoint within the current transaction.
+    ///
+    /// Syntax: `ROLLBACK TO [SAVEPOINT] <name>`.
+    ToSavepoint(String),
+    /// Roll back a specific named nested transaction and everything inside
+    /// it, then resume at the level just above that transaction.
+    ///
+    /// Syntax: `ROLLBACK TRANSACTION <name>` (AeternumDB extension).
+    Named(String),
+    /// Roll back *all* open transactions in the nesting stack at once —
+    /// equivalent to issuing `ROLLBACK` at every nesting level in sequence.
+    ///
+    /// Syntax: `ROLLBACK ALL` (AeternumDB extension).
+    All,
+}
+
 /// `BEGIN TRANSACTION` / `START TRANSACTION` statement.
+///
+/// Issuing `BEGIN` while a transaction is already open starts a **nested**
+/// transaction. The execution layer assigns an auto-generated savepoint name
+/// unless an explicit `name` is provided.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BeginTransactionStatement {
+    /// Optional name for this transaction level.
+    ///
+    /// Syntax: `BEGIN TRANSACTION <name>` (AeternumDB extension — requires
+    /// Phase 4 custom SQL grammar; parsed programmatically for now).
+    pub name: Option<String>,
     pub isolation_level: Option<IsolationLevel>,
     pub read_only: bool,
 }
 
-/// `COMMIT` statement.
+/// `COMMIT` / `COMMIT TRANSACTION` / `COMMIT ALL` statement.
 #[derive(Debug, Clone, PartialEq)]
-pub struct CommitStatement;
-
-/// `ROLLBACK` statement.
-#[derive(Debug, Clone, PartialEq)]
-pub struct RollbackStatement {
-    pub savepoint: Option<String>,
+pub struct CommitStatement {
+    /// Which nesting level(s) to commit.
+    pub scope: CommitScope,
+    /// `true` when `AND CHAIN` was present — immediately starts a new
+    /// transaction with the same isolation level after the commit.
+    pub chain: bool,
 }
 
-/// `SAVEPOINT` statement.
+/// `ROLLBACK` / `ROLLBACK TO SAVEPOINT` / `ROLLBACK TRANSACTION` / `ROLLBACK ALL`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RollbackStatement {
+    /// Which nesting level(s) to roll back.
+    pub scope: RollbackScope,
+    /// `true` when `AND CHAIN` was present — immediately starts a new
+    /// transaction with the same isolation level after the rollback.
+    pub chain: bool,
+}
+
+/// `SAVEPOINT <name>` statement.
+///
+/// Creates a named savepoint within the current transaction.
+/// Savepoints work at the innermost open transaction level.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SavepointStatement {
     pub name: String,
 }
 
-/// `RELEASE SAVEPOINT` statement.
+/// `RELEASE SAVEPOINT <name>` statement.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ReleaseSavepointStatement {
     pub name: String,
@@ -944,15 +1010,21 @@ impl TryFrom<sp::Statement> for Statement {
                     )
                 });
                 Ok(Statement::BeginTransaction(BeginTransactionStatement {
+                    name: None, // named BEGIN requires AeternumDB custom grammar (Phase 4)
                     isolation_level,
                     read_only,
                 }))
             }
-            sp::Statement::Commit { .. } => Ok(Statement::Commit(CommitStatement)),
-            sp::Statement::Rollback { savepoint, .. } => {
-                Ok(Statement::Rollback(RollbackStatement {
-                    savepoint: savepoint.as_ref().map(|i| i.value.clone()),
-                }))
+            sp::Statement::Commit { chain, .. } => Ok(Statement::Commit(CommitStatement {
+                scope: CommitScope::Current,
+                chain,
+            })),
+            sp::Statement::Rollback { chain, savepoint } => {
+                let scope = match savepoint {
+                    Some(sp) => RollbackScope::ToSavepoint(sp.value.to_lowercase()),
+                    None => RollbackScope::Current,
+                };
+                Ok(Statement::Rollback(RollbackStatement { scope, chain }))
             }
             sp::Statement::Savepoint { name } => Ok(Statement::Savepoint(SavepointStatement {
                 name: ident_to_string(&name),

@@ -1109,25 +1109,67 @@ fn test_new_data_types() {
 
 #[test]
 fn test_transaction_parsing() {
+    use aeternumdb_core::sql::ast::{CommitScope, RollbackScope};
+
     // BEGIN TRANSACTION
     let stmt = parser().parse_one("BEGIN TRANSACTION").unwrap();
     assert!(matches!(
         stmt,
         Statement::BeginTransaction(BeginTransactionStatement {
+            name: None,
             isolation_level: None,
             read_only: false
         })
     ));
 
-    // COMMIT
+    // COMMIT  →  scope = Current, chain = false
     let stmt = parser().parse_one("COMMIT").unwrap();
-    assert!(matches!(stmt, Statement::Commit(CommitStatement)));
+    assert!(matches!(
+        stmt,
+        Statement::Commit(CommitStatement {
+            scope: CommitScope::Current,
+            chain: false
+        })
+    ));
 
-    // ROLLBACK
+    // COMMIT AND CHAIN  →  chain = true
+    let stmt = parser().parse_one("COMMIT AND CHAIN").unwrap();
+    assert!(matches!(
+        stmt,
+        Statement::Commit(CommitStatement {
+            scope: CommitScope::Current,
+            chain: true
+        })
+    ));
+
+    // ROLLBACK  →  scope = Current, chain = false
     let stmt = parser().parse_one("ROLLBACK").unwrap();
     assert!(matches!(
         stmt,
-        Statement::Rollback(RollbackStatement { savepoint: None })
+        Statement::Rollback(RollbackStatement {
+            scope: RollbackScope::Current,
+            chain: false
+        })
+    ));
+
+    // ROLLBACK AND CHAIN  →  chain = true
+    let stmt = parser().parse_one("ROLLBACK AND CHAIN").unwrap();
+    assert!(matches!(
+        stmt,
+        Statement::Rollback(RollbackStatement {
+            scope: RollbackScope::Current,
+            chain: true
+        })
+    ));
+
+    // ROLLBACK TO SAVEPOINT sp1  →  scope = ToSavepoint
+    let stmt = parser().parse_one("ROLLBACK TO SAVEPOINT sp1").unwrap();
+    assert!(matches!(
+        stmt,
+        Statement::Rollback(RollbackStatement {
+            scope: RollbackScope::ToSavepoint(ref n),
+            chain: false
+        }) if n == "sp1"
     ));
 
     // SAVEPOINT
@@ -1172,6 +1214,7 @@ fn test_transaction_isolation_levels() {
         let stmt = parser().parse_one(sql).unwrap();
         match stmt {
             Statement::BeginTransaction(BeginTransactionStatement {
+                name: _,
                 isolation_level,
                 read_only,
             }) => {
@@ -1188,6 +1231,7 @@ fn test_transaction_read_only() {
     let stmt = parser().parse_one("START TRANSACTION READ ONLY").unwrap();
     match stmt {
         Statement::BeginTransaction(BeginTransactionStatement {
+            name: _,
             isolation_level,
             read_only,
         }) => {
@@ -1196,6 +1240,95 @@ fn test_transaction_read_only() {
         }
         other => panic!("expected BeginTransaction, got: {other:?}"),
     }
+}
+
+// ── Nested transaction AST construction ───────────────────────────────────────
+
+#[test]
+fn test_nested_transaction_begin_with_name() {
+    // Named BEGIN is an AeternumDB extension (Phase 4 custom grammar).
+    // For now, verify the AST can be built programmatically.
+    use aeternumdb_core::sql::ast::BeginTransactionStatement;
+    let stmt = Statement::BeginTransaction(BeginTransactionStatement {
+        name: Some("outer_tx".to_string()),
+        isolation_level: None,
+        read_only: false,
+    });
+    assert!(matches!(
+        stmt,
+        Statement::BeginTransaction(BeginTransactionStatement {
+            name: Some(ref n),
+            ..
+        }) if n == "outer_tx"
+    ));
+}
+
+#[test]
+fn test_nested_transaction_commit_named_scope() {
+    use aeternumdb_core::sql::ast::{CommitScope, CommitStatement};
+    // COMMIT TRANSACTION inner_tx  →  CommitScope::Named (AeternumDB extension).
+    let stmt = Statement::Commit(CommitStatement {
+        scope: CommitScope::Named("inner_tx".to_string()),
+        chain: false,
+    });
+    assert!(matches!(
+        stmt,
+        Statement::Commit(CommitStatement {
+            scope: CommitScope::Named(ref n),
+            chain: false
+        }) if n == "inner_tx"
+    ));
+}
+
+#[test]
+fn test_nested_transaction_commit_all_scope() {
+    use aeternumdb_core::sql::ast::{CommitScope, CommitStatement};
+    // COMMIT ALL  →  CommitScope::All (AeternumDB extension).
+    let stmt = Statement::Commit(CommitStatement {
+        scope: CommitScope::All,
+        chain: false,
+    });
+    assert!(matches!(
+        stmt,
+        Statement::Commit(CommitStatement {
+            scope: CommitScope::All,
+            chain: false
+        })
+    ));
+}
+
+#[test]
+fn test_nested_transaction_rollback_named_scope() {
+    use aeternumdb_core::sql::ast::{RollbackScope, RollbackStatement};
+    // ROLLBACK TRANSACTION inner_tx  →  RollbackScope::Named (AeternumDB extension).
+    let stmt = Statement::Rollback(RollbackStatement {
+        scope: RollbackScope::Named("inner_tx".to_string()),
+        chain: false,
+    });
+    assert!(matches!(
+        stmt,
+        Statement::Rollback(RollbackStatement {
+            scope: RollbackScope::Named(ref n),
+            ..
+        }) if n == "inner_tx"
+    ));
+}
+
+#[test]
+fn test_nested_transaction_rollback_all_scope() {
+    use aeternumdb_core::sql::ast::{RollbackScope, RollbackStatement};
+    // ROLLBACK ALL  →  RollbackScope::All (AeternumDB extension).
+    let stmt = Statement::Rollback(RollbackStatement {
+        scope: RollbackScope::All,
+        chain: false,
+    });
+    assert!(matches!(
+        stmt,
+        Statement::Rollback(RollbackStatement {
+            scope: RollbackScope::All,
+            ..
+        })
+    ));
 }
 
 // ── UNSIGNED and BINARY type tests ────────────────────────────────────────────

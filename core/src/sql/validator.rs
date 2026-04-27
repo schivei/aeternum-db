@@ -39,8 +39,9 @@
 use std::collections::HashMap;
 
 use crate::sql::ast::{
-    AlterTableOperation, AlterTableStatement, ColumnDef, CreateTableStatement, DataType,
-    DeleteStatement, Expr, InsertStatement, SelectItem, SelectStatement, Statement,
+    AlterTableOperation, AlterTableStatement, BeginTransactionStatement, ColumnDef,
+    CommitScope, CommitStatement, CreateTableStatement, DataType, DeleteStatement, Expr,
+    InsertStatement, RollbackScope, RollbackStatement, SelectItem, SelectStatement, Statement,
     UpdateStatement,
 };
 
@@ -125,6 +126,33 @@ pub enum ValidationError {
     NullConstraintViolation { table: String, column: String },
     /// Any other semantic constraint violation.
     ConstraintViolation(String),
+
+    // ── Transaction-nesting errors ─────────────────────────────────────────
+
+    /// A `COMMIT` or `ROLLBACK` was issued when no transaction is open.
+    NoActiveTransaction,
+    /// `BEGIN TRANSACTION <name>` was issued but `<name>` is already in use
+    /// in this session's transaction stack.
+    ///
+    /// Transaction names are **session-scoped**: the same name can be used in
+    /// different sessions simultaneously without conflict, but within one
+    /// session each open transaction must have a unique name.
+    TransactionNameConflict(String),
+    /// `COMMIT TRANSACTION <name>` or `ROLLBACK TRANSACTION <name>` was
+    /// issued but no transaction with that name is open in this session.
+    TransactionNotFound(String),
+    /// A named transaction cannot be committed or rolled back because a
+    /// more-deeply nested transaction (`blocking`) is still open inside it.
+    ///
+    /// Transactions must be closed in LIFO (stack) order: the innermost open
+    /// transaction must be resolved first.
+    TransactionNestingViolation {
+        /// The transaction the caller tried to commit or roll back.
+        target: String,
+        /// The innermost open transaction that is nested inside `target`
+        /// and must be resolved first.
+        blocking: String,
+    },
 }
 
 impl std::fmt::Display for ValidationError {
@@ -154,6 +182,22 @@ impl std::fmt::Display for ValidationError {
             ValidationError::ConstraintViolation(msg) => {
                 write!(f, "constraint violation: {msg}")
             }
+            ValidationError::NoActiveTransaction => {
+                write!(f, "no active transaction")
+            }
+            ValidationError::TransactionNameConflict(name) => write!(
+                f,
+                "transaction name '{name}' is already in use in this session"
+            ),
+            ValidationError::TransactionNotFound(name) => write!(
+                f,
+                "transaction '{name}' is not active in the current session"
+            ),
+            ValidationError::TransactionNestingViolation { target, blocking } => write!(
+                f,
+                "cannot commit or rollback transaction '{target}': \
+                 nested transaction '{blocking}' is still open and must be resolved first"
+            ),
         }
     }
 }
@@ -210,7 +254,147 @@ impl<'a> Validator<'a> {
         }
     }
 
-    // ── SELECT ────────────────────────────────────────────────────────────────
+    /// Validate a **sequence** of statements in execution order, tracking the
+    /// nested transaction stack for this session.
+    ///
+    /// In addition to per-statement semantic checks (via [`validate`]), this
+    /// method enforces the following transaction-nesting rules:
+    ///
+    /// - **Session-scoped names**: each open transaction name must be unique
+    ///   within the stack.  The same name may be reused in a *different*
+    ///   session simultaneously without conflict.
+    /// - **LIFO ordering**: a named transaction can only be committed or
+    ///   rolled back when it is the innermost open transaction.  If a more
+    ///   deeply nested transaction is still open, the call returns
+    ///   [`ValidationError::TransactionNestingViolation`].
+    /// - **`COMMIT ALL` / `ROLLBACK ALL`**: these bypass LIFO ordering and
+    ///   close the entire nesting stack at once.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use aeternumdb_core::sql::ast::{
+    ///     BeginTransactionStatement, CommitScope, CommitStatement,
+    ///     RollbackScope, RollbackStatement, Statement,
+    /// };
+    /// use aeternumdb_core::sql::validator::{Catalog, ValidationError, Validator};
+    ///
+    /// let catalog = Catalog::new();
+    /// let validator = Validator::new(&catalog);
+    ///
+    /// // outer → inner open: committing outer fails
+    /// let stmts = vec![
+    ///     Statement::BeginTransaction(BeginTransactionStatement {
+    ///         name: Some("outer".to_string()), isolation_level: None, read_only: false,
+    ///     }),
+    ///     Statement::BeginTransaction(BeginTransactionStatement {
+    ///         name: Some("inner".to_string()), isolation_level: None, read_only: false,
+    ///     }),
+    ///     Statement::Commit(CommitStatement {
+    ///         scope: CommitScope::Named("outer".to_string()), chain: false,
+    ///     }),
+    /// ];
+    /// assert!(matches!(
+    ///     validator.validate_sequence(&stmts),
+    ///     Err(ValidationError::TransactionNestingViolation { .. })
+    /// ));
+    /// ```
+    pub fn validate_sequence(&self, stmts: &[Statement]) -> Result<(), ValidationError> {
+        // Each element is the optional name of one open transaction level,
+        // ordered from outermost (index 0) to innermost (last index).
+        let mut stack: Vec<Option<String>> = Vec::new();
+
+        for stmt in stmts {
+            // Run per-statement semantic checks first.
+            self.validate(stmt)?;
+
+            match stmt {
+                Statement::BeginTransaction(BeginTransactionStatement { name, .. }) => {
+                    if let Some(n) = name {
+                        // Session-scoped uniqueness: name must not already be in the stack.
+                        if stack.iter().any(|s| s.as_deref() == Some(n.as_str())) {
+                            return Err(ValidationError::TransactionNameConflict(n.clone()));
+                        }
+                    }
+                    stack.push(name.clone());
+                }
+
+                Statement::Commit(CommitStatement { scope, .. }) => match scope {
+                    CommitScope::Current => {
+                        stack.pop().ok_or(ValidationError::NoActiveTransaction)?;
+                    }
+                    CommitScope::Named(name) => {
+                        let pos = stack
+                            .iter()
+                            .rposition(|s| s.as_deref() == Some(name.as_str()))
+                            .ok_or_else(|| ValidationError::TransactionNotFound(name.clone()))?;
+                        // Must be the innermost — no open children allowed.
+                        if pos != stack.len() - 1 {
+                            let blocking = stack
+                                .last()
+                                .and_then(|s| s.as_deref())
+                                .unwrap_or("<anonymous>")
+                                .to_string();
+                            return Err(ValidationError::TransactionNestingViolation {
+                                target: name.clone(),
+                                blocking,
+                            });
+                        }
+                        stack.truncate(pos);
+                    }
+                    CommitScope::All => {
+                        stack.clear();
+                    }
+                },
+
+                Statement::Rollback(RollbackStatement { scope, .. }) => match scope {
+                    RollbackScope::Current => {
+                        stack.pop().ok_or(ValidationError::NoActiveTransaction)?;
+                    }
+                    RollbackScope::ToSavepoint(_) => {
+                        // Savepoints are within the current transaction level;
+                        // they do not affect the nesting stack.
+                        if stack.is_empty() {
+                            return Err(ValidationError::NoActiveTransaction);
+                        }
+                    }
+                    RollbackScope::Named(name) => {
+                        let pos = stack
+                            .iter()
+                            .rposition(|s| s.as_deref() == Some(name.as_str()))
+                            .ok_or_else(|| ValidationError::TransactionNotFound(name.clone()))?;
+                        // Must be the innermost — no open children allowed.
+                        if pos != stack.len() - 1 {
+                            let blocking = stack
+                                .last()
+                                .and_then(|s| s.as_deref())
+                                .unwrap_or("<anonymous>")
+                                .to_string();
+                            return Err(ValidationError::TransactionNestingViolation {
+                                target: name.clone(),
+                                blocking,
+                            });
+                        }
+                        stack.truncate(pos);
+                    }
+                    RollbackScope::All => {
+                        stack.clear();
+                    }
+                },
+
+                Statement::Savepoint(_) | Statement::ReleaseSavepoint(_) => {
+                    // Savepoints require an active transaction.
+                    if stack.is_empty() {
+                        return Err(ValidationError::NoActiveTransaction);
+                    }
+                }
+
+                _ => {}
+            }
+        }
+
+        Ok(())
+    }
 
     fn validate_table_reference(
         &self,
