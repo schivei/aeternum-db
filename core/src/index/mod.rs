@@ -12,17 +12,17 @@
 //!
 //! # Example
 //! ```no_run
+//! # use std::sync::Arc;
 //! # use aeternumdb_core::storage::{StorageConfig, StorageEngine};
 //! # use aeternumdb_core::index::btree::{BTree, BTreeConfig};
-//! # use std::sync::Arc;
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! let engine = StorageEngine::new(StorageConfig {
-//!     data_path: "/tmp/mydb.db".into(),
-//!     buffer_pool_size: 1000,
-//!     page_size: 8192,
-//! }).await?;
-//!
-//! let tree = BTree::<i64, String>::new(Arc::new(engine), BTreeConfig::default()).await?;
+//! # let engine = Arc::new(StorageEngine::new(StorageConfig {
+//! #     data_path: "/tmp/mydb.db".into(),
+//! #     buffer_pool_size: 1000,
+//! #     page_size: 8192,
+//! # }).await?);
+//! // Build a B-tree index on top of the storage engine.
+//! let tree = BTree::<i64, String>::new(Arc::clone(&engine), BTreeConfig::default()).await?;
 //! tree.insert(42, "hello".to_string()).await?;
 //! let v = tree.search(&42).await?;
 //! assert_eq!(v.as_deref(), Some("hello"));
