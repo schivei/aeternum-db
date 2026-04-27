@@ -435,12 +435,17 @@ impl<K: BTreeKey, V: BTreeValue> BTree<K, V> {
                 self.write_meta().await
             }
             Err(IndexError::DuplicateKey) => {
-                let root = meta.root_page_id;
-                let height = meta.height;
-                let fanout = meta.fanout;
+                let result = self
+                    .update_recursive(
+                        meta.root_page_id,
+                        &key_bytes,
+                        &val_bytes,
+                        meta.height,
+                        meta.fanout,
+                    )
+                    .await;
                 drop(meta);
-                self.update_recursive(root, &key_bytes, &val_bytes, height, fanout)
-                    .await
+                result
             }
             Err(e) => Err(e),
         }
