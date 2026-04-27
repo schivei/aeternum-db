@@ -1407,11 +1407,16 @@ fn convert_update(update: sp::Update) -> Result<Statement, AstError> {
         .map(|a| {
             let col = match a.target {
                 sp::AssignmentTarget::ColumnName(name) => object_name_to_string(&name),
-                sp::AssignmentTarget::Tuple(names) => names
-                    .iter()
-                    .map(object_name_to_string)
-                    .collect::<Vec<_>>()
-                    .join(", "),
+                sp::AssignmentTarget::Tuple(names) => {
+                    return Err(AstError::Unsupported(format!(
+                        "UPDATE tuple assignment target not supported: ({})",
+                        names
+                            .iter()
+                            .map(object_name_to_string)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )))
+                }
             };
             let val = convert_expr(a.value)?;
             Ok((col, val))
