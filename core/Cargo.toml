@@ -22,7 +22,7 @@ parking_lot = "0.12"
 
 [dev-dependencies]
 tokio-test = "0.4"
-criterion = { version = "0.5", features = ["async_tokio"] }
+criterion = { version = "0.8", features = ["async_tokio"] }
 tempfile = "3.8"
 
 [build-dependencies]
