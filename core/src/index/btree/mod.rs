@@ -396,8 +396,9 @@ impl<K: BTreeKey, V: BTreeValue> BTree<K, V> {
         }
 
         meta.num_keys += 1;
-        drop(meta);
-        self.write_meta().await
+        // Persist metadata while the write lock is still held to prevent
+        // another writer from seeing or overwriting a partial update.
+        self.write_meta_inner(&meta).await
     }
 
     /// Insert or update a key-value pair.
@@ -431,8 +432,7 @@ impl<K: BTreeKey, V: BTreeValue> BTree<K, V> {
                     meta.height += 1;
                 }
                 meta.num_keys += 1;
-                drop(meta);
-                self.write_meta().await
+                self.write_meta_inner(&meta).await
             }
             Err(IndexError::DuplicateKey) => {
                 let result = self
@@ -501,13 +501,13 @@ impl<K: BTreeKey, V: BTreeValue> BTree<K, V> {
                     let old_root = meta.root_page_id;
                     meta.root_page_id = internal.children[0];
                     meta.height -= 1;
-                    self.write_meta().await?;
+                    self.write_meta_inner(&meta).await?;
                     self.storage.deallocate_page(old_root).await?;
                     drop(meta);
                     return Ok(true);
                 }
             }
-            self.write_meta().await?;
+            self.write_meta_inner(&meta).await?;
             drop(meta);
         }
 
@@ -629,8 +629,12 @@ impl<K: BTreeKey, V: BTreeValue> BTree<K, V> {
     // ── Private helpers ───────────────────────────────────────────────────────
 
     /// Persist metadata to the metadata page.
-    async fn write_meta(&self) -> Result<(), IndexError> {
-        let meta = self.meta.read().await;
+    /// Persist the metadata page from an already-held `TreeMeta` reference.
+    ///
+    /// Callers that already hold (or have just updated) a `RwLockWriteGuard`
+    /// must use this instead of `write_meta()` to avoid a deadlock caused by
+    /// reacquiring the read lock while the write lock is still held.
+    async fn write_meta_inner(&self, meta: &TreeMeta) -> Result<(), IndexError> {
         let mut buf = vec![0u8; META_SIZE];
         buf[META_ROOT_OFFSET..META_ROOT_OFFSET + 8]
             .copy_from_slice(&meta.root_page_id.to_le_bytes());
@@ -640,12 +644,19 @@ impl<K: BTreeKey, V: BTreeValue> BTree<K, V> {
             .copy_from_slice(&meta.num_keys.to_le_bytes());
         buf[META_FANOUT_OFFSET..META_FANOUT_OFFSET + 4]
             .copy_from_slice(&(meta.fanout as u32).to_le_bytes());
-        let meta_page_id = meta.meta_page_id;
-        drop(meta);
         self.storage
-            .write_page_data(meta_page_id, 0, &buf)
+            .write_page_data(meta.meta_page_id, 0, &buf)
             .await
             .map_err(IndexError::Storage)
+    }
+
+    /// Persist the current in-memory metadata to its page.
+    ///
+    /// Acquires a shared read lock; do **not** call while holding a write lock
+    /// on `self.meta` (use [`write_meta_inner`] instead).
+    async fn write_meta(&self) -> Result<(), IndexError> {
+        let meta = self.meta.read().await;
+        self.write_meta_inner(&meta).await
     }
 
     /// Recursively insert into the subtree rooted at `page_id`.

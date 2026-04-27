@@ -226,6 +226,13 @@ impl LeafNode {
     /// Serialize this leaf node into a byte vector.
     pub fn serialize(&self) -> Vec<u8> {
         let n = self.keys.len();
+        assert_eq!(
+            n,
+            self.values.len(),
+            "leaf node invariant violated: {} keys but {} values",
+            n,
+            self.values.len()
+        );
         let mut buf = Vec::new();
         buf.push(NODE_TYPE_LEAF);
         buf.extend_from_slice(&(n as u32).to_le_bytes());
