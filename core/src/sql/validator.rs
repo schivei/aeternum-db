@@ -201,49 +201,100 @@ impl<'a> Validator<'a> {
 
     // ── SELECT ────────────────────────────────────────────────────────────────
 
-    fn validate_select(&self, sel: &SelectStatement) -> Result<(), ValidationError> {
-        // Validate the FROM table if present
-        let table_name: Option<String> = sel.from.as_ref().and_then(|t| {
-            use crate::sql::ast::TableReference;
-            match t {
-                TableReference::Named { name, .. } => Some(name.clone()),
-                _ => None,
-            }
-        });
+    fn validate_table_reference(
+        &self,
+        table_ref: &crate::sql::ast::TableReference,
+        aliases: &mut HashMap<String, String>,
+        table_names: &mut Vec<String>,
+    ) -> Result<(), ValidationError> {
+        use crate::sql::ast::TableReference;
 
-        if let Some(ref tname) = table_name {
-            self.require_table(tname)?;
+        match table_ref {
+            TableReference::Named { name, alias, .. } => {
+                self.require_table(name)?;
+                table_names.push(name.clone());
+                if let Some(alias) = alias {
+                    aliases.insert(alias.clone(), name.clone());
+                }
+                Ok(())
+            }
+            TableReference::Join { left, right, .. } => {
+                self.validate_table_reference(left, aliases, table_names)?;
+                self.validate_table_reference(right, aliases, table_names)?;
+                Ok(())
+            }
+            TableReference::Subquery { subquery, .. } => self.validate_select(subquery),
+            _ => Ok(()),
         }
+    }
+
+    fn validate_select_expr(
+        &self,
+        expr: &Expr,
+        default_table_name: Option<&str>,
+        aliases: &HashMap<String, String>,
+    ) -> Result<(), ValidationError> {
+        match expr {
+            Expr::Column {
+                table: Some(table),
+                name,
+            } => {
+                let resolved_table = aliases.get(table).map(|t| t.as_str()).unwrap_or(table.as_str());
+                self.require_table(resolved_table)?;
+                self.require_column(resolved_table, name)?;
+                Ok(())
+            }
+            _ => self.validate_expr(expr, default_table_name),
+        }
+    }
+
+    fn validate_select(&self, sel: &SelectStatement) -> Result<(), ValidationError> {
+        let mut aliases = HashMap::new();
+        let mut table_names = Vec::new();
+
+        if let Some(from) = &sel.from {
+            self.validate_table_reference(from, &mut aliases, &mut table_names)?;
+        }
+
+        let table_name = if table_names.len() == 1 {
+            Some(table_names[0].as_str())
+        } else {
+            None
+        };
 
         // Validate SELECT list
         for item in &sel.columns {
             match item {
-                SelectItem::Wildcard | SelectItem::QualifiedWildcard(_) => {}
+                SelectItem::Wildcard => {}
+                SelectItem::QualifiedWildcard(name) => {
+                    let resolved_table = aliases.get(name).map(|t| t.as_str()).unwrap_or(name.as_str());
+                    self.require_table(resolved_table)?;
+                }
                 SelectItem::Expr { expr, .. } => {
-                    self.validate_expr(expr, table_name.as_deref())?;
+                    self.validate_select_expr(expr, table_name, &aliases)?;
                 }
             }
         }
 
         // Validate WHERE
         if let Some(w) = &sel.where_clause {
-            self.validate_expr(w, table_name.as_deref())?;
+            self.validate_select_expr(w, table_name, &aliases)?;
             self.check_no_aggregate_in_where(w)?;
         }
 
         // Validate GROUP BY
         for g in &sel.group_by {
-            self.validate_expr(g, table_name.as_deref())?;
+            self.validate_select_expr(g, table_name, &aliases)?;
         }
 
         // Validate HAVING
         if let Some(h) = &sel.having {
-            self.validate_expr(h, table_name.as_deref())?;
+            self.validate_select_expr(h, table_name, &aliases)?;
         }
 
         // Validate ORDER BY
         for o in &sel.order_by {
-            self.validate_expr(&o.expr, table_name.as_deref())?;
+            self.validate_select_expr(&o.expr, table_name, &aliases)?;
         }
 
         Ok(())
