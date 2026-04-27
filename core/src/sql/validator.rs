@@ -188,6 +188,12 @@ impl<'a> Validator<'a> {
             Statement::AlterTable(s) => self.validate_alter_table(s),
             // DCL scaffolding — not executed yet, always passes
             Statement::Grant(_) | Statement::Revoke(_) => Ok(()),
+            // Transaction control — not yet validated, always passes
+            Statement::BeginTransaction(_)
+            | Statement::Commit(_)
+            | Statement::Rollback(_)
+            | Statement::Savepoint(_)
+            | Statement::ReleaseSavepoint(_) => Ok(()),
         }
     }
 
@@ -411,7 +417,9 @@ impl<'a> Validator<'a> {
                 Ok(())
             }
             Expr::IsNull { expr, .. } => self.validate_expr(expr, table),
-            Expr::Between { expr, low, high, .. } => {
+            Expr::Between {
+                expr, low, high, ..
+            } => {
                 self.validate_expr(expr, table)?;
                 self.validate_expr(low, table)?;
                 self.validate_expr(high, table)
@@ -468,7 +476,9 @@ impl<'a> Validator<'a> {
             }
             Expr::UnaryOp { expr, .. } => self.check_no_aggregate_in_where(expr),
             Expr::IsNull { expr, .. } => self.check_no_aggregate_in_where(expr),
-            Expr::Between { expr, low, high, .. } => {
+            Expr::Between {
+                expr, low, high, ..
+            } => {
                 self.check_no_aggregate_in_where(expr)?;
                 self.check_no_aggregate_in_where(low)?;
                 self.check_no_aggregate_in_where(high)
@@ -495,11 +505,7 @@ impl<'a> Validator<'a> {
         Ok(())
     }
 
-    fn require_column(
-        &self,
-        schema: &TableSchema,
-        col: &str,
-    ) -> Result<(), ValidationError> {
+    fn require_column(&self, schema: &TableSchema, col: &str) -> Result<(), ValidationError> {
         if schema.get_column(col).is_none() {
             return Err(ValidationError::ColumnNotFound {
                 table: schema.name.clone(),
@@ -517,11 +523,7 @@ impl<'a> Validator<'a> {
 /// Call this after validating and executing a DDL statement so that subsequent
 /// DML statements can be validated against the updated schema.
 pub fn apply_create_table(catalog: &mut Catalog, stmt: &CreateTableStatement) {
-    let columns = stmt
-        .columns
-        .iter()
-        .map(column_def_to_schema)
-        .collect();
+    let columns = stmt.columns.iter().map(column_def_to_schema).collect();
     catalog.add_table(TableSchema {
         name: stmt.table.clone(),
         columns,

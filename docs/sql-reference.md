@@ -35,9 +35,37 @@ implementation is based on **SQL-92** with a subset of common SQL extensions.
 | `DATE`                | Date         | Calendar date without time             |
 | `TIMESTAMP`           | Timestamp    | Date and time                          |
 | `DECIMAL(p, s)`, `NUMERIC(p, s)` | Decimal | Precision `p`, scale `s`  |
+| `table_name`          | Reference     | Single row reference (foreign key)    |
+| `[table_name]`        | ReferenceArray | Array of row references               |
+| `~table_name(column)` | VirtualReference | Computed inverse reference (read-only) |
+| `~[table_name](column)` | VirtualReferenceArray | Computed inverse array (read-only) |
 
 All other types are accepted as-is and forwarded to the query planner as the
 string representation of the type name.
+
+### Reference Types (OO/Graph Paradigm)
+
+AeternumDB supports advanced reference types for object-oriented and graph-style data modeling:
+
+- **Direct References**: `table_name` creates a foreign key relationship
+- **Reference Arrays**: `[table_name]` stores multiple references in an array
+- **Virtual References**: `~table_name(column)` provides automatic reverse navigation
+- **Virtual Arrays**: `~[table_name](column)` provides reverse one-to-many access
+
+**Constraints for Reference Arrays:**
+- `MIN_LENGTH n` - minimum number of references required
+- `MAX_LENGTH n` - maximum number of references allowed
+- `UNIQUES` - all references must be distinct
+
+**Example:**
+```sql
+CREATE TABLE sample2 (
+  id INTEGER PRIMARY KEY AUTO_INCREMENT,
+  `master` sample1 NOT NULL,
+  `parent` sample2 NULL,
+  `children` ~[sample2](parent) MIN_LENGTH 0
+)
+```
 
 ---
 
@@ -119,6 +147,7 @@ They are valid in the `SELECT` list and `HAVING` clause, but **not** in
 ### SELECT
 
 ```sql
+[WITH cte_name [(column, ...)] AS (subquery), ...]
 SELECT [DISTINCT]
     { * | column [AS alias] | expr [AS alias] }, ...
 FROM table_reference
@@ -127,6 +156,20 @@ FROM table_reference
 [HAVING condition]
 [ORDER BY expr [ASC | DESC], ...]
 [LIMIT n [OFFSET m]]
+```
+
+**Common Table Expressions (WITH clause):**
+
+WITH clauses allow you to define named temporary result sets (CTEs) that can be
+referenced in the main query:
+
+```sql
+WITH regional_sales AS (
+  SELECT region, SUM(amount) AS total_sales
+  FROM orders
+  GROUP BY region
+)
+SELECT * FROM regional_sales WHERE total_sales > 1000;
 ```
 
 **Examples:**
@@ -335,22 +378,66 @@ CASE expr WHEN value THEN result [...] [ELSE default] END
 
 ---
 
+## Transaction Control
+
+AeternumDB supports standard SQL transaction control statements (scaffolding for future execution):
+
+### BEGIN TRANSACTION / START TRANSACTION
+
+```sql
+BEGIN [TRANSACTION] [READ ONLY] [ISOLATION LEVEL { READ UNCOMMITTED | READ COMMITTED | REPEATABLE READ | SERIALIZABLE }];
+START TRANSACTION [READ ONLY] [ISOLATION LEVEL ...];
+```
+
+### COMMIT
+
+```sql
+COMMIT [TRANSACTION];
+```
+
+### ROLLBACK
+
+```sql
+ROLLBACK [TRANSACTION] [TO SAVEPOINT savepoint_name];
+```
+
+### SAVEPOINT
+
+```sql
+SAVEPOINT savepoint_name;
+RELEASE SAVEPOINT savepoint_name;
+```
+
+**Example:**
+```sql
+BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+INSERT INTO accounts (id, balance) VALUES (1, 1000);
+SAVEPOINT sp1;
+UPDATE accounts SET balance = balance - 100 WHERE id = 1;
+-- Can rollback to sp1 if needed
+COMMIT;
+```
+
+---
+
 ## Limitations and Future Enhancements
 
-The following SQL features are **not yet supported** in PR 1.3 and are planned
-for future releases:
+The following SQL features are **not yet supported** or are **partially implemented**:
 
-| Feature                              | Planned Phase |
-|--------------------------------------|---------------|
-| Window functions (`OVER (...)`)      | Phase 5       |
-| Common Table Expressions (`WITH …`)  | Phase 5       |
-| Recursive queries (`WITH RECURSIVE`) | Phase 5       |
-| `UNION` / `INTERSECT` / `EXCEPT`     | Phase 4       |
-| `GRANT` / `REVOKE` execution         | Phase 6       |
-| Full-text search syntax              | Extension     |
-| JSON path expressions                | Extension     |
-| `RETURNING` clause                   | Phase 3       |
-| `ON CONFLICT` / `UPSERT`            | Phase 3       |
+| Feature                              | Status / Planned Phase |
+|--------------------------------------|----------------------|
+| Window functions (`OVER (...)`)      | Phase 5              |
+| Recursive queries (`WITH RECURSIVE`) | Phase 5              |
+| `UNION` / `INTERSECT` / `EXCEPT`     | Phase 4              |
+| `GRANT` / `REVOKE` execution         | Phase 6              |
+| Transaction execution                | Recognized but not yet executed |
+| Full-text search syntax              | Extension            |
+| JSON path expressions                | Extension            |
+| `RETURNING` clause                   | Phase 3              |
+| `ON CONFLICT` / `UPSERT`            | Phase 3              |
+| `PIVOT` / `UNPIVOT`                 | Phase 6              |
+| Reference type execution             | Future (parsed but not executed) |
+| COUNT optimization (index metadata)  | Future optimization  |
 
 ### Known Dialect Edge Cases
 

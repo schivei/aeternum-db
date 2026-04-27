@@ -90,6 +90,23 @@ pub enum DataType {
     Timestamp,
     /// `DECIMAL(p, s)` / `NUMERIC(p, s)`.
     Decimal(Option<u64>, Option<u64>),
+    /// Reference to a single row in another table: `table_name`.
+    /// Used for foreign key relationships and OO-style references.
+    Reference(String),
+    /// Array of references to multiple rows: `[table_name]`.
+    /// Used for one-to-many relationships.
+    ReferenceArray(String),
+    /// Virtual reverse reference (computed): `~table_name(column)`.
+    /// Provides inverse navigation without storing data.
+    VirtualReference {
+        table: String,
+        column: String,
+    },
+    /// Virtual reverse reference array: `~[table_name](column)`.
+    VirtualReferenceArray {
+        table: String,
+        column: String,
+    },
     /// Any other type forwarded as a string (for forward-compatibility).
     Other(String),
 }
@@ -107,6 +124,12 @@ impl std::fmt::Display for DataType {
             DataType::Decimal(Some(p), Some(s)) => write!(f, "DECIMAL({p},{s})"),
             DataType::Decimal(Some(p), None) => write!(f, "DECIMAL({p})"),
             DataType::Decimal(None, _) => write!(f, "DECIMAL"),
+            DataType::Reference(table) => write!(f, "{table}"),
+            DataType::ReferenceArray(table) => write!(f, "[{table}]"),
+            DataType::VirtualReference { table, column } => write!(f, "~{table}({column})"),
+            DataType::VirtualReferenceArray { table, column } => {
+                write!(f, "~[{table}]({column})")
+            }
             DataType::Other(s) => write!(f, "{s}"),
         }
     }
@@ -191,10 +214,7 @@ pub enum Expr {
         right: Box<Expr>,
     },
     /// A unary operation (`-x`, `NOT b`).
-    UnaryOp {
-        op: UnaryOperator,
-        expr: Box<Expr>,
-    },
+    UnaryOp { op: UnaryOperator, expr: Box<Expr> },
     /// A function call (`COUNT(*)`, `SUM(price)`).
     Function {
         /// Function name (normalized to uppercase).
@@ -205,10 +225,7 @@ pub enum Expr {
         distinct: bool,
     },
     /// `expr IS NULL` / `expr IS NOT NULL`.
-    IsNull {
-        expr: Box<Expr>,
-        negated: bool,
-    },
+    IsNull { expr: Box<Expr>, negated: bool },
     /// `expr BETWEEN low AND high`.
     Between {
         expr: Box<Expr>,
@@ -253,20 +270,14 @@ pub enum SelectItem {
     /// `table.*`
     QualifiedWildcard(String),
     /// An expression, optionally aliased.
-    Expr {
-        expr: Expr,
-        alias: Option<String>,
-    },
+    Expr { expr: Expr, alias: Option<String> },
 }
 
 /// A table reference in the FROM clause.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TableReference {
     /// A plain table name, optionally aliased.
-    Named {
-        name: String,
-        alias: Option<String>,
-    },
+    Named { name: String, alias: Option<String> },
     /// A subquery in the FROM clause, with a mandatory alias.
     Subquery {
         query: Box<SelectStatement>,
@@ -303,6 +314,8 @@ pub struct OrderByExpr {
 /// A `SELECT` statement.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SelectStatement {
+    /// Common Table Expressions (CTEs) defined with WITH clause.
+    pub with: Vec<CommonTableExpr>,
     /// The SELECT list.
     pub columns: Vec<SelectItem>,
     /// The FROM clause.
@@ -321,6 +334,17 @@ pub struct SelectStatement {
     pub offset: Option<u64>,
     /// Whether DISTINCT was specified.
     pub distinct: bool,
+}
+
+/// A Common Table Expression (CTE) in a WITH clause.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CommonTableExpr {
+    /// CTE name (alias).
+    pub name: String,
+    /// Column names (optional).
+    pub columns: Vec<String>,
+    /// The query that defines this CTE.
+    pub query: Box<SelectStatement>,
 }
 
 /// An `INSERT` statement.
@@ -365,6 +389,14 @@ pub struct ColumnDef {
     pub primary_key: bool,
     pub unique: bool,
     pub default: Option<Expr>,
+    /// AUTO_INCREMENT flag (for integer primary keys).
+    pub auto_increment: bool,
+    /// Minimum array length for ReferenceArray types.
+    pub min_length: Option<u64>,
+    /// Maximum array length for ReferenceArray types.
+    pub max_length: Option<u64>,
+    /// UNIQUES constraint for ReferenceArray (all references must be distinct).
+    pub uniques: bool,
 }
 
 /// A `CREATE TABLE` statement.
@@ -418,6 +450,46 @@ pub struct RevokeStatement {
     pub from: Vec<String>,
 }
 
+// ── Transaction control ────────────────────────────────────────────────────────
+
+/// Transaction isolation level.
+#[derive(Debug, Clone, PartialEq)]
+pub enum IsolationLevel {
+    ReadUncommitted,
+    ReadCommitted,
+    RepeatableRead,
+    Serializable,
+}
+
+/// `BEGIN TRANSACTION` / `START TRANSACTION` statement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BeginTransactionStatement {
+    pub isolation_level: Option<IsolationLevel>,
+    pub read_only: bool,
+}
+
+/// `COMMIT` statement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CommitStatement;
+
+/// `ROLLBACK` statement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RollbackStatement {
+    pub savepoint: Option<String>,
+}
+
+/// `SAVEPOINT` statement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SavepointStatement {
+    pub name: String,
+}
+
+/// `RELEASE SAVEPOINT` statement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReleaseSavepointStatement {
+    pub name: String,
+}
+
 // ── Top-level statement ────────────────────────────────────────────────────────
 
 /// A fully lowered SQL statement ready for the query planner.
@@ -434,6 +506,12 @@ pub enum Statement {
     Grant(GrantStatement),
     /// DCL scaffolding — recognized but not yet executed.
     Revoke(RevokeStatement),
+    /// Transaction control statements.
+    BeginTransaction(BeginTransactionStatement),
+    Commit(CommitStatement),
+    Rollback(RollbackStatement),
+    Savepoint(SavepointStatement),
+    ReleaseSavepoint(ReleaseSavepointStatement),
 }
 
 // ── Conversion from sqlparser AST ─────────────────────────────────────────────
@@ -484,14 +562,45 @@ fn object_name_to_string(name: &sp::ObjectName) -> String {
 // ── SELECT conversion ──────────────────────────────────────────────────────────
 
 fn convert_query(query: sp::Query) -> Result<SelectStatement, AstError> {
-    match *query.body {
+    // Convert WITH clause (CTEs)
+    let with_ctes = if let Some(with) = query.with {
+        with.cte_tables
+            .into_iter()
+            .map(convert_cte)
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        vec![]
+    };
+
+    let mut stmt = match *query.body {
         sp::SetExpr::Select(select) => {
-            convert_select(*select, query.order_by, query.limit_clause)
+            convert_select(*select, query.order_by, query.limit_clause)?
         }
-        other => Err(AstError::Unsupported(format!(
-            "query body not supported: {other}"
-        ))),
-    }
+        other => {
+            return Err(AstError::Unsupported(format!(
+                "query body not supported: {other}"
+            )))
+        }
+    };
+
+    stmt.with = with_ctes;
+    Ok(stmt)
+}
+
+fn convert_cte(cte: sp::Cte) -> Result<CommonTableExpr, AstError> {
+    let name = ident_to_string(&cte.alias.name);
+    let columns = cte
+        .alias
+        .columns
+        .into_iter()
+        .map(|col_def| col_def.name.value.clone())
+        .collect();
+    let query = Box::new(convert_query(*cte.query)?);
+    Ok(CommonTableExpr {
+        name,
+        columns,
+        query,
+    })
 }
 
 fn convert_select(
@@ -535,9 +644,7 @@ fn convert_select(
     let where_clause = select.selection.map(convert_expr).transpose()?;
 
     let group_by = match select.group_by {
-        sp::GroupByExpr::All(_) => {
-            return Err(AstError::Unsupported("GROUP BY ALL".to_string()))
-        }
+        sp::GroupByExpr::All(_) => return Err(AstError::Unsupported("GROUP BY ALL".to_string())),
         sp::GroupByExpr::Expressions(exprs, _) => exprs
             .into_iter()
             .map(convert_expr)
@@ -563,9 +670,7 @@ fn convert_select(
     let (limit_val, offset_val) = match limit_clause {
         Some(sp::LimitClause::LimitOffset { limit, offset, .. }) => {
             let l = limit.map(|e| expr_to_u64(&e)).transpose()?;
-            let o = offset
-                .map(|o| expr_to_u64(&o.value))
-                .transpose()?;
+            let o = offset.map(|o| expr_to_u64(&o.value)).transpose()?;
             (l, o)
         }
         Some(sp::LimitClause::OffsetCommaLimit { offset, limit }) => {
@@ -577,6 +682,7 @@ fn convert_select(
     };
 
     Ok(SelectStatement {
+        with: vec![], // Will be populated by convert_query
         columns,
         from,
         where_clause,
@@ -608,9 +714,7 @@ fn convert_select_item(item: sp::SelectItem) -> Result<SelectItem, AstError> {
         sp::SelectItem::Wildcard(_) => Ok(SelectItem::Wildcard),
         sp::SelectItem::QualifiedWildcard(kind, _) => {
             let name = match kind {
-                sp::SelectItemQualifiedWildcardKind::ObjectName(n) => {
-                    object_name_to_string(&n)
-                }
+                sp::SelectItemQualifiedWildcardKind::ObjectName(n) => object_name_to_string(&n),
                 sp::SelectItemQualifiedWildcardKind::Expr(e) => format!("{e}"),
             };
             Ok(SelectItem::QualifiedWildcard(name))
@@ -650,11 +754,9 @@ fn convert_table_factor(factor: sp::TableFactor) -> Result<TableReference, AstEr
         sp::TableFactor::Derived {
             subquery, alias, ..
         } => {
-            let alias_name = alias
-                .map(|a| ident_to_string(&a.name))
-                .ok_or_else(|| {
-                    AstError::Invalid("subquery in FROM must have an alias".to_string())
-                })?;
+            let alias_name = alias.map(|a| ident_to_string(&a.name)).ok_or_else(|| {
+                AstError::Invalid("subquery in FROM must have an alias".to_string())
+            })?;
             Ok(TableReference::Subquery {
                 query: Box::new(convert_query(*subquery)?),
                 alias: alias_name,
@@ -666,9 +768,7 @@ fn convert_table_factor(factor: sp::TableFactor) -> Result<TableReference, AstEr
     }
 }
 
-fn convert_join_operator(
-    op: sp::JoinOperator,
-) -> Result<(JoinType, Option<Expr>), AstError> {
+fn convert_join_operator(op: sp::JoinOperator) -> Result<(JoinType, Option<Expr>), AstError> {
     match op {
         sp::JoinOperator::Join(c) | sp::JoinOperator::Inner(c) => {
             Ok((JoinType::Inner, convert_join_constraint(c)?))
@@ -687,9 +787,7 @@ fn convert_join_operator(
     }
 }
 
-fn convert_join_constraint(
-    constraint: sp::JoinConstraint,
-) -> Result<Option<Expr>, AstError> {
+fn convert_join_constraint(constraint: sp::JoinConstraint) -> Result<Option<Expr>, AstError> {
     match constraint {
         sp::JoinConstraint::On(e) => Ok(Some(convert_expr(e)?)),
         sp::JoinConstraint::None => Ok(None),
@@ -852,9 +950,7 @@ fn convert_value(val: sp::Value) -> Result<Value, AstError> {
                     .map_err(|_| AstError::Invalid(format!("invalid integer: {n}")))
             }
         }
-        sp::Value::SingleQuotedString(s) | sp::Value::DoubleQuotedString(s) => {
-            Ok(Value::String(s))
-        }
+        sp::Value::SingleQuotedString(s) | sp::Value::DoubleQuotedString(s) => Ok(Value::String(s)),
         sp::Value::Boolean(b) => Ok(Value::Boolean(b)),
         sp::Value::Null => Ok(Value::Null),
         other => Err(AstError::Unsupported(format!(
@@ -1057,8 +1153,9 @@ fn convert_delete(delete: sp::Delete) -> Result<Statement, AstError> {
         object_name_to_string(&delete.tables[0])
     } else {
         let from_tables = match &delete.from {
-            sp::FromTable::WithFromKeyword(tables)
-            | sp::FromTable::WithoutKeyword(tables) => tables,
+            sp::FromTable::WithFromKeyword(tables) | sp::FromTable::WithoutKeyword(tables) => {
+                tables
+            }
         };
         if !from_tables.is_empty() {
             match &from_tables[0].relation {
@@ -1107,6 +1204,10 @@ fn convert_column_def(col: sp::ColumnDef) -> Result<ColumnDef, AstError> {
     let mut primary_key = false;
     let mut unique = false;
     let mut default = None;
+    let auto_increment = false;
+    let min_length = None;
+    let max_length = None;
+    let uniques = false;
 
     for option in col.options {
         match option.option {
@@ -1133,6 +1234,10 @@ fn convert_column_def(col: sp::ColumnDef) -> Result<ColumnDef, AstError> {
         primary_key,
         unique,
         default,
+        auto_increment,
+        min_length,
+        max_length,
+        uniques,
     })
 }
 
@@ -1146,11 +1251,12 @@ fn convert_drop(
     match object_type {
         sp::ObjectType::Table => {
             let tables = names.iter().map(object_name_to_string).collect();
-            Ok(Statement::DropTable(DropTableStatement { tables, if_exists }))
+            Ok(Statement::DropTable(DropTableStatement {
+                tables,
+                if_exists,
+            }))
         }
-        other => Err(AstError::Unsupported(format!(
-            "DROP {other} not supported"
-        ))),
+        other => Err(AstError::Unsupported(format!("DROP {other} not supported"))),
     }
 }
 
@@ -1170,15 +1276,11 @@ fn convert_alter_table(alt: sp::AlterTable) -> Result<Statement, AstError> {
     }))
 }
 
-fn convert_alter_operation(
-    op: sp::AlterTableOperation,
-) -> Result<AlterTableOperation, AstError> {
+fn convert_alter_operation(op: sp::AlterTableOperation) -> Result<AlterTableOperation, AstError> {
     match op {
-        sp::AlterTableOperation::AddColumn { column_def, .. } => {
-            Ok(AlterTableOperation::AddColumn(convert_column_def(
-                column_def,
-            )?))
-        }
+        sp::AlterTableOperation::AddColumn { column_def, .. } => Ok(
+            AlterTableOperation::AddColumn(convert_column_def(column_def)?),
+        ),
         sp::AlterTableOperation::DropColumn {
             column_names,
             if_exists,

@@ -6,11 +6,11 @@
 //! - Error handling
 //! - Semantic validation against an in-memory catalog
 
-use aeternumdb_core::sql::ast::{
-    BinaryOperator, DataType, Expr, SelectItem, Statement, Value,
-};
+use aeternumdb_core::sql::ast::{BinaryOperator, DataType, Expr, SelectItem, Statement, Value};
 use aeternumdb_core::sql::parser::{SqlError, SqlParser};
-use aeternumdb_core::sql::validator::{Catalog, ColumnSchema, TableSchema, ValidationError, Validator};
+use aeternumdb_core::sql::validator::{
+    Catalog, ColumnSchema, TableSchema, ValidationError, Validator,
+};
 
 fn parser() -> SqlParser {
     SqlParser::new()
@@ -94,14 +94,14 @@ fn test_select_single_column() {
         _ => panic!("expected Select"),
     };
     assert_eq!(sel.columns.len(), 1);
-    assert!(matches!(&sel.columns[0], SelectItem::Expr { expr: Expr::Column { name, .. }, .. } if name == "id"));
+    assert!(
+        matches!(&sel.columns[0], SelectItem::Expr { expr: Expr::Column { name, .. }, .. } if name == "id")
+    );
 }
 
 #[test]
 fn test_select_multiple_columns() {
-    let stmts = parser()
-        .parse("SELECT id, name, age FROM users")
-        .unwrap();
+    let stmts = parser().parse("SELECT id, name, age FROM users").unwrap();
     let sel = match &stmts[0] {
         Statement::Select(s) => s,
         _ => panic!("expected Select"),
@@ -120,7 +120,13 @@ fn test_select_with_where() {
     };
     assert!(sel.where_clause.is_some());
     let wc = sel.where_clause.as_ref().unwrap();
-    assert!(matches!(wc, Expr::BinaryOp { op: BinaryOperator::Gt, .. }));
+    assert!(matches!(
+        wc,
+        Expr::BinaryOp {
+            op: BinaryOperator::Gt,
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -134,7 +140,10 @@ fn test_select_with_and_condition() {
     };
     assert!(matches!(
         sel.where_clause.as_ref().unwrap(),
-        Expr::BinaryOp { op: BinaryOperator::And, .. }
+        Expr::BinaryOp {
+            op: BinaryOperator::And,
+            ..
+        }
     ));
 }
 
@@ -314,9 +323,7 @@ fn test_insert_single_row() {
 #[test]
 fn test_insert_multiple_rows() {
     let stmts = parser()
-        .parse(
-            "INSERT INTO users (id, name) VALUES (1, 'Alice'), (2, 'Bob'), (3, 'Carol')",
-        )
+        .parse("INSERT INTO users (id, name) VALUES (1, 'Alice'), (2, 'Bob'), (3, 'Carol')")
         .unwrap();
     let ins = match &stmts[0] {
         Statement::Insert(i) => i,
@@ -379,9 +386,7 @@ fn test_update_multiple_columns() {
 
 #[test]
 fn test_delete_with_where() {
-    let stmts = parser()
-        .parse("DELETE FROM users WHERE id = 5")
-        .unwrap();
+    let stmts = parser().parse("DELETE FROM users WHERE id = 5").unwrap();
     let del = match &stmts[0] {
         Statement::Delete(d) => d,
         _ => panic!("expected Delete"),
@@ -424,7 +429,10 @@ fn test_create_table_basic() {
     assert_eq!(ct.columns.len(), 3);
     assert!(ct.columns[0].primary_key);
     assert!(!ct.columns[1].nullable);
-    assert_eq!(ct.columns[2].data_type, DataType::Decimal(Some(10), Some(2)));
+    assert_eq!(
+        ct.columns[2].data_type,
+        DataType::Decimal(Some(10), Some(2))
+    );
 }
 
 #[test]
@@ -479,9 +487,7 @@ fn test_drop_table() {
 
 #[test]
 fn test_drop_table_if_exists() {
-    let stmts = parser()
-        .parse("DROP TABLE IF EXISTS old_table")
-        .unwrap();
+    let stmts = parser().parse("DROP TABLE IF EXISTS old_table").unwrap();
     let dt = match &stmts[0] {
         Statement::DropTable(d) => d,
         _ => panic!("expected DropTable"),
@@ -512,9 +518,7 @@ fn test_alter_table_add_column() {
 
 #[test]
 fn test_alter_table_drop_column() {
-    let stmts = parser()
-        .parse("ALTER TABLE users DROP COLUMN age")
-        .unwrap();
+    let stmts = parser().parse("ALTER TABLE users DROP COLUMN age").unwrap();
     let alt = match &stmts[0] {
         Statement::AlterTable(a) => a,
         _ => panic!("expected AlterTable"),
@@ -531,9 +535,7 @@ fn test_alter_table_drop_column() {
 
 #[test]
 fn test_multiple_statements() {
-    let stmts = parser()
-        .parse("SELECT 1; SELECT 2; SELECT 3")
-        .unwrap();
+    let stmts = parser().parse("SELECT 1; SELECT 2; SELECT 3").unwrap();
     assert_eq!(stmts.len(), 3);
 }
 
@@ -551,20 +553,38 @@ fn test_parse_one_rejects_multiple() {
 fn test_parse_expr_arithmetic() {
     let expr = parser().parse_expr("1 + 2 * 3").unwrap();
     // 1 + (2 * 3)  — multiplication has higher precedence
-    assert!(matches!(expr, Expr::BinaryOp { op: BinaryOperator::Plus, .. }));
+    assert!(matches!(
+        expr,
+        Expr::BinaryOp {
+            op: BinaryOperator::Plus,
+            ..
+        }
+    ));
 }
 
 #[test]
 fn test_parse_expr_comparison() {
     let expr = parser().parse_expr("age > 18").unwrap();
-    assert!(matches!(expr, Expr::BinaryOp { op: BinaryOperator::Gt, .. }));
+    assert!(matches!(
+        expr,
+        Expr::BinaryOp {
+            op: BinaryOperator::Gt,
+            ..
+        }
+    ));
 }
 
 #[test]
 fn test_parse_expr_logical() {
     let expr = parser().parse_expr("a AND b OR c").unwrap();
     // SQL operator precedence: AND binds tighter than OR
-    assert!(matches!(expr, Expr::BinaryOp { op: BinaryOperator::Or, .. }));
+    assert!(matches!(
+        expr,
+        Expr::BinaryOp {
+            op: BinaryOperator::Or,
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -638,7 +658,13 @@ fn test_parse_expr_case() {
 #[test]
 fn test_parse_expr_cast() {
     let expr = parser().parse_expr("CAST(price AS INTEGER)").unwrap();
-    assert!(matches!(expr, Expr::Cast { data_type: DataType::Integer, .. }));
+    assert!(matches!(
+        expr,
+        Expr::Cast {
+            data_type: DataType::Integer,
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -665,22 +691,20 @@ fn test_parse_expr_distinct_count() {
 
 #[test]
 fn test_aggregate_count() {
-    let stmts = parser()
-        .parse("SELECT COUNT(*) FROM users")
-        .unwrap();
+    let stmts = parser().parse("SELECT COUNT(*) FROM users").unwrap();
     let sel = match &stmts[0] {
         Statement::Select(s) => s,
         _ => panic!("expected Select"),
     };
-    assert!(matches!(&sel.columns[0], SelectItem::Expr { expr: Expr::Function { name, .. }, .. } if name == "COUNT"));
+    assert!(
+        matches!(&sel.columns[0], SelectItem::Expr { expr: Expr::Function { name, .. }, .. } if name == "COUNT")
+    );
 }
 
 #[test]
 fn test_aggregate_sum_avg_min_max() {
     let stmts = parser()
-        .parse(
-            "SELECT SUM(age), AVG(age), MIN(age), MAX(age) FROM users",
-        )
+        .parse("SELECT SUM(age), AVG(age), MIN(age), MAX(age) FROM users")
         .unwrap();
     let sel = match &stmts[0] {
         Statement::Select(s) => s,
@@ -777,7 +801,10 @@ fn test_validate_insert_not_null_violation() {
         .unwrap();
     let v = Validator::new(&catalog);
     let err = v.validate(&stmt).unwrap_err();
-    assert!(matches!(err, ValidationError::NullConstraintViolation { .. }));
+    assert!(matches!(
+        err,
+        ValidationError::NullConstraintViolation { .. }
+    ));
 }
 
 #[test]
@@ -788,7 +815,10 @@ fn test_validate_update_not_null_violation() {
         .unwrap();
     let v = Validator::new(&catalog);
     let err = v.validate(&stmt).unwrap_err();
-    assert!(matches!(err, ValidationError::NullConstraintViolation { .. }));
+    assert!(matches!(
+        err,
+        ValidationError::NullConstraintViolation { .. }
+    ));
 }
 
 #[test]
@@ -930,9 +960,7 @@ fn test_apply_create_table_to_catalog() {
     }
 
     // Now SELECT should validate
-    let select_stmt = parser()
-        .parse_one("SELECT id, val FROM foo")
-        .unwrap();
+    let select_stmt = parser().parse_one("SELECT id, val FROM foo").unwrap();
     let v = Validator::new(&catalog);
     assert!(v.validate(&select_stmt).is_ok());
 }

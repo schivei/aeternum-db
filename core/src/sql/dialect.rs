@@ -27,7 +27,8 @@ use sqlparser::dialect::Dialect;
 /// - Identifiers may contain `-` after the first character (e.g. `my-table`
 ///   is valid when quoted).
 /// - Nested block comments (`/* /* */ */`) are supported.
-/// - Double-quote (`"`) is the identifier quoting character.
+/// - Double-quote (`"`) and backtick (`` ` ``) are identifier quoting characters.
+/// - Backticks allow using SQL keywords as identifiers (MySQL-style).
 #[derive(Debug, Default)]
 pub struct AeternumDialect;
 

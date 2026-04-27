@@ -144,7 +144,11 @@ fn ddl_example() {
         .expect("parse failed");
     match &stmts[0] {
         Statement::AlterTable(alt) => {
-            println!("ALTER TABLE {}: {} operation(s)", alt.table, alt.operations.len());
+            println!(
+                "ALTER TABLE {}: {} operation(s)",
+                alt.table,
+                alt.operations.len()
+            );
         }
         _ => unreachable!(),
     }

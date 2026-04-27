@@ -87,27 +87,23 @@ fn parse_error_to_sql_error(e: ParserError) -> SqlError {
     // sqlparser embeds "at line N, column M" in some error messages.
     let (line, col) = extract_line_col(&message);
 
-    SqlError::ParseError {
-        message,
-        line,
-        col,
-    }
+    SqlError::ParseError { message, line, col }
 }
 
 /// Parse `"... at line N, column M"` from a sqlparser error string.
 fn extract_line_col(msg: &str) -> (Option<usize>, Option<usize>) {
     // Pattern: "at line N, column M" or "Line: N, Column: M"
-    let line = extract_after(msg, "at line ")
-        .or_else(|| extract_after(msg, "Line: "));
-    let col = extract_after(msg, "column ")
-        .or_else(|| extract_after(msg, "Column: "));
+    let line = extract_after(msg, "at line ").or_else(|| extract_after(msg, "Line: "));
+    let col = extract_after(msg, "column ").or_else(|| extract_after(msg, "Column: "));
     (line, col)
 }
 
 fn extract_after(haystack: &str, needle: &str) -> Option<usize> {
     let pos = haystack.find(needle)?;
     let rest = &haystack[pos + needle.len()..];
-    let end = rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len());
+    let end = rest
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(rest.len());
     rest[..end].parse::<usize>().ok()
 }
 
@@ -155,8 +151,7 @@ impl SqlParser {
             return Err(SqlError::EmptyInput);
         }
 
-        let sp_stmts =
-            SpParser::parse_sql(&self.dialect, sql).map_err(parse_error_to_sql_error)?;
+        let sp_stmts = SpParser::parse_sql(&self.dialect, sql).map_err(parse_error_to_sql_error)?;
 
         if sp_stmts.is_empty() {
             return Err(SqlError::EmptyInput);
@@ -181,10 +176,7 @@ impl SqlParser {
         let mut stmts = self.parse(sql)?;
         if stmts.len() != 1 {
             return Err(SqlError::ParseError {
-                message: format!(
-                    "expected exactly one statement, got {}",
-                    stmts.len()
-                ),
+                message: format!("expected exactly one statement, got {}", stmts.len()),
                 line: None,
                 col: None,
             });
