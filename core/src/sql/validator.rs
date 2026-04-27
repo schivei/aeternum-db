@@ -249,9 +249,14 @@ impl<'a> Validator<'a> {
                     .map(|t| t.as_str())
                     .unwrap_or(table.as_str());
                 self.require_table(resolved_table)?;
-                if let Some(schema) = self.catalog.get_table(resolved_table) {
-                    self.require_column(schema, name)?;
-                }
+                // After require_table succeeds, get_table must return Some since both use
+                // the same underlying HashMap. Return TableNotFound if somehow they diverge.
+                let schema = self.catalog.get_table(resolved_table).ok_or_else(|| {
+                    ValidationError::TableNotFound {
+                        table: resolved_table.to_string(),
+                    }
+                })?;
+                self.require_column(schema, name)?;
                 Ok(())
             }
             _ => self.validate_expr(expr, default_table_name),
