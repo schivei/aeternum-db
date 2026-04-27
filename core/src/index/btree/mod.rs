@@ -534,18 +534,20 @@ impl<K: BTreeKey, V: BTreeValue> BTree<K, V> {
             Bound::Unbounded => EndBound::Unbounded,
         };
 
-        let meta = self.meta.read().await;
-        let root = meta.root_page_id;
-        let height = meta.height;
-        drop(meta);
+        let leaves = {
+            let meta = self.meta.read().await;
 
-        // Descend to the leaf that contains the start key (or the leftmost leaf).
-        let (_, start_leaf) = self.find_leaf(root, start_bytes.as_deref(), height).await?;
+            // Keep the metadata read lock held while descending from the current
+            // root and walking the leaf chain so concurrent writers cannot
+            // change tree metadata or reclaim pages during the scan setup.
+            let (_, start_leaf) =
+                self.find_leaf(meta.root_page_id, start_bytes.as_deref(), meta.height).await?;
 
-        // Walk the leaf chain, collecting all leaves that can contribute to
-        // the range.  The starting leaf is reused directly to avoid a redundant
-        // reload.
-        let leaves = self.collect_range_leaves(start_leaf, &end_bound).await?;
+            // Walk the leaf chain, collecting all leaves that can contribute to
+            // the range.  The starting leaf is reused directly to avoid a
+            // redundant reload.
+            self.collect_range_leaves(start_leaf, &end_bound).await?
+        };
 
         if leaves.is_empty() {
             return Ok(BTreeIterator::empty());
