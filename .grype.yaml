@@ -1,0 +1,20 @@
+# Grype vulnerability scanner configuration
+# See: https://github.com/anchore/grype#grype-configuration
+
+ignore:
+  # CVE-2005-2541: tar - Debian maintainers classify this as intentional behavior
+  # (tar preserves SUID/SGID bits by design). No security fix is planned.
+  - vulnerability: CVE-2005-2541
+    reason: "Intentional tar behavior; Debian marks as won't-fix (by design)."
+
+  # CVE-2017-18018: coreutils - Disputed; Debian considers this a non-issue
+  # because chown's race condition requires local access already.
+  - vulnerability: CVE-2017-18018
+    reason: "Disputed coreutils race condition; no upstream fix planned."
+
+  # CVE-2019-1010022 / CVE-2019-1010023: glibc - These are disputed CVEs.
+  # The glibc maintainers and Debian both classify them as not security-relevant.
+  - vulnerability: CVE-2019-1010022
+    reason: "Disputed glibc CVE; rejected by upstream and Debian as not a security issue."
+  - vulnerability: CVE-2019-1010023
+    reason: "Disputed glibc CVE; rejected by upstream and Debian as not a security issue."

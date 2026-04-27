@@ -1,7 +1,10 @@
 # Multi-stage build for AeternumDB
-FROM rust:slim as builder
+FROM rust:slim AS builder
 
 WORKDIR /build
+
+# Upgrade base packages in builder to apply latest security patches
+RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
 
 # Copy core engine
 COPY core/ ./core/
@@ -13,8 +16,9 @@ RUN cargo build --release
 # Final stage
 FROM debian:bookworm-slim
 
-# Install runtime dependencies
-RUN apt-get update && apt-get install -y \
+# Install runtime dependencies and apply all available security patches
+RUN apt-get update && apt-get upgrade -y && apt-get install -y \
+    --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
