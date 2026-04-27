@@ -104,9 +104,10 @@ implementation is based on **SQL-92** with a subset of common SQL extensions.
 ### Reference Types (OO / Graph Paradigm)
 
 AeternumDB extends the SQL type system with reference types for object-oriented
-and graph-style data modelling.  These are **future-execution scaffolding** —
-the parser captures them fully; storage and query execution will be implemented
-in later phases.
+and graph-style data modelling. These are **future parsing/execution
+scaffolding** — the syntax below is documented for planned support, but it is
+not yet fully lowered into dedicated internal reference-type variants. Storage,
+semantic enforcement, and query execution will be implemented in later phases.
 
 | SQL Syntax                  | Internal type         | Meaning                                      |
 |-----------------------------|-----------------------|----------------------------------------------|
