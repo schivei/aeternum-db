@@ -473,12 +473,7 @@ impl<K: BTreeKey, V: BTreeValue> BTree<K, V> {
         use std::ops::Bound;
 
         let start_bytes: Option<Vec<u8>> = match range.start_bound() {
-            Bound::Included(k) => Some(k.to_bytes()),
-            Bound::Excluded(k) => {
-                // We start at the entry _after_ this key; we'll skip at the
-                // iterator level by starting at the next position.
-                Some(k.to_bytes())
-            }
+            Bound::Included(k) | Bound::Excluded(k) => Some(k.to_bytes()),
             Bound::Unbounded => None,
         };
         let start_excluded = matches!(range.start_bound(), Bound::Excluded(_));
@@ -495,28 +490,43 @@ impl<K: BTreeKey, V: BTreeValue> BTree<K, V> {
         drop(meta);
 
         // Descend to the leaf that contains the start key (or the leftmost leaf).
-        let (_, mut current_leaf) = self.find_leaf(root, start_bytes.as_deref(), height).await?;
+        let (_, start_leaf) = self.find_leaf(root, start_bytes.as_deref(), height).await?;
 
-        // Load all leaves in the range, reusing the starting leaf returned by
-        // `find_leaf` to avoid an immediate redundant reload.
+        // Walk the leaf chain, collecting all leaves that can contribute to
+        // the range.  The starting leaf is reused directly to avoid a redundant
+        // reload.
+        let leaves = self.collect_range_leaves(start_leaf, &end_bound).await?;
+
+        if leaves.is_empty() {
+            return Ok(BTreeIterator::empty());
+        }
+
+        let mut leaves_deque = std::collections::VecDeque::from(leaves);
+        let first_leaf = leaves_deque.pop_front().expect("non-empty");
+        let start_pos = start_pos_in_leaf(&first_leaf, start_bytes.as_deref(), start_excluded);
+
+        Ok(BTreeIterator::new(
+            first_leaf,
+            start_pos,
+            leaves_deque.into_iter().collect(),
+            end_bound,
+        ))
+    }
+
+    /// Walk the leaf chain starting at `start_leaf`, collecting all leaves
+    /// that fall within `end_bound`.
+    async fn collect_range_leaves(
+        &self,
+        start_leaf: LeafNode,
+        end_bound: &EndBound,
+    ) -> Result<Vec<LeafNode>, IndexError> {
         let mut leaves: Vec<LeafNode> = Vec::new();
+        let mut current_leaf = start_leaf;
         loop {
-            let next = current_leaf.next_leaf;
-            // Check if this leaf can contribute any keys within the range.
-            let done = match &end_bound {
-                EndBound::Unbounded => false,
-                EndBound::Included(end) => current_leaf
-                    .keys
-                    .first()
-                    .is_some_and(|k| k.as_slice() > end.as_slice()),
-                EndBound::Excluded(end) => current_leaf
-                    .keys
-                    .first()
-                    .is_some_and(|k| k.as_slice() >= end.as_slice()),
-            };
-            if done {
+            if leaf_past_range_end(&current_leaf, end_bound) {
                 break;
             }
+            let next = current_leaf.next_leaf;
             leaves.push(current_leaf);
 
             let Some(leaf_id) = next else {
@@ -532,31 +542,7 @@ impl<K: BTreeKey, V: BTreeValue> BTree<K, V> {
                 )));
             }
         }
-
-        if leaves.is_empty() {
-            return Ok(BTreeIterator::empty());
-        }
-
-        // Find the starting position within the first leaf.
-        let first_leaf = leaves.remove(0);
-        let start_pos = match start_bytes.as_deref() {
-            None => 0,
-            Some(start) => {
-                let pos = first_leaf.keys.partition_point(|k| k.as_slice() < start);
-                if start_excluded {
-                    // skip entries equal to the exclusive start bound
-                    let mut p = pos;
-                    while p < first_leaf.len() && first_leaf.keys[p].as_slice() == start {
-                        p += 1;
-                    }
-                    p
-                } else {
-                    pos
-                }
-            }
-        };
-
-        Ok(BTreeIterator::new(first_leaf, start_pos, leaves, end_bound))
+        Ok(leaves)
     }
 
     /// Bulk-load key-value pairs into the tree.
@@ -628,37 +614,9 @@ impl<K: BTreeKey, V: BTreeValue> BTree<K, V> {
         match node {
             Node::Leaf(mut leaf) => {
                 leaf.insert(key.to_vec(), value.to_vec())?;
-                if leaf.len() > fanout {
-                    // Split leaf.
-                    let split_result = leaf.split();
-                    // Allocate a page for the new right sibling.
-                    let right_page_id = self.storage.allocate_page().await?;
-
-                    // Update sibling pointers.
-                    let old_next = leaf.next_leaf;
-                    leaf.next_leaf = Some(right_page_id);
-                    let mut right = split_result.right;
-                    right.prev_leaf = Some(page_id);
-                    right.next_leaf = old_next;
-
-                    // Update the next leaf's prev pointer if it exists.
-                    if let Some(next_id) = old_next {
-                        let mut next_node = load_node(&self.storage, next_id).await?;
-                        if let Node::Leaf(ref mut next_leaf) = next_node {
-                            next_leaf.prev_leaf = Some(right_page_id);
-                            write_node(&self.storage, next_id, &next_node).await?;
-                        }
-                    }
-
-                    write_node(&self.storage, page_id, &Node::Leaf(leaf)).await?;
-                    write_node(&self.storage, right_page_id, &Node::Leaf(right)).await?;
-                    Ok(Some((split_result.split_key, right_page_id)))
-                } else {
-                    write_node(&self.storage, page_id, &Node::Leaf(leaf)).await?;
-                    Ok(None)
-                }
+                self.split_leaf_node(page_id, leaf, fanout).await
             }
-            Node::Internal(mut internal) => {
+            Node::Internal(internal) => {
                 let child_idx = internal.find_child(key);
                 let child_page_id = internal.children[child_idx];
 
@@ -666,33 +624,93 @@ impl<K: BTreeKey, V: BTreeValue> BTree<K, V> {
                     Box::pin(self.insert_recursive(child_page_id, key, value, height - 1, fanout))
                         .await?;
 
-                if let Some((push_up_key, new_right_page_id)) = result {
-                    // Insert the pushed-up key and new child pointer.
-                    internal.keys.insert(child_idx, push_up_key);
-                    internal.children.insert(child_idx + 1, new_right_page_id);
-
-                    if internal.len() > fanout {
-                        // Split internal node.
-                        let split_result = internal.split();
-                        let right_page_id = self.storage.allocate_page().await?;
-
-                        write_node(&self.storage, page_id, &Node::Internal(internal)).await?;
-                        write_node(
-                            &self.storage,
-                            right_page_id,
-                            &Node::Internal(split_result.right),
+                match result {
+                    Some((push_up_key, new_right_page_id)) => {
+                        self.handle_internal_push_up(
+                            page_id,
+                            internal,
+                            child_idx,
+                            push_up_key,
+                            new_right_page_id,
+                            fanout,
                         )
-                        .await?;
-
-                        Ok(Some((split_result.push_up_key, right_page_id)))
-                    } else {
-                        write_node(&self.storage, page_id, &Node::Internal(internal)).await?;
-                        Ok(None)
+                        .await
                     }
-                } else {
-                    Ok(None)
+                    None => Ok(None),
                 }
             }
+        }
+    }
+
+    /// Handle a leaf that may need splitting after an insert.
+    ///
+    /// Writes the (possibly-split) leaf to storage and returns the split key
+    /// and new right sibling page ID, or `None` if no split was needed.
+    async fn split_leaf_node(
+        &self,
+        page_id: PageId,
+        mut leaf: LeafNode,
+        fanout: usize,
+    ) -> Result<Option<(Vec<u8>, PageId)>, IndexError> {
+        if leaf.len() <= fanout {
+            write_node(&self.storage, page_id, &Node::Leaf(leaf)).await?;
+            return Ok(None);
+        }
+
+        let split_result = leaf.split();
+        let right_page_id = self.storage.allocate_page().await?;
+
+        // Wire up sibling pointers.
+        let old_next = leaf.next_leaf;
+        leaf.next_leaf = Some(right_page_id);
+        let mut right = split_result.right;
+        right.prev_leaf = Some(page_id);
+        right.next_leaf = old_next;
+
+        // Update the old next leaf's back-pointer.
+        if let Some(next_id) = old_next {
+            let mut next_node = load_node(&self.storage, next_id).await?;
+            if let Node::Leaf(ref mut next_leaf) = next_node {
+                next_leaf.prev_leaf = Some(right_page_id);
+                write_node(&self.storage, next_id, &next_node).await?;
+            }
+        }
+
+        write_node(&self.storage, page_id, &Node::Leaf(leaf)).await?;
+        write_node(&self.storage, right_page_id, &Node::Leaf(right)).await?;
+        Ok(Some((split_result.split_key, right_page_id)))
+    }
+
+    /// Insert a pushed-up key into an internal node, splitting it if necessary.
+    ///
+    /// Returns the split key and new right sibling page ID if the internal node
+    /// was split, `None` otherwise.
+    async fn handle_internal_push_up(
+        &self,
+        page_id: PageId,
+        mut internal: InternalNode,
+        child_idx: usize,
+        push_up_key: Vec<u8>,
+        new_right_page_id: PageId,
+        fanout: usize,
+    ) -> Result<Option<(Vec<u8>, PageId)>, IndexError> {
+        internal.keys.insert(child_idx, push_up_key);
+        internal.children.insert(child_idx + 1, new_right_page_id);
+
+        if internal.len() > fanout {
+            let split_result = internal.split();
+            let right_page_id = self.storage.allocate_page().await?;
+            write_node(&self.storage, page_id, &Node::Internal(internal)).await?;
+            write_node(
+                &self.storage,
+                right_page_id,
+                &Node::Internal(split_result.right),
+            )
+            .await?;
+            Ok(Some((split_result.push_up_key, right_page_id)))
+        } else {
+            write_node(&self.storage, page_id, &Node::Internal(internal)).await?;
+            Ok(None)
         }
     }
 
@@ -781,7 +799,7 @@ impl<K: BTreeKey, V: BTreeValue> BTree<K, V> {
                 }
                 Ok(deleted)
             }
-            Node::Internal(mut internal) => {
+            Node::Internal(internal) => {
                 if height == 0 {
                     return Err(IndexError::Corrupt(format!(
                         "found internal node at height 0, page {page_id}"
@@ -794,52 +812,52 @@ impl<K: BTreeKey, V: BTreeValue> BTree<K, V> {
                     Box::pin(self.delete_recursive(child_page_id, key, height - 1)).await?;
 
                 if deleted {
-                    // Check if the child is now empty (leaf case).
                     let child_node = load_node(&self.storage, child_page_id).await?;
-                    let child_empty = match &child_node {
-                        Node::Leaf(l) => l.is_empty(),
-                        Node::Internal(i) => i.is_empty() && i.children.is_empty(),
-                    };
-
-                    if child_empty && !internal.is_empty() {
-                        // Remove the child pointer and separator key.
-                        // Update sibling pointers if it's a leaf.
-                        if let Node::Leaf(ref empty_leaf) = child_node {
-                            if let Some(prev_id) = empty_leaf.prev_leaf {
-                                let mut prev_node = load_node(&self.storage, prev_id).await?;
-                                if let Node::Leaf(ref mut prev_leaf) = prev_node {
-                                    prev_leaf.next_leaf = empty_leaf.next_leaf;
-                                    write_node(&self.storage, prev_id, &prev_node).await?;
-                                }
-                            }
-                            if let Some(next_id) = empty_leaf.next_leaf {
-                                let mut next_node = load_node(&self.storage, next_id).await?;
-                                if let Node::Leaf(ref mut next_leaf) = next_node {
-                                    next_leaf.prev_leaf = empty_leaf.prev_leaf;
-                                    write_node(&self.storage, next_id, &next_node).await?;
-                                }
-                            }
-                        }
-
-                        // Remove the separator key that was to the left of
-                        // this child (when it is not the first child), or
-                        // the first separator key (when it is the first child
-                        // and one still exists).
-                        if child_idx > 0 {
-                            // child_idx - 1 is safe: child_idx > 0 here.
-                            internal.keys.remove(child_idx - 1);
-                        } else if !internal.keys.is_empty() {
-                            internal.keys.remove(0);
-                        }
-                        internal.children.remove(child_idx);
-                        write_node(&self.storage, page_id, &Node::Internal(internal)).await?;
-                        self.storage.deallocate_page(child_page_id).await?;
+                    if is_node_empty(&child_node) && !internal.is_empty() {
+                        self.remove_empty_child_from_parent(
+                            page_id,
+                            internal,
+                            child_idx,
+                            child_node,
+                            child_page_id,
+                        )
+                        .await?;
                     }
                 }
 
                 Ok(deleted)
             }
         }
+    }
+
+    /// Remove an empty child from its parent internal node.
+    ///
+    /// Unlinks the child from the sibling chain (if it is a leaf), removes the
+    /// corresponding separator key and child pointer from `internal`, writes the
+    /// updated parent, and deallocates the child page.
+    async fn remove_empty_child_from_parent(
+        &self,
+        page_id: PageId,
+        mut internal: InternalNode,
+        child_idx: usize,
+        child_node: Node,
+        child_page_id: PageId,
+    ) -> Result<(), IndexError> {
+        if let Node::Leaf(ref empty_leaf) = child_node {
+            unlink_leaf_from_chain(&self.storage, empty_leaf).await?;
+        }
+        // Remove the separator key that was to the left of this child (when it
+        // is not the first child), or the first separator key otherwise.
+        if child_idx > 0 {
+            // child_idx - 1 is safe: child_idx > 0 here.
+            internal.keys.remove(child_idx - 1);
+        } else if !internal.keys.is_empty() {
+            internal.keys.remove(0);
+        }
+        internal.children.remove(child_idx);
+        write_node(&self.storage, page_id, &Node::Internal(internal)).await?;
+        self.storage.deallocate_page(child_page_id).await?;
+        Ok(())
     }
 
     /// Descend to the leaf node that would contain `key` (or the leftmost leaf
@@ -916,6 +934,75 @@ async fn write_node(
         .write_page_data(page_id, 0, &padded)
         .await
         .map_err(IndexError::Storage)
+}
+
+// ── Range-scan helpers (free functions) ──────────────────────────────────────
+
+/// Return `true` if the first key in `leaf` already exceeds `end_bound`,
+/// meaning no key in this leaf (or any subsequent leaf) can fall within the
+/// range.
+fn leaf_past_range_end(leaf: &LeafNode, end_bound: &EndBound) -> bool {
+    match end_bound {
+        EndBound::Unbounded => false,
+        EndBound::Included(end) => leaf
+            .keys
+            .first()
+            .is_some_and(|k| k.as_slice() > end.as_slice()),
+        EndBound::Excluded(end) => leaf
+            .keys
+            .first()
+            .is_some_and(|k| k.as_slice() >= end.as_slice()),
+    }
+}
+
+/// Return the index of the first entry in `leaf` that satisfies the start
+/// bound described by (`start`, `excluded`).
+fn start_pos_in_leaf(leaf: &LeafNode, start: Option<&[u8]>, excluded: bool) -> usize {
+    let Some(start) = start else {
+        return 0;
+    };
+    let pos = leaf.keys.partition_point(|k| k.as_slice() < start);
+    if excluded {
+        // Skip any entries that are exactly equal to the exclusive start key.
+        let mut p = pos;
+        while p < leaf.len() && leaf.keys[p].as_slice() == start {
+            p += 1;
+        }
+        p
+    } else {
+        pos
+    }
+}
+
+/// Return `true` if `node` holds no keys/children.
+fn is_node_empty(node: &Node) -> bool {
+    match node {
+        Node::Leaf(l) => l.is_empty(),
+        Node::Internal(i) => i.is_empty() && i.children.is_empty(),
+    }
+}
+
+/// Update the doubly-linked sibling pointers of the leaves that neighbour
+/// `empty_leaf`, effectively removing it from the leaf chain.
+async fn unlink_leaf_from_chain(
+    storage: &StorageEngine,
+    empty_leaf: &LeafNode,
+) -> Result<(), IndexError> {
+    if let Some(prev_id) = empty_leaf.prev_leaf {
+        let mut prev_node = load_node(storage, prev_id).await?;
+        if let Node::Leaf(ref mut prev_leaf) = prev_node {
+            prev_leaf.next_leaf = empty_leaf.next_leaf;
+            write_node(storage, prev_id, &prev_node).await?;
+        }
+    }
+    if let Some(next_id) = empty_leaf.next_leaf {
+        let mut next_node = load_node(storage, next_id).await?;
+        if let Node::Leaf(ref mut next_leaf) = next_node {
+            next_leaf.prev_leaf = empty_leaf.prev_leaf;
+            write_node(storage, next_id, &next_node).await?;
+        }
+    }
+    Ok(())
 }
 
 // ── Unit tests ────────────────────────────────────────────────────────────────
