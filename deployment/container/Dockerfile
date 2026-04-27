@@ -25,9 +25,9 @@ RUN apk upgrade --no-cache && apk add --no-cache ca-certificates
 COPY --from=builder /build/core/target/release/aeternumdb /usr/local/bin/
 
 # Create a non-root user and data directory
-RUN addgroup -S -g 999 aeternumdb && adduser -S -D -H -u 999 -G aeternumdb aeternumdb \
+RUN addgroup -S -g 1000 aeternumdb && adduser -S -D -H -u 1000 -G aeternumdb aeternumdb \
     && mkdir -p /var/lib/aeternumdb \
-    && chown -R 999:999 /var/lib/aeternumdb
+    && chown -R 1000:1000 /var/lib/aeternumdb
 
 # Expose default port
 EXPOSE 5432
