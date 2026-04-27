@@ -821,7 +821,12 @@ impl<K: BTreeKey, V: BTreeValue> BTree<K, V> {
                             }
                         }
 
+                        // Remove the separator key that was to the left of
+                        // this child (when it is not the first child), or
+                        // the first separator key (when it is the first child
+                        // and one still exists).
                         if child_idx > 0 {
+                            // child_idx - 1 is safe: child_idx > 0 here.
                             internal.keys.remove(child_idx - 1);
                         } else if !internal.keys.is_empty() {
                             internal.keys.remove(0);
