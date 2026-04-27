@@ -52,7 +52,7 @@ in `[keys[i-1], keys[i])`.
 ```text
 ┌─────────────────────────────────────────────────────────┐
 │ node_type  : u8 = 1                                     │
-│ num_pairs  : u32                                        │
+│ num_pairs  : u32 (little-endian)                        │
 │ [(key_len:u32 | key_bytes | val_len:u32 | val_bytes)] × n │
 │ next_leaf  : u8 (0=None) [+ u64 PageId if present]     │
 │ prev_leaf  : u8 (0=None) [+ u64 PageId if present]     │
