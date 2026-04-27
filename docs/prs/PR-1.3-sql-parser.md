@@ -46,7 +46,7 @@ dialect, a rich internal AST, and a semantic validator backed by an in-memory ca
   Cross-database joins are **not supported** — all tables in a query must
   belong to the same database.
 - **Schemas**: `CREATE SCHEMA [db.]name`, `DROP SCHEMA`.  Default schema is
-  `app`.  Reserved schemas: `sys`, `information_schema`, `pg_catalog`.
+  `app`.  Reserved schemas: `sys`, `information_schema`, `adb_metadata`.
 - **Three-part names**: `db.schema.table` fully qualified; `schema.table`;
   bare `table` (resolved to active DB + `app` schema).
 - `TableReference::Named` carries `database: Option<String>` and
@@ -161,6 +161,48 @@ execution is a Phase 4 task.
 `BinaryOperator::{BitwiseAnd, BitwiseOr, BitwiseXor, BitwiseShiftLeft, BitwiseShiftRight}`
 and `UnaryOperator::BitwiseNot`.  Used primarily with FLAG enums and integer
 columns.  Mapped from sqlparser operators `&`, `|`, `^`, `~`, `<<`, `>>`.
+
+### Regex Operators
+- `BinaryOperator::Regexp` / `NotRegexp` — case-sensitive POSIX regex match (`REGEXP`).
+- `BinaryOperator::RegexpIMatch` / `NotRegexpIMatch` — case-insensitive regex
+  (`REGEXP ~*`).
+- `BinaryOperator::ILike` / `NotILike` — case-insensitive `LIKE` (`ILIKE`).
+- `BinaryOperator::SimilarTo` / `NotSimilarTo` — SQL-standard regex (`SIMILAR TO`).
+
+### REVLIKE — Reverse Pattern Matching
+`BinaryOperator::RevLike` / `NotRevLike` — the **left operand is the pattern**
+and the **right operand is the value** being tested.  Useful when patterns are
+stored in columns.
+
+```sql
+-- pattern column on the left, tested against a fixed value on the right
+SELECT rule_name FROM filter_rules WHERE pattern REVLIKE 'error_404';
+```
+
+### Array Quantifier Operators — `LIKE ANY` / `LIKE ALL` / `REVLIKE ANY`
+`Expr::ArrayOp { expr, op, quantifier, right }` where `quantifier` is
+`ArrayQuantifier::Any` or `ArrayQuantifier::All`.
+
+```sql
+expr  LIKE ANY  [pat1, pat2, ...]   -- matches at least one pattern
+expr  LIKE ALL  [pat1, pat2, ...]   -- matches every pattern
+'val' REVLIKE ANY vec_col           -- at least one stored pattern matches the value
+```
+
+### Full-Text Search — MATCH … AGAINST
+`Expr::MatchAgainst { columns, match_value, modifier }` with modifiers:
+- `TextSearchModifier::NaturalLanguage`
+- `TextSearchModifier::Boolean`
+- `TextSearchModifier::WithQueryExpansion`
+
+Requires `FULLTEXT` or `TRIGRAM` index on the target columns.
+
+### Text Functions
+`Expr::Substring`, `Expr::Position`, `Expr::Trim`, `Expr::Replace`,
+`Expr::Overlay` — all standard SQL text functions with optional regex support.
+
+### String Concatenation
+`BinaryOperator::StringConcat` (`||`) — SQL-standard string concatenation operator.
 
 ### DCL (scaffolding)
 `GRANT SELECT [(col,...)] ON table TO role`,

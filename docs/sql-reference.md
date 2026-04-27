@@ -13,6 +13,15 @@ implementation is based on **SQL-92** with a subset of common SQL extensions.
 4. [Databases and Schemas](#databases-and-schemas)
 5. [System Identifier (objid)](#system-identifier-objid)
 6. [Operators](#operators)
+   - [Arithmetic](#arithmetic)
+   - [Comparison](#comparison)
+   - [Logical](#logical)
+   - [Bitwise](#bitwise)
+   - [String / Pattern](#string--pattern)
+   - [Regex Operators](#regex-operators)
+   - [REVLIKE — Reverse Pattern Matching](#revlike--reverse-pattern-matching)
+   - [Array Quantifier Operators](#array-quantifier-operators--like-any--like-all--revlike-any)
+   - [Other](#other)
 7. [Functions](#functions)
 8. [Statements](#statements)
    - [SELECT](#select)
@@ -292,9 +301,9 @@ Cross-schema joins **are** supported within the same database.
 | `app`               | **Default application schema** (used when no schema is specified) |
 | `sys`               | System metadata and internal catalog tables (reserved) |
 | `information_schema`| SQL-standard information schema views (reserved) |
-| `pg_catalog`        | Reserved for future compatibility views         |
+| `adb_metadata`      | AeternumDB internal metadata and compatibility views (reserved) |
 
-> **Note**: Reserved schemas (`sys`, `information_schema`, `pg_catalog`) cannot
+> **Note**: Reserved schemas (`sys`, `information_schema`, `adb_metadata`) cannot
 > be created or dropped by users.  Enforcement is a future execution-layer task.
 
 ### Three-Part Identifier Syntax
@@ -343,7 +352,7 @@ CREATE SCHEMA [IF NOT EXISTS] [database_name.]schema_name;
 ```
 
 Creates a new schema in the specified (or active) database.  Reserved schema
-names (`sys`, `information_schema`, `pg_catalog`) cannot be used.
+names (`sys`, `information_schema`, `adb_metadata`) cannot be used.
 
 ### DROP SCHEMA
 
@@ -386,12 +395,101 @@ Drops a schema and all tables it contains.
 | `OR`     | Logical OR   |
 | `NOT`    | Logical NOT  |
 
-### String
+### Bitwise
 
-| Operator   | Description         |
-|------------|---------------------|
-| `LIKE`     | Pattern matching    |
-| `NOT LIKE` | Negative pattern    |
+| Operator | Description                    |
+|----------|--------------------------------|
+| `&`      | Bitwise AND                    |
+| `\|`     | Bitwise OR                     |
+| `^`      | Bitwise XOR                    |
+| `~expr`  | Bitwise NOT (unary)            |
+| `<<`     | Bit-shift left                 |
+| `>>`     | Bit-shift right                |
+
+Bitwise operators are especially useful for filtering FLAG enum columns:
+
+```sql
+-- Rows where the Permission column has the Read bit (1) set
+SELECT name FROM roles WHERE permissions & 1 = 1;
+
+-- Rows with Read (1) OR Write (2) bits set
+SELECT name FROM roles WHERE permissions & 3 != 0;
+```
+
+### String / Pattern
+
+| Operator          | Description                                                |
+|-------------------|------------------------------------------------------------|
+| `\|\|`            | String concatenation                                       |
+| `LIKE pat`        | Wildcard pattern match (`%` = any chars, `_` = one char)  |
+| `NOT LIKE pat`    | Negated wildcard match                                     |
+| `ILIKE pat`       | Case-insensitive `LIKE`                                    |
+| `NOT ILIKE pat`   | Negated case-insensitive `LIKE`                            |
+| `SIMILAR TO pat`  | SQL-standard regex pattern match                           |
+| `NOT SIMILAR TO`  | Negated `SIMILAR TO`                                       |
+
+### Regex Operators
+
+AeternumDB supports POSIX-style regular expression operators:
+
+| Operator             | Description                                         |
+|----------------------|-----------------------------------------------------|
+| `REGEXP pat`         | Case-sensitive regex match                          |
+| `NOT REGEXP pat`     | Negated case-sensitive regex match                  |
+| `REGEXP ~* pat`      | Case-insensitive regex match                        |
+| `NOT REGEXP ~* pat`  | Negated case-insensitive regex match                |
+
+```sql
+-- Rows where email matches a regex
+SELECT name FROM users WHERE email REGEXP '^[a-z]+@example\\.com$';
+
+-- Case-insensitive regex
+SELECT name FROM users WHERE name REGEXP ~* '^alice';
+```
+
+### REVLIKE — Reverse Pattern Matching
+
+`REVLIKE` is the mirror of `LIKE`: the **left side is the pattern** and the
+**right side is the value being tested**. This is useful when the pattern
+itself is stored in a column.
+
+| Operator            | Description                                              |
+|---------------------|----------------------------------------------------------|
+| `pat REVLIKE col`   | Pattern (left) matches value in column (right)           |
+| `pat NOT REVLIKE col` | Negated reverse LIKE                                   |
+| `pat REVILIKE col`  | Case-insensitive reverse LIKE                            |
+| `pat REVREGEXP col` | Pattern (left) is a regex, matched against column value  |
+
+```sql
+-- Check whether a stored pattern column matches a fixed string
+SELECT rule_name FROM filter_rules WHERE pattern REVLIKE 'hello world';
+
+-- The rule table stores LIKE-patterns; test a given value against all of them
+SELECT rule_name FROM filter_rules WHERE '%hello%' REVLIKE value_col;
+```
+
+### Array Quantifier Operators — LIKE ANY / LIKE ALL / REVLIKE ANY
+
+These operators let you test a value against a list or vector column using
+any pattern operator (`LIKE`, `ILIKE`, `REGEXP`, `REVLIKE`, …).
+
+| Syntax                           | True when…                                          |
+|----------------------------------|-----------------------------------------------------|
+| `col LIKE ANY [pat1, pat2, …]`   | Column matches **at least one** pattern in the list |
+| `col LIKE ALL [pat1, pat2, …]`   | Column matches **every** pattern in the list        |
+| `'val' REVLIKE ANY vec_col`      | At least one pattern in vector column matches value |
+| `'val' REVLIKE ALL vec_col`      | Every pattern in vector column matches the value    |
+
+```sql
+-- Rows where name matches any of the supplied patterns
+SELECT id FROM users WHERE name LIKE ANY ['%alice%', '%bob%'];
+
+-- Rows where description satisfies all keyword patterns
+SELECT id FROM docs WHERE body LIKE ALL ['%security%', '%audit%'];
+
+-- Rows where at least one stored pattern matches a fixed string
+SELECT rule_id FROM rules WHERE 'error_404' REVLIKE ANY pattern_col;
+```
 
 ### Other
 
@@ -485,39 +583,57 @@ SELECT DISTINCT age FROM users;
 
 #### JOIN
 
-AeternumDB joins are driven by **reference column types** — the relationship
-is encoded in the schema and resolved via `objid` at execution time, so no
-explicit `ON` clause is required.  Use `FILTER BY` to add optional additional
-predicates.
+AeternumDB joins are **reference-driven**, not condition-driven.  Instead of
+listing a second table in a `JOIN` clause, you navigate through a **reference
+column** that already encodes the relationship at schema-definition time.
+Rows are linked via `objid` — no explicit `ON` clause is required or supported.
+
+> **The only supported join form is chain navigation starting from the `FROM`
+> table.**  Direct `INNER JOIN other_table` syntax is not the intended usage;
+> all traversal starts from the root `FROM` table and walks reference columns.
+
+**Chain / path navigation syntax:**
+
+```
+schema.table.ref_column.target_column
+```
+
+```sql
+-- Navigate from users → through the order_ref reference column → to total
+SELECT u.name, u.order_ref.total
+FROM users u;
+
+-- Deep chain: user → order → line_item → product name
+SELECT u.name, u.order_ref.line_ref.product_name
+FROM app.users u;
+
+-- Schema-qualified chain root
+SELECT u.name, u.order_ref.total
+FROM app.users u;
+```
+
+**Optional `FILTER BY` predicate** further narrows the traversal result
+(analogous to SQL's `ON` but semantically distinct — it is a post-join filter
+on the already-resolved reference):
+
+```sql
+-- Traverse order_ref but only keep rows where total > 100
+SELECT u.name, u.order_ref.total
+FROM users u
+FILTER BY u.order_ref.total > 100;
+
+-- Deep chain with filter
+SELECT u.name, u.order_ref.line_ref.qty
+FROM app.users u
+FILTER BY u.order_ref.status = 'shipped';
+```
 
 > **Cross-database joins are not supported.**  All tables in a query must
 > belong to the same database.  Cross-schema joins within the same database
 > are fully supported.
 
-```sql
--- Join via reference column types (preferred AeternumDB style)
-SELECT u.name, o.total
-FROM users u
-INNER JOIN orders o
-[FILTER BY o.total > 100];
-
--- Legacy ON syntax is accepted and mapped to FILTER BY internally
-SELECT u.name, o.total
-FROM users u
-INNER JOIN orders o ON u.id = o.user_id
-WHERE o.total > 100;
-
--- Schema-qualified tables
-SELECT a.name, b.amount
-FROM app.accounts a
-LEFT JOIN reporting.transactions b;
-```
-
-Supported JOIN types: `INNER JOIN`, `LEFT JOIN`, `LEFT OUTER JOIN`,
-`RIGHT JOIN`, `RIGHT OUTER JOIN`, `FULL OUTER JOIN`, `CROSS JOIN`.
-
-> **Note**: `NATURAL JOIN` and `USING` joins are not supported.
-> `FLAT` tables cannot participate in JOINs.
+> **Note**: `NATURAL JOIN`, `USING`, and direct `INNER JOIN table` syntax are
+> not the AeternumDB model.  `FLAT` tables cannot participate in joins.
 
 #### Subqueries
 
@@ -1119,37 +1235,50 @@ WHERE objid = '01920e3b-…';
 
 ### How Joins Work in AeternumDB
 
-AeternumDB joins are **schema-driven**, not condition-driven.  When you define
-a column with a reference type (e.g. `orders orders_ref`), the engine already
-knows the relationship: rows are linked via `objid`.  A JOIN over such columns
-requires no explicit `ON` clause.
+AeternumDB joins are **reference-driven**, not condition-driven.  Relationships
+are encoded in the schema at table-definition time: a reference-type column
+(e.g. `order_ref orders`) stores the `objid` of the related row.  At query
+time the engine resolves the reference without an explicit `ON` clause.
 
-Use `FILTER BY` to add an **optional extra predicate** that further narrows the
-join result — analogous to SQL's `ON` condition but semantically distinct:
+**All join traversal must start from the `FROM` table and walk reference
+columns.**  You do not list the target table separately; you navigate to it
+through the reference column chain.
 
-```sql
--- Join without filter (full cross-reference result)
-SELECT u.name, o.total
-FROM users u
-INNER JOIN orders o;
+### Chain / Path Navigation
 
--- Join with FILTER BY (restrict to orders above a threshold)
-SELECT u.name, o.total
-FROM users u
-INNER JOIN orders o
-FILTER BY o.total > 100;
+```
+schema.table.ref_column.target_column
 ```
 
-### Backwards Compatibility
+```sql
+-- Simple one-hop: users → orders via order_ref
+SELECT u.name, u.order_ref.total
+FROM users u;
 
-The standard SQL `ON` clause is accepted and internally mapped to `FILTER BY`
-so that existing SQL still parses:
+-- Two-hop chain: users → orders → line items → product
+SELECT u.name, u.order_ref.line_ref.product_name
+FROM app.users u;
+
+-- Cross-schema traversal (same database)
+SELECT u.name, u.report_ref.summary
+FROM app.users u;
+```
+
+### FILTER BY
+
+`FILTER BY` adds an **optional extra predicate** that further narrows the
+traversal result after the reference has been resolved:
 
 ```sql
--- This is parsed identically to the FILTER BY form above
-SELECT u.name, o.total
+-- Only rows where the referenced order total > 100
+SELECT u.name, u.order_ref.total
 FROM users u
-INNER JOIN orders o ON u.id = o.user_id;
+FILTER BY u.order_ref.total > 100;
+
+-- Deep chain with filter
+SELECT u.name, u.order_ref.line_ref.qty
+FROM app.users u
+FILTER BY u.order_ref.status = 'shipped';
 ```
 
 ### Cross-Database vs. Cross-Schema
@@ -1182,8 +1311,15 @@ at execution time will raise an error.
 ### Column References
 
 ```sql
+-- Simple column
 column_name
+
+-- Table-qualified column
 table_name.column_name
+
+-- Chain / path navigation through reference columns
+table_alias.ref_column.target_column
+schema.table.ref_column.target_column
 ```
 
 ### CASE Expression
@@ -1195,6 +1331,72 @@ CASE WHEN condition THEN result [...] [ELSE default] END
 -- Simple CASE
 CASE expr WHEN value THEN result [...] [ELSE default] END
 ```
+
+### Text Functions
+
+| Function                                   | Description                                 |
+|--------------------------------------------|---------------------------------------------|
+| `SUBSTRING(str FROM pos [FOR len])`        | Extract substring                           |
+| `SUBSTRING(str FROM regex)`                | Regex-based extraction                      |
+| `POSITION(needle IN haystack)`             | Position of substring (1-based)             |
+| `TRIM([BOTH\|LEADING\|TRAILING] ch FROM s)`| Remove characters from string ends          |
+| `REPLACE(str, from, to)`                   | Replace all occurrences                     |
+| `OVERLAY(str PLACING repl FROM pos [FOR n])`| Replace substring at position             |
+
+### Full-Text Search — MATCH … AGAINST
+
+Full-text search uses the `MATCH … AGAINST` syntax and requires a `FULLTEXT`
+or `TRIGRAM` index on the target columns.
+
+```sql
+MATCH (col1 [, col2, ...]) AGAINST (expr [search_modifier])
+```
+
+**Search modifiers:**
+
+| Modifier                    | Description                                          |
+|-----------------------------|------------------------------------------------------|
+| *(none)*                    | Natural language mode (default)                      |
+| `IN NATURAL LANGUAGE MODE`  | Natural language mode (explicit)                     |
+| `IN BOOLEAN MODE`           | Boolean mode — supports `+`, `-`, `*` operators      |
+| `WITH QUERY EXPANSION`      | Two-pass relevance search                            |
+
+```sql
+-- Natural language search
+SELECT id, title
+FROM articles
+WHERE MATCH (title, body) AGAINST ('database performance');
+
+-- Boolean mode search
+SELECT id, title
+FROM articles
+WHERE MATCH (title, body) AGAINST ('+performance -slow' IN BOOLEAN MODE);
+
+-- With query expansion
+SELECT id, title
+FROM articles
+WHERE MATCH (title, body) AGAINST ('database' WITH QUERY EXPANSION);
+```
+
+Relevant index types:
+
+| Index type | Use case                                          |
+|------------|---------------------------------------------------|
+| `FULLTEXT` | Full-text search with stop-words and stemming     |
+| `TRIGRAM`  | Fuzzy / partial-word search using 3-gram tokens   |
+| `BRIN`     | Range-based index for large ordered columns       |
+| `GIN`      | Inverted index for vector/array columns           |
+| `GiST`     | Generalized search tree (geometric, range types)  |
+
+### UNNEST — Expand Vector Columns
+
+`UNNEST` expands a vector (array) column into individual rows:
+
+```sql
+SELECT id, UNNEST(tags) AS tag FROM articles;
+```
+
+This produces one output row per element in the `tags` vector column.
 
 ---
 
