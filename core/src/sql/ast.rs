@@ -1580,13 +1580,17 @@ fn convert_alter_operation(op: sp::AlterTableOperation) -> Result<AlterTableOper
             if_exists,
             ..
         } => {
-            // sqlparser 0.61 allows dropping multiple columns in one operation;
-            // we represent each as a separate internal operation.
-            let name = column_names
-                .into_iter()
-                .map(|i| i.value)
-                .collect::<Vec<_>>()
-                .join(", ");
+            // The internal AST supports dropping exactly one column per
+            // operation. Reject multi-column drops until the internal AST can
+            // represent a list, rather than collapsing multiple names into one
+            // ambiguous string.
+            if column_names.len() != 1 {
+                return Err(AstError::Unsupported(
+                    "ALTER TABLE DROP COLUMN with multiple columns is not supported".into(),
+                ));
+            }
+
+            let name = column_names.into_iter().next().unwrap().value;
             Ok(AlterTableOperation::DropColumn { name, if_exists })
         }
         sp::AlterTableOperation::RenameColumn {
