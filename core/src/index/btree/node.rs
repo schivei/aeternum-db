@@ -328,14 +328,16 @@ impl LeafNode {
     ///
     /// After the call `self` contains the left half and the returned
     /// [`LeafSplitResult`] contains the right half.  Sibling pointers are
-    /// updated so that `self.next_leaf` points to the new right sibling.
+    /// **not** updated by this method; the caller is responsible for wiring
+    /// them up.
     ///
     /// # Note
     /// The caller must:
     /// 1. Allocate a new page for `result.right` and record its `PageId`.
     /// 2. Set `result.right.prev_leaf = Some(left_page_id)`.
     /// 3. Set `result.right.next_leaf` to the original `self.next_leaf`.
-    /// 4. Update the previously-next node's `prev_leaf` pointer.
+    /// 4. Set `self.next_leaf = Some(right_page_id)`.
+    /// 5. Update the previously-next node's `prev_leaf` pointer.
     pub fn split(&mut self) -> LeafSplitResult {
         let mid = self.keys.len() / 2;
         let split_key = self.keys[mid].clone();

@@ -103,25 +103,27 @@ impl Iterator for BTreeIterator {
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
-            if self.within_bound() {
-                let key = self.current_leaf.keys[self.pos].clone();
-                let value = self.current_leaf.values[self.pos].clone();
-                self.pos += 1;
-                return Some((key, value));
-            }
-
-            // Current leaf exhausted or past the upper bound.
-            // Try the pre-loaded remaining leaves.
-            if let Some(next_leaf) = self.remaining_leaves.pop_front() {
-                self.current_leaf = next_leaf;
-                self.pos = 0;
-                // Check if the first key in the new leaf is still within bound.
-                if !self.within_bound() {
+            // If the current leaf is exhausted, skip to the next pre-loaded
+            // leaf without checking the upper bound yet (the leaf could simply
+            // be empty, with more valid entries in subsequent leaves).
+            if self.pos >= self.current_leaf.len() {
+                if let Some(next_leaf) = self.remaining_leaves.pop_front() {
+                    self.advance_to_next_leaf(next_leaf);
+                    continue;
+                } else {
                     return None;
                 }
-            } else {
+            }
+
+            // We have a real key at `pos`; only now check the upper bound.
+            if !self.within_bound() {
                 return None;
             }
+
+            let key = self.current_leaf.keys[self.pos].clone();
+            let value = self.current_leaf.values[self.pos].clone();
+            self.pos += 1;
+            return Some((key, value));
         }
     }
 }
@@ -194,6 +196,18 @@ mod tests {
         let leaf1 = make_leaf(&[("a", "1"), ("b", "2")]);
         let leaf2 = make_leaf(&[("c", "3"), ("d", "4")]);
         let mut it = BTreeIterator::new(leaf1, 0, vec![leaf2], EndBound::Included(b"c".to_vec()));
+        let keys: Vec<_> = it.by_ref().map(|(k, _)| k).collect();
+        assert_eq!(keys, vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()]);
+    }
+
+    /// An empty leaf in the middle of `remaining_leaves` must be skipped so
+    /// iteration continues to the next non-empty leaf.
+    #[test]
+    fn iterate_skips_empty_intermediate_leaf() {
+        let leaf1 = make_leaf(&[("a", "1")]);
+        let leaf2 = LeafNode::new(); // empty
+        let leaf3 = make_leaf(&[("b", "2"), ("c", "3")]);
+        let mut it = BTreeIterator::new(leaf1, 0, vec![leaf2, leaf3], EndBound::Unbounded);
         let keys: Vec<_> = it.by_ref().map(|(k, _)| k).collect();
         assert_eq!(keys, vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()]);
     }

@@ -331,6 +331,16 @@ impl<K: BTreeKey, V: BTreeValue> BTree<K, V> {
         if !(4..=1000).contains(&fanout) {
             return Err(IndexError::InvalidFanout(fanout));
         }
+        if height == 0 {
+            return Err(IndexError::Corrupt(
+                "btree metadata corrupt: height must be at least 1".into(),
+            ));
+        }
+        if root_page_id == meta_page_id {
+            return Err(IndexError::Corrupt(
+                "btree metadata corrupt: root page must not be the metadata page".into(),
+            ));
+        }
 
         let meta = TreeMeta {
             meta_page_id,
@@ -393,11 +403,45 @@ impl<K: BTreeKey, V: BTreeValue> BTree<K, V> {
     /// Insert or update a key-value pair.
     ///
     /// If the key already exists its value is replaced; otherwise a new entry
-    /// is inserted.
+    /// is inserted.  The operation is atomic under a single exclusive tree lock.
     pub async fn upsert(&self, key: K, value: V) -> Result<(), IndexError> {
-        match self.insert(key.clone(), value.clone()).await {
-            Ok(()) => Ok(()),
-            Err(IndexError::DuplicateKey) => self.update(key, value).await,
+        let key_bytes = key.to_bytes();
+        let val_bytes = value.to_bytes();
+        let mut meta = self.meta.write().await;
+
+        match self
+            .insert_recursive(
+                meta.root_page_id,
+                &key_bytes,
+                &val_bytes,
+                meta.height,
+                meta.fanout,
+            )
+            .await
+        {
+            Ok(result) => {
+                if let Some((push_up_key, new_right_page_id)) = result {
+                    let new_root = InternalNode {
+                        keys: vec![push_up_key],
+                        children: vec![meta.root_page_id, new_right_page_id],
+                    };
+                    let new_root_page_id = self.storage.allocate_page().await?;
+                    write_node(&self.storage, new_root_page_id, &Node::Internal(new_root)).await?;
+                    meta.root_page_id = new_root_page_id;
+                    meta.height += 1;
+                }
+                meta.num_keys += 1;
+                drop(meta);
+                self.write_meta().await
+            }
+            Err(IndexError::DuplicateKey) => {
+                let root = meta.root_page_id;
+                let height = meta.height;
+                let fanout = meta.fanout;
+                drop(meta);
+                self.update_recursive(root, &key_bytes, &val_bytes, height, fanout)
+                    .await
+            }
             Err(e) => Err(e),
         }
     }
@@ -408,13 +452,15 @@ impl<K: BTreeKey, V: BTreeValue> BTree<K, V> {
     pub async fn update(&self, key: K, value: V) -> Result<(), IndexError> {
         let key_bytes = key.to_bytes();
         let val_bytes = value.to_bytes();
-        let meta = self.meta.read().await;
+        let meta = self.meta.write().await;
         let root = meta.root_page_id;
         let height = meta.height;
         let fanout = meta.fanout;
+        let result = self
+            .update_recursive(root, &key_bytes, &val_bytes, height, fanout)
+            .await;
         drop(meta);
-        self.update_recursive(root, &key_bytes, &val_bytes, height, fanout)
-            .await
+        result
     }
 
     /// Search for an exact key.
@@ -617,6 +663,11 @@ impl<K: BTreeKey, V: BTreeValue> BTree<K, V> {
                 self.split_leaf_node(page_id, leaf, fanout).await
             }
             Node::Internal(internal) => {
+                if height == 0 {
+                    return Err(IndexError::Corrupt(format!(
+                        "found internal node at height 0, page {page_id}"
+                    )));
+                }
                 let child_idx = internal.find_child(key);
                 let child_page_id = internal.children[child_idx];
 
@@ -670,9 +721,16 @@ impl<K: BTreeKey, V: BTreeValue> BTree<K, V> {
         // Update the old next leaf's back-pointer.
         if let Some(next_id) = old_next {
             let mut next_node = load_node(&self.storage, next_id).await?;
-            if let Node::Leaf(ref mut next_leaf) = next_node {
-                next_leaf.prev_leaf = Some(right_page_id);
-                write_node(&self.storage, next_id, &next_node).await?;
+            match next_node {
+                Node::Leaf(ref mut next_leaf) => {
+                    next_leaf.prev_leaf = Some(right_page_id);
+                    write_node(&self.storage, next_id, &next_node).await?;
+                }
+                Node::Internal(_) => {
+                    return Err(IndexError::Corrupt(format!(
+                        "leaf split encountered non-leaf next_leaf pointer at page {next_id}"
+                    )));
+                }
             }
         }
 
@@ -990,16 +1048,30 @@ async fn unlink_leaf_from_chain(
 ) -> Result<(), IndexError> {
     if let Some(prev_id) = empty_leaf.prev_leaf {
         let mut prev_node = load_node(storage, prev_id).await?;
-        if let Node::Leaf(ref mut prev_leaf) = prev_node {
-            prev_leaf.next_leaf = empty_leaf.next_leaf;
-            write_node(storage, prev_id, &prev_node).await?;
+        match prev_node {
+            Node::Leaf(ref mut prev_leaf) => {
+                prev_leaf.next_leaf = empty_leaf.next_leaf;
+                write_node(storage, prev_id, &prev_node).await?;
+            }
+            Node::Internal(_) => {
+                return Err(IndexError::Corrupt(format!(
+                    "leaf prev pointer references non-leaf page {prev_id}"
+                )));
+            }
         }
     }
     if let Some(next_id) = empty_leaf.next_leaf {
         let mut next_node = load_node(storage, next_id).await?;
-        if let Node::Leaf(ref mut next_leaf) = next_node {
-            next_leaf.prev_leaf = empty_leaf.prev_leaf;
-            write_node(storage, next_id, &next_node).await?;
+        match next_node {
+            Node::Leaf(ref mut next_leaf) => {
+                next_leaf.prev_leaf = empty_leaf.prev_leaf;
+                write_node(storage, next_id, &next_node).await?;
+            }
+            Node::Internal(_) => {
+                return Err(IndexError::Corrupt(format!(
+                    "leaf next pointer references non-leaf page {next_id}"
+                )));
+            }
         }
     }
     Ok(())
@@ -1245,5 +1317,18 @@ mod tests {
 
         let total = tree.len().await;
         assert_eq!(total, (n_threads * keys_per_thread) as u64);
+    }
+
+    /// Verify that `upsert` is correctly atomic: a duplicate key results in an
+    /// update (not an error), and no ghost entries are created.
+    #[tokio::test]
+    async fn upsert_is_atomic() {
+        let (tree, _tmp) = make_tree(4096).await;
+        tree.insert(1i64, "original".to_string()).await.unwrap();
+        tree.upsert(1i64, "updated".to_string()).await.unwrap();
+        let v = tree.search(&1i64).await.unwrap();
+        assert_eq!(v.as_deref(), Some("updated"));
+        // num_keys must not have incremented
+        assert_eq!(tree.len().await, 1);
     }
 }

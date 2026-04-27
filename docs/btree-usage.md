@@ -133,8 +133,8 @@ use aeternumdb_core::index::btree::{BTreeKey, BTreeValue};
 // Inclusive range: keys 10 to 20 (inclusive).
 let iter = tree.range(10i64..=20i64).await?;
 for (key_bytes, val_bytes) in iter {
-    let key = i64::from_bytes(&key_bytes)?;
-    let val = String::from_bytes(&val_bytes)?;
+    let key = <i64 as BTreeKey>::from_bytes(&key_bytes)?;
+    let val = <String as BTreeValue>::from_bytes(&val_bytes)?;
     println!("{key}: {val}");
 }
 
