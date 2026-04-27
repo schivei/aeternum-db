@@ -476,7 +476,6 @@ impl<K: BTreeKey, V: BTreeValue> BTree<K, V> {
         let meta = self.meta.read().await;
         let root = meta.root_page_id;
         let height = meta.height;
-        drop(meta);
         self.search_recursive(root, &key_bytes, height).await
     }
 
