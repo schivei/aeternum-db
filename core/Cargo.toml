@@ -39,3 +39,7 @@ path = "src/lib.rs"
 [[bench]]
 name = "storage_bench"
 harness = false
+
+[[bench]]
+name = "btree_bench"
+harness = false
