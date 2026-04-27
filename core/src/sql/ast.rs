@@ -109,6 +109,32 @@ pub enum DataType {
     },
     /// Any other type forwarded as a string (for forward-compatibility).
     Other(String),
+    /// `TINYINT` (1 byte).
+    TinyInt,
+    /// `SMALLINT` (2 bytes).
+    SmallInt,
+    /// `BIGINT` (8 bytes).
+    BigInt,
+    /// `CHAR(n)` — fixed-length character string.
+    Char(Option<u64>),
+    /// MySQL `TINYTEXT`.
+    TinyText,
+    /// MySQL `MEDIUMTEXT`.
+    MediumText,
+    /// MySQL `LONGTEXT`.
+    LongText,
+    /// `TIME` — time of day without a date component.
+    Time,
+    /// `TIME WITH TIME ZONE`.
+    TimeTz,
+    /// `DATETIME` — date and time without timezone.
+    DateTime,
+    /// `TIMESTAMP WITH TIME ZONE`.
+    TimestampTz,
+    /// `ENUM('a','b','c')`.
+    Enum(Vec<String>),
+    /// `UUID` / `GUID`.
+    Uuid,
 }
 
 impl std::fmt::Display for DataType {
@@ -130,6 +156,23 @@ impl std::fmt::Display for DataType {
             DataType::VirtualReferenceArray { table, column } => {
                 write!(f, "~[{table}]({column})")
             }
+            DataType::TinyInt => write!(f, "TINYINT"),
+            DataType::SmallInt => write!(f, "SMALLINT"),
+            DataType::BigInt => write!(f, "BIGINT"),
+            DataType::Char(Some(n)) => write!(f, "CHAR({n})"),
+            DataType::Char(None) => write!(f, "CHAR"),
+            DataType::TinyText => write!(f, "TINYTEXT"),
+            DataType::MediumText => write!(f, "MEDIUMTEXT"),
+            DataType::LongText => write!(f, "LONGTEXT"),
+            DataType::Time => write!(f, "TIME"),
+            DataType::TimeTz => write!(f, "TIME WITH TIME ZONE"),
+            DataType::DateTime => write!(f, "DATETIME"),
+            DataType::TimestampTz => write!(f, "TIMESTAMP WITH TIME ZONE"),
+            DataType::Enum(vals) => {
+                let list = vals.iter().map(|v| format!("'{v}'")).collect::<Vec<_>>().join(", ");
+                write!(f, "ENUM({list})")
+            }
+            DataType::Uuid => write!(f, "UUID"),
             DataType::Other(s) => write!(f, "{s}"),
         }
     }
@@ -406,6 +449,10 @@ pub struct CreateTableStatement {
     pub columns: Vec<ColumnDef>,
     /// `IF NOT EXISTS` flag.
     pub if_not_exists: bool,
+    /// `TEMPORARY` / `TEMP` flag.
+    pub temporary: bool,
+    /// Parent tables to inherit from (`INHERITS (parent, ...)`).
+    pub inherits: Vec<String>,
 }
 
 /// A `DROP TABLE` statement.
@@ -448,6 +495,19 @@ pub struct RevokeStatement {
     pub privileges: Vec<String>,
     pub on: String,
     pub from: Vec<String>,
+}
+
+/// A `CREATE MATERIALIZED VIEW` statement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CreateMaterializedViewStatement {
+    /// View name.
+    pub name: String,
+    /// The query defining the view.
+    pub query: Box<SelectStatement>,
+    /// `IF NOT EXISTS` flag.
+    pub if_not_exists: bool,
+    /// `OR REPLACE` flag.
+    pub or_replace: bool,
 }
 
 // ── Transaction control ────────────────────────────────────────────────────────
@@ -506,6 +566,8 @@ pub enum Statement {
     Grant(GrantStatement),
     /// DCL scaffolding — recognized but not yet executed.
     Revoke(RevokeStatement),
+    /// A materialized view definition.
+    CreateMaterializedView(CreateMaterializedViewStatement),
     /// Transaction control statements.
     BeginTransaction(BeginTransactionStatement),
     Commit(CommitStatement),
@@ -526,6 +588,7 @@ impl TryFrom<sp::Statement> for Statement {
             sp::Statement::Update(update) => convert_update(update),
             sp::Statement::Delete(delete) => convert_delete(delete),
             sp::Statement::CreateTable(ct) => convert_create_table(ct),
+            sp::Statement::CreateView(cv) if cv.materialized => convert_create_materialized_view(cv),
             sp::Statement::Drop {
                 object_type,
                 if_exists,
@@ -535,6 +598,32 @@ impl TryFrom<sp::Statement> for Statement {
             sp::Statement::AlterTable(alt) => convert_alter_table(alt),
             sp::Statement::Grant(grant) => convert_grant(grant),
             sp::Statement::Revoke(revoke) => convert_revoke(revoke),
+            sp::Statement::StartTransaction { modes, .. } => {
+                let isolation_level = modes.iter().find_map(|m| {
+                    if let sp::TransactionMode::IsolationLevel(lvl) = m {
+                        Some(match lvl {
+                            sp::TransactionIsolationLevel::ReadUncommitted => IsolationLevel::ReadUncommitted,
+                            sp::TransactionIsolationLevel::ReadCommitted => IsolationLevel::ReadCommitted,
+                            sp::TransactionIsolationLevel::RepeatableRead => IsolationLevel::RepeatableRead,
+                            sp::TransactionIsolationLevel::Serializable | sp::TransactionIsolationLevel::Snapshot => IsolationLevel::Serializable,
+                        })
+                    } else { None }
+                });
+                let read_only = modes.iter().any(|m| {
+                    matches!(m, sp::TransactionMode::AccessMode(sp::TransactionAccessMode::ReadOnly))
+                });
+                Ok(Statement::BeginTransaction(BeginTransactionStatement { isolation_level, read_only }))
+            }
+            sp::Statement::Commit { .. } => Ok(Statement::Commit(CommitStatement)),
+            sp::Statement::Rollback { savepoint, .. } => Ok(Statement::Rollback(RollbackStatement {
+                savepoint: savepoint.as_ref().map(|i| i.value.clone()),
+            })),
+            sp::Statement::Savepoint { name } => Ok(Statement::Savepoint(SavepointStatement {
+                name: ident_to_string(&name),
+            })),
+            sp::Statement::ReleaseSavepoint { name } => Ok(Statement::ReleaseSavepoint(ReleaseSavepointStatement {
+                name: ident_to_string(&name),
+            })),
             other => Err(AstError::Unsupported(format!(
                 "statement type not supported: {other}"
             ))),
@@ -1033,22 +1122,34 @@ fn convert_function(f: sp::Function) -> Result<Expr, AstError> {
 
 fn convert_data_type(dt: sp::DataType) -> Result<DataType, AstError> {
     match dt {
-        sp::DataType::Int(_)
-        | sp::DataType::Integer(_)
-        | sp::DataType::BigInt(_)
-        | sp::DataType::SmallInt(_)
-        | sp::DataType::TinyInt(_) => Ok(DataType::Integer),
-        sp::DataType::Float(_)
-        | sp::DataType::Real
-        | sp::DataType::Double(_)
-        | sp::DataType::DoublePrecision => Ok(DataType::Float),
+        sp::DataType::TinyInt(_) | sp::DataType::TinyIntUnsigned(_) | sp::DataType::UTinyInt => Ok(DataType::TinyInt),
+        sp::DataType::SmallInt(_) | sp::DataType::SmallIntUnsigned(_) | sp::DataType::USmallInt | sp::DataType::Int2(_) => Ok(DataType::SmallInt),
+        sp::DataType::MediumInt(_) | sp::DataType::MediumIntUnsigned(_) => Ok(DataType::Integer),
+        sp::DataType::Int(_) | sp::DataType::Integer(_) | sp::DataType::Int4(_) => Ok(DataType::Integer),
+        sp::DataType::BigInt(_) | sp::DataType::BigIntUnsigned(_) | sp::DataType::UBigInt | sp::DataType::Int8(_) | sp::DataType::Int64 => Ok(DataType::BigInt),
+        sp::DataType::Float(_) | sp::DataType::Float4 | sp::DataType::Real => Ok(DataType::Float),
+        sp::DataType::Double(_) | sp::DataType::DoublePrecision | sp::DataType::Float8 | sp::DataType::Float64 => Ok(DataType::Float),
         sp::DataType::Varchar(n) => Ok(DataType::Varchar(char_length_to_u64(n))),
-        sp::DataType::Char(n) => Ok(DataType::Varchar(char_length_to_u64(n))),
+        sp::DataType::Char(n) | sp::DataType::Character(n) | sp::DataType::CharVarying(n) | sp::DataType::CharacterVarying(n) => Ok(DataType::Char(char_length_to_u64(n))),
         sp::DataType::Text => Ok(DataType::Varchar(None)),
-        sp::DataType::Boolean => Ok(DataType::Boolean),
-        sp::DataType::Bool => Ok(DataType::Boolean),
+        sp::DataType::TinyText => Ok(DataType::TinyText),
+        sp::DataType::MediumText => Ok(DataType::MediumText),
+        sp::DataType::LongText => Ok(DataType::LongText),
+        sp::DataType::Boolean | sp::DataType::Bool => Ok(DataType::Boolean),
         sp::DataType::Date => Ok(DataType::Date),
-        sp::DataType::Timestamp(_, _) => Ok(DataType::Timestamp),
+        sp::DataType::Datetime(_) => Ok(DataType::DateTime),
+        sp::DataType::Timestamp(_, sp::TimezoneInfo::None) | sp::DataType::Timestamp(_, sp::TimezoneInfo::WithoutTimeZone) => Ok(DataType::Timestamp),
+        sp::DataType::Timestamp(_, sp::TimezoneInfo::WithTimeZone) | sp::DataType::Timestamp(_, sp::TimezoneInfo::Tz) => Ok(DataType::TimestampTz),
+        sp::DataType::Time(_, sp::TimezoneInfo::None) | sp::DataType::Time(_, sp::TimezoneInfo::WithoutTimeZone) => Ok(DataType::Time),
+        sp::DataType::Time(_, sp::TimezoneInfo::WithTimeZone) | sp::DataType::Time(_, sp::TimezoneInfo::Tz) => Ok(DataType::TimeTz),
+        sp::DataType::Uuid => Ok(DataType::Uuid),
+        sp::DataType::Enum(members, _) => {
+            let vals = members.into_iter().map(|m| match m {
+                sp::EnumMember::Name(s) => s,
+                sp::EnumMember::NamedValue(s, _) => s,
+            }).collect();
+            Ok(DataType::Enum(vals))
+        }
         sp::DataType::Decimal(info) | sp::DataType::Numeric(info) => {
             let (p, s) = match info {
                 sp::ExactNumberInfo::None => (None, None),
@@ -1188,11 +1289,18 @@ fn convert_create_table(ct: sp::CreateTable) -> Result<Statement, AstError> {
         .into_iter()
         .map(convert_column_def)
         .collect::<Result<Vec<_>, _>>()?;
-
+    let inherits = ct
+        .inherits
+        .unwrap_or_default()
+        .into_iter()
+        .map(|n| object_name_to_string(&n))
+        .collect();
     Ok(Statement::CreateTable(CreateTableStatement {
         table,
         columns,
         if_not_exists: ct.if_not_exists,
+        temporary: ct.temporary,
+        inherits,
     }))
 }
 
@@ -1349,5 +1457,18 @@ fn convert_revoke(revoke: sp::Revoke) -> Result<Statement, AstError> {
         privileges: privs,
         on,
         from,
+    }))
+}
+
+// ── CREATE MATERIALIZED VIEW conversion ──────────────────────────────────────
+
+fn convert_create_materialized_view(cv: sp::CreateView) -> Result<Statement, AstError> {
+    let name = object_name_to_string(&cv.name);
+    let query = Box::new(convert_query(*cv.query)?);
+    Ok(Statement::CreateMaterializedView(CreateMaterializedViewStatement {
+        name,
+        query,
+        if_not_exists: cv.if_not_exists,
+        or_replace: cv.or_replace,
     }))
 }

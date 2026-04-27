@@ -58,4 +58,10 @@ impl Dialect for AeternumDialect {
     fn supports_group_by_expr(&self) -> bool {
         true
     }
+
+    /// Support backtick (`` ` ``) as an identifier quoting character (MySQL-style)
+    /// in addition to the standard double-quote.
+    fn is_delimited_identifier_start(&self, ch: char) -> bool {
+        ch == '"' || ch == '`'
+    }
 }

@@ -115,8 +115,8 @@ pub enum ValidationError {
     ColumnNotFound { table: String, column: String },
     /// A type mismatch was detected (e.g. assigning a string to an integer).
     TypeMismatch {
-        expected: DataType,
-        found: DataType,
+        expected: Box<DataType>,
+        found: Box<DataType>,
         context: String,
     },
     /// An aggregate function was used in an invalid context.
@@ -188,6 +188,8 @@ impl<'a> Validator<'a> {
             Statement::AlterTable(s) => self.validate_alter_table(s),
             // DCL scaffolding — not executed yet, always passes
             Statement::Grant(_) | Statement::Revoke(_) => Ok(()),
+            // Materialized views — structural validation is future work
+            Statement::CreateMaterializedView(_) => Ok(()),
             // Transaction control — not yet validated, always passes
             Statement::BeginTransaction(_)
             | Statement::Commit(_)

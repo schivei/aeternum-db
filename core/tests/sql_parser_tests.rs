@@ -6,7 +6,10 @@
 //! - Error handling
 //! - Semantic validation against an in-memory catalog
 
-use aeternumdb_core::sql::ast::{BinaryOperator, DataType, Expr, SelectItem, Statement, Value};
+use aeternumdb_core::sql::ast::{
+    BeginTransactionStatement, BinaryOperator, CommitStatement, DataType, Expr,
+    ReleaseSavepointStatement, RollbackStatement, SavepointStatement, SelectItem, Statement, Value,
+};
 use aeternumdb_core::sql::parser::{SqlError, SqlParser};
 use aeternumdb_core::sql::validator::{
     Catalog, ColumnSchema, TableSchema, ValidationError, Validator,
@@ -963,4 +966,176 @@ fn test_apply_create_table_to_catalog() {
     let select_stmt = parser().parse_one("SELECT id, val FROM foo").unwrap();
     let v = Validator::new(&catalog);
     assert!(v.validate(&select_stmt).is_ok());
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// New feature tests
+// ══════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_backtick_identifiers() {
+    use aeternumdb_core::sql::ast::TableReference;
+    let stmt = parser()
+        .parse_one("SELECT `name` FROM `users`")
+        .unwrap();
+    let sel = match &stmt {
+        Statement::Select(s) => s,
+        _ => panic!("expected Select"),
+    };
+    assert!(matches!(
+        &sel.from,
+        Some(TableReference::Named { name, .. }) if name == "users"
+    ));
+    assert!(matches!(
+        &sel.columns[0],
+        SelectItem::Expr { expr: Expr::Column { name, .. }, .. } if name == "name"
+    ));
+}
+
+#[test]
+fn test_create_temporary_table() {
+    let stmt = parser()
+        .parse_one("CREATE TEMPORARY TABLE tmp_data (id INTEGER)")
+        .unwrap();
+    let ct = match &stmt {
+        Statement::CreateTable(ct) => ct,
+        _ => panic!("expected CreateTable"),
+    };
+    assert_eq!(ct.table, "tmp_data");
+    assert!(ct.temporary);
+    assert_eq!(ct.columns.len(), 1);
+}
+
+#[test]
+fn test_create_table_inherits() {
+    let stmt = parser()
+        .parse_one("CREATE TABLE child (age INTEGER) INHERITS (parent)")
+        .unwrap();
+    let ct = match &stmt {
+        Statement::CreateTable(ct) => ct,
+        _ => panic!("expected CreateTable"),
+    };
+    assert_eq!(ct.table, "child");
+    assert_eq!(ct.inherits, vec!["parent"]);
+}
+
+#[test]
+fn test_create_materialized_view() {
+    let stmt = parser()
+        .parse_one("CREATE MATERIALIZED VIEW mv_sales AS SELECT id, total FROM orders")
+        .unwrap();
+    let mv = match &stmt {
+        Statement::CreateMaterializedView(mv) => mv,
+        _ => panic!("expected CreateMaterializedView, got {:?}", stmt),
+    };
+    assert_eq!(mv.name, "mv_sales");
+    assert!(!mv.if_not_exists);
+    assert!(!mv.or_replace);
+}
+
+#[test]
+fn test_new_data_types() {
+    let sql = "CREATE TABLE type_test (
+        a TINYINT,
+        b SMALLINT,
+        c BIGINT,
+        d CHAR(10),
+        e TIME,
+        f DATETIME,
+        g TIMESTAMP WITH TIME ZONE,
+        h UUID,
+        i ENUM('x', 'y', 'z')
+    )";
+    let stmt = parser().parse_one(sql).unwrap();
+    let ct = match &stmt {
+        Statement::CreateTable(ct) => ct,
+        _ => panic!("expected CreateTable"),
+    };
+
+    let col = |name: &str| ct.columns.iter().find(|c| c.name == name).unwrap();
+
+    assert_eq!(col("a").data_type, DataType::TinyInt);
+    assert_eq!(col("b").data_type, DataType::SmallInt);
+    assert_eq!(col("c").data_type, DataType::BigInt);
+    assert_eq!(col("d").data_type, DataType::Char(Some(10)));
+    assert_eq!(col("e").data_type, DataType::Time);
+    assert_eq!(col("f").data_type, DataType::DateTime);
+    assert_eq!(col("g").data_type, DataType::TimestampTz);
+    assert_eq!(col("h").data_type, DataType::Uuid);
+    assert_eq!(
+        col("i").data_type,
+        DataType::Enum(vec!["x".to_string(), "y".to_string(), "z".to_string()])
+    );
+}
+
+#[test]
+fn test_transaction_parsing() {
+    // BEGIN TRANSACTION
+    let stmt = parser().parse_one("BEGIN TRANSACTION").unwrap();
+    assert!(matches!(
+        stmt,
+        Statement::BeginTransaction(BeginTransactionStatement { isolation_level: None, read_only: false })
+    ));
+
+    // COMMIT
+    let stmt = parser().parse_one("COMMIT").unwrap();
+    assert!(matches!(stmt, Statement::Commit(CommitStatement)));
+
+    // ROLLBACK
+    let stmt = parser().parse_one("ROLLBACK").unwrap();
+    assert!(matches!(
+        stmt,
+        Statement::Rollback(RollbackStatement { savepoint: None })
+    ));
+
+    // SAVEPOINT
+    let stmt = parser().parse_one("SAVEPOINT sp1").unwrap();
+    assert!(matches!(
+        stmt,
+        Statement::Savepoint(SavepointStatement { name }) if name == "sp1"
+    ));
+
+    // RELEASE SAVEPOINT
+    let stmt = parser().parse_one("RELEASE SAVEPOINT sp1").unwrap();
+    assert!(matches!(
+        stmt,
+        Statement::ReleaseSavepoint(ReleaseSavepointStatement { name }) if name == "sp1"
+    ));
+}
+
+#[test]
+fn test_transaction_isolation_levels() {
+    use aeternumdb_core::sql::ast::IsolationLevel;
+
+    let cases = [
+        ("START TRANSACTION ISOLATION LEVEL READ UNCOMMITTED", IsolationLevel::ReadUncommitted),
+        ("START TRANSACTION ISOLATION LEVEL READ COMMITTED", IsolationLevel::ReadCommitted),
+        ("START TRANSACTION ISOLATION LEVEL REPEATABLE READ", IsolationLevel::RepeatableRead),
+        ("START TRANSACTION ISOLATION LEVEL SERIALIZABLE", IsolationLevel::Serializable),
+    ];
+
+    for (sql, expected_level) in cases {
+        let stmt = parser().parse_one(sql).unwrap();
+        match stmt {
+            Statement::BeginTransaction(BeginTransactionStatement { isolation_level, read_only }) => {
+                assert_eq!(isolation_level, Some(expected_level), "failed for: {sql}");
+                assert!(!read_only, "expected read_write for: {sql}");
+            }
+            other => panic!("expected BeginTransaction for '{sql}', got: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn test_transaction_read_only() {
+    let stmt = parser()
+        .parse_one("START TRANSACTION READ ONLY")
+        .unwrap();
+    match stmt {
+        Statement::BeginTransaction(BeginTransactionStatement { isolation_level, read_only }) => {
+            assert_eq!(isolation_level, None);
+            assert!(read_only);
+        }
+        other => panic!("expected BeginTransaction, got: {other:?}"),
+    }
 }
