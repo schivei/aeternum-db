@@ -1282,11 +1282,12 @@ fn convert_data_type(dt: sp::DataType) -> Result<DataType, AstError> {
             Ok(DataType::UnsignedDecimal(p, s))
         }
         // ── Character ──────────────────────────────────────────────────────
-        sp::DataType::Varchar(n) => Ok(DataType::Varchar(char_length_to_u64(n))),
-        sp::DataType::Char(n)
-        | sp::DataType::Character(n)
+        sp::DataType::Varchar(n)
         | sp::DataType::CharVarying(n)
-        | sp::DataType::CharacterVarying(n) => Ok(DataType::Char(char_length_to_u64(n))),
+        | sp::DataType::CharacterVarying(n) => Ok(DataType::Varchar(char_length_to_u64(n))),
+        sp::DataType::Char(n) | sp::DataType::Character(n) => {
+            Ok(DataType::Char(char_length_to_u64(n)))
+        }
         sp::DataType::Text => Ok(DataType::Varchar(None)),
         sp::DataType::TinyText => Ok(DataType::TinyText),
         sp::DataType::MediumText => Ok(DataType::MediumText),
