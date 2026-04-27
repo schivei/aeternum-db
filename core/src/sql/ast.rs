@@ -76,10 +76,18 @@ impl std::fmt::Display for Value {
 /// SQL column data type.
 #[derive(Debug, Clone, PartialEq)]
 pub enum DataType {
-    /// `INTEGER` / `INT` / `BIGINT` etc.
+    /// `INTEGER` / `INT` — 32-bit signed integer.
     Integer,
-    /// `FLOAT` / `REAL` / `DOUBLE`.
+    /// `INTEGER UNSIGNED` / `INT UNSIGNED` — 32-bit unsigned integer.
+    UnsignedInt,
+    /// `FLOAT` / `REAL` — 32-bit signed floating-point (IEEE 754).
     Float,
+    /// `FLOAT UNSIGNED` — 32-bit MySQL-specific unsigned float (non-negative only).
+    UnsignedFloat,
+    /// `DOUBLE` / `DOUBLE PRECISION` — 64-bit signed floating-point (IEEE 754).
+    Double,
+    /// `DOUBLE UNSIGNED` — 64-bit MySQL-specific unsigned double (non-negative only).
+    UnsignedDouble,
     /// `VARCHAR(n)` / `TEXT` / `CHAR(n)`.
     Varchar(Option<u64>),
     /// `BOOLEAN` / `BOOL`.
@@ -90,6 +98,8 @@ pub enum DataType {
     Timestamp,
     /// `DECIMAL(p, s)` / `NUMERIC(p, s)`.
     Decimal(Option<u64>, Option<u64>),
+    /// `DECIMAL UNSIGNED`.
+    UnsignedDecimal(Option<u64>, Option<u64>),
     /// Reference to a single row in another table: `table_name`.
     /// Used for foreign key relationships and OO-style references.
     Reference(String),
@@ -103,12 +113,22 @@ pub enum DataType {
     VirtualReferenceArray { table: String, column: String },
     /// Any other type forwarded as a string (for forward-compatibility).
     Other(String),
-    /// `TINYINT` (1 byte).
+    /// `TINYINT` (1 byte, signed).
     TinyInt,
-    /// `SMALLINT` (2 bytes).
+    /// `TINYINT UNSIGNED`.
+    UnsignedTinyInt,
+    /// `SMALLINT` (2 bytes, signed).
     SmallInt,
-    /// `BIGINT` (8 bytes).
+    /// `SMALLINT UNSIGNED`.
+    UnsignedSmallInt,
+    /// `MEDIUMINT` (3 bytes, signed).
+    MediumInt,
+    /// `MEDIUMINT UNSIGNED`.
+    UnsignedMediumInt,
+    /// `BIGINT` (8 bytes, signed).
     BigInt,
+    /// `BIGINT UNSIGNED`.
+    UnsignedBigInt,
     /// `CHAR(n)` — fixed-length character string.
     Char(Option<u64>),
     /// MySQL `TINYTEXT`.
@@ -129,13 +149,29 @@ pub enum DataType {
     Enum(Vec<String>),
     /// `UUID` / `GUID`.
     Uuid,
+    /// `BINARY(n)` — fixed-length binary string.
+    Binary(Option<u64>),
+    /// `VARBINARY(n)` — variable-length binary string.
+    Varbinary(Option<u64>),
+    /// `BLOB(n)` — binary large object.
+    Blob(Option<u64>),
+    /// MySQL `TINYBLOB`.
+    TinyBlob,
+    /// MySQL `MEDIUMBLOB`.
+    MediumBlob,
+    /// MySQL `LONGBLOB`.
+    LongBlob,
 }
 
 impl std::fmt::Display for DataType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             DataType::Integer => write!(f, "INTEGER"),
+            DataType::UnsignedInt => write!(f, "INTEGER UNSIGNED"),
             DataType::Float => write!(f, "FLOAT"),
+            DataType::UnsignedFloat => write!(f, "FLOAT UNSIGNED"),
+            DataType::Double => write!(f, "DOUBLE"),
+            DataType::UnsignedDouble => write!(f, "DOUBLE UNSIGNED"),
             DataType::Varchar(Some(n)) => write!(f, "VARCHAR({n})"),
             DataType::Varchar(None) => write!(f, "TEXT"),
             DataType::Boolean => write!(f, "BOOLEAN"),
@@ -144,6 +180,11 @@ impl std::fmt::Display for DataType {
             DataType::Decimal(Some(p), Some(s)) => write!(f, "DECIMAL({p},{s})"),
             DataType::Decimal(Some(p), None) => write!(f, "DECIMAL({p})"),
             DataType::Decimal(None, _) => write!(f, "DECIMAL"),
+            DataType::UnsignedDecimal(Some(p), Some(s)) => {
+                write!(f, "DECIMAL({p},{s}) UNSIGNED")
+            }
+            DataType::UnsignedDecimal(Some(p), None) => write!(f, "DECIMAL({p}) UNSIGNED"),
+            DataType::UnsignedDecimal(None, _) => write!(f, "DECIMAL UNSIGNED"),
             DataType::Reference(table) => write!(f, "{table}"),
             DataType::ReferenceArray(table) => write!(f, "[{table}]"),
             DataType::VirtualReference { table, column } => write!(f, "~{table}({column})"),
@@ -151,8 +192,13 @@ impl std::fmt::Display for DataType {
                 write!(f, "~[{table}]({column})")
             }
             DataType::TinyInt => write!(f, "TINYINT"),
+            DataType::UnsignedTinyInt => write!(f, "TINYINT UNSIGNED"),
             DataType::SmallInt => write!(f, "SMALLINT"),
+            DataType::UnsignedSmallInt => write!(f, "SMALLINT UNSIGNED"),
+            DataType::MediumInt => write!(f, "MEDIUMINT"),
+            DataType::UnsignedMediumInt => write!(f, "MEDIUMINT UNSIGNED"),
             DataType::BigInt => write!(f, "BIGINT"),
+            DataType::UnsignedBigInt => write!(f, "BIGINT UNSIGNED"),
             DataType::Char(Some(n)) => write!(f, "CHAR({n})"),
             DataType::Char(None) => write!(f, "CHAR"),
             DataType::TinyText => write!(f, "TINYTEXT"),
@@ -171,6 +217,15 @@ impl std::fmt::Display for DataType {
                 write!(f, "ENUM({list})")
             }
             DataType::Uuid => write!(f, "UUID"),
+            DataType::Binary(Some(n)) => write!(f, "BINARY({n})"),
+            DataType::Binary(None) => write!(f, "BINARY"),
+            DataType::Varbinary(Some(n)) => write!(f, "VARBINARY({n})"),
+            DataType::Varbinary(None) => write!(f, "VARBINARY"),
+            DataType::Blob(Some(n)) => write!(f, "BLOB({n})"),
+            DataType::Blob(None) => write!(f, "BLOB"),
+            DataType::TinyBlob => write!(f, "TINYBLOB"),
+            DataType::MediumBlob => write!(f, "MEDIUMBLOB"),
+            DataType::LongBlob => write!(f, "LONGBLOB"),
             DataType::Other(s) => write!(f, "{s}"),
         }
     }
@@ -1167,27 +1222,59 @@ fn convert_function(f: sp::Function) -> Result<Expr, AstError> {
 
 fn convert_data_type(dt: sp::DataType) -> Result<DataType, AstError> {
     match dt {
-        sp::DataType::TinyInt(_) | sp::DataType::TinyIntUnsigned(_) | sp::DataType::UTinyInt => {
-            Ok(DataType::TinyInt)
-        }
-        sp::DataType::SmallInt(_)
-        | sp::DataType::SmallIntUnsigned(_)
-        | sp::DataType::USmallInt
-        | sp::DataType::Int2(_) => Ok(DataType::SmallInt),
-        sp::DataType::MediumInt(_) | sp::DataType::MediumIntUnsigned(_) => Ok(DataType::Integer),
+        // ── Signed integers ────────────────────────────────────────────────
+        sp::DataType::TinyInt(_) => Ok(DataType::TinyInt),
+        sp::DataType::SmallInt(_) | sp::DataType::Int2(_) => Ok(DataType::SmallInt),
+        sp::DataType::MediumInt(_) => Ok(DataType::MediumInt),
         sp::DataType::Int(_) | sp::DataType::Integer(_) | sp::DataType::Int4(_) => {
             Ok(DataType::Integer)
         }
         sp::DataType::BigInt(_)
-        | sp::DataType::BigIntUnsigned(_)
-        | sp::DataType::UBigInt
         | sp::DataType::Int8(_)
-        | sp::DataType::Int64 => Ok(DataType::BigInt),
+        | sp::DataType::Int64
+        | sp::DataType::Int16
+        | sp::DataType::Int32
+        | sp::DataType::Int128
+        | sp::DataType::Int256 => Ok(DataType::BigInt),
+        // ── Unsigned integers ──────────────────────────────────────────────
+        sp::DataType::TinyIntUnsigned(_) | sp::DataType::UTinyInt | sp::DataType::UInt8 => {
+            Ok(DataType::UnsignedTinyInt)
+        }
+        sp::DataType::SmallIntUnsigned(_)
+        | sp::DataType::USmallInt
+        | sp::DataType::Int2Unsigned(_)
+        | sp::DataType::UInt16 => Ok(DataType::UnsignedSmallInt),
+        sp::DataType::MediumIntUnsigned(_) => Ok(DataType::UnsignedMediumInt),
+        sp::DataType::IntUnsigned(_)
+        | sp::DataType::Int4Unsigned(_)
+        | sp::DataType::IntegerUnsigned(_)
+        | sp::DataType::UnsignedInteger
+        | sp::DataType::UInt32 => Ok(DataType::UnsignedInt),
+        sp::DataType::BigIntUnsigned(_)
+        | sp::DataType::UBigInt
+        | sp::DataType::UInt64
+        | sp::DataType::UInt128
+        | sp::DataType::UInt256
+        | sp::DataType::HugeInt
+        | sp::DataType::UHugeInt => Ok(DataType::UnsignedBigInt),
+        // ── Floating-point ─────────────────────────────────────────────────
         sp::DataType::Float(_) | sp::DataType::Float4 | sp::DataType::Real => Ok(DataType::Float),
+        sp::DataType::FloatUnsigned(_) => Ok(DataType::UnsignedFloat),
         sp::DataType::Double(_)
         | sp::DataType::DoublePrecision
         | sp::DataType::Float8
-        | sp::DataType::Float64 => Ok(DataType::Float),
+        | sp::DataType::Float64 => Ok(DataType::Double),
+        sp::DataType::DoubleUnsigned(_) => Ok(DataType::UnsignedDouble),
+        // ── Decimal / numeric ──────────────────────────────────────────────
+        sp::DataType::Decimal(info) | sp::DataType::Numeric(info) | sp::DataType::Dec(info) => {
+            let (p, s) = exact_number_info(info);
+            Ok(DataType::Decimal(p, s))
+        }
+        sp::DataType::DecimalUnsigned(info) | sp::DataType::DecUnsigned(info) => {
+            let (p, s) = exact_number_info(info);
+            Ok(DataType::UnsignedDecimal(p, s))
+        }
+        // ── Character ──────────────────────────────────────────────────────
         sp::DataType::Varchar(n) => Ok(DataType::Varchar(char_length_to_u64(n))),
         sp::DataType::Char(n)
         | sp::DataType::Character(n)
@@ -1197,7 +1284,23 @@ fn convert_data_type(dt: sp::DataType) -> Result<DataType, AstError> {
         sp::DataType::TinyText => Ok(DataType::TinyText),
         sp::DataType::MediumText => Ok(DataType::MediumText),
         sp::DataType::LongText => Ok(DataType::LongText),
+        // ── Binary ─────────────────────────────────────────────────────────
+        sp::DataType::Binary(n) => Ok(DataType::Binary(n)),
+        sp::DataType::Varbinary(n) => {
+            let len = n.and_then(|bl| match bl {
+                sp::BinaryLength::IntegerLength { length } => Some(length),
+                sp::BinaryLength::Max => None,
+            });
+            Ok(DataType::Varbinary(len))
+        }
+        sp::DataType::Blob(n) => Ok(DataType::Blob(n)),
+        sp::DataType::Bytes(n) => Ok(DataType::Blob(n)),
+        sp::DataType::TinyBlob => Ok(DataType::TinyBlob),
+        sp::DataType::MediumBlob => Ok(DataType::MediumBlob),
+        sp::DataType::LongBlob => Ok(DataType::LongBlob),
+        // ── Boolean ────────────────────────────────────────────────────────
         sp::DataType::Boolean | sp::DataType::Bool => Ok(DataType::Boolean),
+        // ── Date/time ──────────────────────────────────────────────────────
         sp::DataType::Date => Ok(DataType::Date),
         sp::DataType::Datetime(_) => Ok(DataType::DateTime),
         sp::DataType::Timestamp(_, sp::TimezoneInfo::None)
@@ -1208,6 +1311,7 @@ fn convert_data_type(dt: sp::DataType) -> Result<DataType, AstError> {
         | sp::DataType::Time(_, sp::TimezoneInfo::WithoutTimeZone) => Ok(DataType::Time),
         sp::DataType::Time(_, sp::TimezoneInfo::WithTimeZone)
         | sp::DataType::Time(_, sp::TimezoneInfo::Tz) => Ok(DataType::TimeTz),
+        // ── Misc ───────────────────────────────────────────────────────────
         sp::DataType::Uuid => Ok(DataType::Uuid),
         sp::DataType::Enum(members, _) => {
             let vals = members
@@ -1219,15 +1323,15 @@ fn convert_data_type(dt: sp::DataType) -> Result<DataType, AstError> {
                 .collect();
             Ok(DataType::Enum(vals))
         }
-        sp::DataType::Decimal(info) | sp::DataType::Numeric(info) => {
-            let (p, s) = match info {
-                sp::ExactNumberInfo::None => (None, None),
-                sp::ExactNumberInfo::Precision(p) => (Some(p), None),
-                sp::ExactNumberInfo::PrecisionAndScale(p, s) => (Some(p), Some(s as u64)),
-            };
-            Ok(DataType::Decimal(p, s))
-        }
         other => Ok(DataType::Other(format!("{other}"))),
+    }
+}
+
+fn exact_number_info(info: sp::ExactNumberInfo) -> (Option<u64>, Option<u64>) {
+    match info {
+        sp::ExactNumberInfo::None => (None, None),
+        sp::ExactNumberInfo::Precision(p) => (Some(p), None),
+        sp::ExactNumberInfo::PrecisionAndScale(p, s) => (Some(p), Some(s as u64)),
     }
 }
 

@@ -1197,3 +1197,97 @@ fn test_transaction_read_only() {
         other => panic!("expected BeginTransaction, got: {other:?}"),
     }
 }
+
+// ── UNSIGNED and BINARY type tests ────────────────────────────────────────────
+
+#[test]
+fn test_unsigned_integer_types() {
+    let cases: &[(&str, DataType)] = &[
+        ("id TINYINT UNSIGNED", DataType::UnsignedTinyInt),
+        ("id SMALLINT UNSIGNED", DataType::UnsignedSmallInt),
+        ("id INTEGER UNSIGNED", DataType::UnsignedInt),
+        ("id BIGINT UNSIGNED", DataType::UnsignedBigInt),
+    ];
+    for (col_def, expected) in cases {
+        let sql = format!("CREATE TABLE t ({col_def})");
+        let stmt = parser().parse_one(&sql).unwrap();
+        let ct = match stmt {
+            Statement::CreateTable(ct) => ct,
+            _ => panic!("expected CreateTable for: {sql}"),
+        };
+        assert_eq!(
+            ct.columns[0].data_type, *expected,
+            "mismatch for: {col_def}"
+        );
+    }
+}
+
+#[test]
+fn test_unsigned_decimal_type() {
+    let stmt = parser()
+        .parse_one("CREATE TABLE t (price DECIMAL(10,2) UNSIGNED)")
+        .unwrap();
+    let ct = match stmt {
+        Statement::CreateTable(ct) => ct,
+        _ => panic!("expected CreateTable"),
+    };
+    assert_eq!(
+        ct.columns[0].data_type,
+        DataType::UnsignedDecimal(Some(10), Some(2))
+    );
+}
+
+#[test]
+fn test_binary_types() {
+    let cases: &[(&str, DataType)] = &[
+        ("data BINARY(16)", DataType::Binary(Some(16))),
+        ("data BINARY", DataType::Binary(None)),
+        ("data VARBINARY(255)", DataType::Varbinary(Some(255))),
+        ("data BLOB", DataType::Blob(None)),
+        ("data BLOB(65535)", DataType::Blob(Some(65535))),
+        ("data TINYBLOB", DataType::TinyBlob),
+        ("data MEDIUMBLOB", DataType::MediumBlob),
+        ("data LONGBLOB", DataType::LongBlob),
+    ];
+    for (col_def, expected) in cases {
+        let sql = format!("CREATE TABLE t ({col_def})");
+        let stmt = parser().parse_one(&sql).unwrap();
+        let ct = match stmt {
+            Statement::CreateTable(ct) => ct,
+            _ => panic!("expected CreateTable for: {sql}"),
+        };
+        assert_eq!(
+            ct.columns[0].data_type, *expected,
+            "mismatch for: {col_def}"
+        );
+    }
+}
+
+#[test]
+fn test_unsigned_display() {
+    assert_eq!(DataType::UnsignedTinyInt.to_string(), "TINYINT UNSIGNED");
+    assert_eq!(DataType::UnsignedSmallInt.to_string(), "SMALLINT UNSIGNED");
+    assert_eq!(
+        DataType::UnsignedMediumInt.to_string(),
+        "MEDIUMINT UNSIGNED"
+    );
+    assert_eq!(DataType::UnsignedInt.to_string(), "INTEGER UNSIGNED");
+    assert_eq!(DataType::UnsignedBigInt.to_string(), "BIGINT UNSIGNED");
+    assert_eq!(DataType::UnsignedFloat.to_string(), "FLOAT UNSIGNED");
+    assert_eq!(DataType::UnsignedDouble.to_string(), "DOUBLE UNSIGNED");
+    assert_eq!(
+        DataType::UnsignedDecimal(Some(10), Some(2)).to_string(),
+        "DECIMAL(10,2) UNSIGNED"
+    );
+}
+
+#[test]
+fn test_binary_display() {
+    assert_eq!(DataType::Binary(Some(16)).to_string(), "BINARY(16)");
+    assert_eq!(DataType::Binary(None).to_string(), "BINARY");
+    assert_eq!(DataType::Varbinary(Some(255)).to_string(), "VARBINARY(255)");
+    assert_eq!(DataType::Blob(None).to_string(), "BLOB");
+    assert_eq!(DataType::TinyBlob.to_string(), "TINYBLOB");
+    assert_eq!(DataType::MediumBlob.to_string(), "MEDIUMBLOB");
+    assert_eq!(DataType::LongBlob.to_string(), "LONGBLOB");
+}

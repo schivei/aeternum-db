@@ -31,25 +31,34 @@ implementation is based on **SQL-92** with a subset of common SQL extensions.
 
 ### Integer Types
 
-| SQL Type              | Notes                                  |
-|-----------------------|----------------------------------------|
-| `TINYINT`             | 8-bit signed integer (−128 … 127)     |
-| `SMALLINT`            | 16-bit signed integer                  |
-| `INTEGER` / `INT`     | 32-bit signed integer                  |
-| `BIGINT`              | 64-bit signed integer                  |
+| SQL Type                        | Notes                                    |
+|---------------------------------|------------------------------------------|
+| `TINYINT`                       | 8-bit signed integer (−128 … 127)       |
+| `TINYINT UNSIGNED`              | 8-bit unsigned integer (0 … 255)        |
+| `SMALLINT`                      | 16-bit signed integer                    |
+| `SMALLINT UNSIGNED`             | 16-bit unsigned integer                  |
+| `MEDIUMINT`                     | 24-bit signed integer (MySQL)            |
+| `MEDIUMINT UNSIGNED`            | 24-bit unsigned integer (MySQL)          |
+| `INTEGER` / `INT`               | 32-bit signed integer                    |
+| `INTEGER UNSIGNED` / `INT UNSIGNED` | 32-bit unsigned integer              |
+| `BIGINT`                        | 64-bit signed integer                    |
+| `BIGINT UNSIGNED`               | 64-bit unsigned integer                  |
 
 ### Floating-Point Types
 
-| SQL Type                   | Notes                        |
-|----------------------------|------------------------------|
-| `FLOAT` / `REAL`           | 32-bit IEEE 754              |
-| `DOUBLE` / `DOUBLE PRECISION` | 64-bit IEEE 754           |
+| SQL Type                          | Notes                                                                 |
+|-----------------------------------|-----------------------------------------------------------------------|
+| `FLOAT` / `REAL`                  | 32-bit signed IEEE 754                                                |
+| `FLOAT UNSIGNED`                  | MySQL-specific; restricts values to non-negative (≥ 0); not standard IEEE 754 unsigned |
+| `DOUBLE` / `DOUBLE PRECISION`     | 64-bit signed IEEE 754                                                |
+| `DOUBLE UNSIGNED`                 | MySQL-specific; restricts values to non-negative (≥ 0); not standard IEEE 754 unsigned |
 
 ### Fixed-Precision Types
 
-| SQL Type              | Notes                                  |
-|-----------------------|----------------------------------------|
-| `DECIMAL(p, s)` / `NUMERIC(p, s)` | Fixed-point with precision `p` and scale `s` |
+| SQL Type                             | Notes                                              |
+|--------------------------------------|----------------------------------------------------|
+| `DECIMAL(p, s)` / `NUMERIC(p, s)`   | Fixed-point with precision `p` and scale `s`       |
+| `DECIMAL(p, s) UNSIGNED`            | Unsigned fixed-point (MySQL; deprecated in MySQL 8+) |
 
 ### Character Types
 
@@ -61,6 +70,17 @@ implementation is based on **SQL-92** with a subset of common SQL extensions.
 | `TINYTEXT`            | Small text (max 255 chars)             |
 | `MEDIUMTEXT`          | Medium text (max 16 MB)                |
 | `LONGTEXT`            | Large text (max 4 GB)                  |
+
+### Binary Types
+
+| SQL Type              | Notes                                              |
+|-----------------------|----------------------------------------------------|
+| `BINARY(n)`           | Fixed-length binary string (`n` bytes)             |
+| `VARBINARY(n)`        | Variable-length binary string (max `n` bytes)      |
+| `BLOB` / `BLOB(n)`    | Binary large object                                |
+| `TINYBLOB`            | Small binary object (max 255 bytes, MySQL)         |
+| `MEDIUMBLOB`          | Medium binary object (max 16 MB, MySQL)            |
+| `LONGBLOB`            | Large binary object (max 4 GB, MySQL)              |
 
 ### Date / Time Types
 
