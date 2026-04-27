@@ -980,10 +980,17 @@ fn convert_join_constraint(constraint: sp::JoinConstraint) -> Result<Option<Expr
     match constraint {
         sp::JoinConstraint::On(e) => Ok(Some(convert_expr(e)?)),
         sp::JoinConstraint::None => Ok(None),
-        sp::JoinConstraint::Natural | sp::JoinConstraint::Using(_) => {
-            // Natural / USING joins are not yet supported in the internal AST.
-            Ok(None)
-        }
+        sp::JoinConstraint::Natural => Err(AstError::Unsupported(
+            "NATURAL joins are not supported in the internal AST".to_string(),
+        )),
+        sp::JoinConstraint::Using(columns) => Err(AstError::Unsupported(format!(
+            "USING joins are not supported in the internal AST: USING ({})",
+            columns
+                .into_iter()
+                .map(|c| ident_to_string(&c))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))),
     }
 }
 
