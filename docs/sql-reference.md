@@ -639,8 +639,9 @@ The following SQL features are **not yet supported** or are **partially implemen
 
 ### Known Dialect Edge Cases
 
-- **Case sensitivity**: SQL keywords are case-insensitive; identifiers are
-  case-sensitive by default.
+- **Case sensitivity**: SQL keywords are case-insensitive; table and column
+  identifiers are currently matched case-insensitively by the
+  catalog/validator logic.
 - **Quoted identifiers**: Backticks (`` `name` ``) or double-quotes (`"name"`)
   allow reserved words as identifiers.
 - **Comments**: Both `-- single-line` and `/* block */` comments are
