@@ -306,38 +306,47 @@ impl<'a> Validator<'a> {
         self.require_table(&ins.table)?;
         let schema = self.catalog.get_table(&ins.table).unwrap();
 
-        // If explicit columns are given, verify they exist
-        for col in &ins.columns {
-            self.require_column(schema, col)?;
-        }
+        // Resolve the effective target columns for this INSERT.
+        // If no explicit column list is provided, SQL treats VALUES as mapping
+        // to all table columns in schema order.
+        let effective_columns = if ins.columns.is_empty() {
+            schema
+                .columns
+                .iter()
+                .map(|col| col.name.clone())
+                .collect::<Vec<_>>()
+        } else {
+            for col in &ins.columns {
+                self.require_column(schema, col)?;
+            }
+            ins.columns.clone()
+        };
 
-        // Check NOT NULL constraints for columns that are explicitly supplied
-        if !ins.columns.is_empty() {
-            for row in &ins.values {
-                for (i, val) in row.iter().enumerate() {
-                    if let Some(col_name) = ins.columns.get(i) {
-                        if let Some(col_schema) = schema.get_column(col_name) {
-                            if !col_schema.nullable {
-                                if let Expr::Literal(crate::sql::ast::Value::Null) = val {
-                                    return Err(ValidationError::NullConstraintViolation {
-                                        table: ins.table.clone(),
-                                        column: col_name.clone(),
-                                    });
-                                }
+        for row in &ins.values {
+            // Validate expressions in VALUES
+            for val in row {
+                self.validate_expr(val, Some(&ins.table))?;
+            }
+
+            // Enforce NOT NULL constraints for all target columns. When the
+            // column list is implicit, a short row means trailing columns are
+            // omitted; that still violates NOT NULL for any required column.
+            for (i, col_name) in effective_columns.iter().enumerate() {
+                if let Some(col_schema) = schema.get_column(col_name) {
+                    if !col_schema.nullable {
+                        match row.get(i) {
+                            Some(Expr::Literal(crate::sql::ast::Value::Null)) | None => {
+                                return Err(ValidationError::NullConstraintViolation {
+                                    table: ins.table.clone(),
+                                    column: col_name.clone(),
+                                });
                             }
+                            _ => {}
                         }
                     }
                 }
             }
         }
-
-        // Validate expressions in VALUES
-        for row in &ins.values {
-            for val in row {
-                self.validate_expr(val, Some(&ins.table))?;
-            }
-        }
-
         Ok(())
     }
 
