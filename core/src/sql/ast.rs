@@ -440,6 +440,27 @@ pub struct ColumnDef {
     pub uniques: bool,
 }
 
+/// Behavior for a temporary table when the transaction that created it commits.
+///
+/// This mirrors the SQL-standard `ON COMMIT` clause for temporary tables:
+/// - `PreserveRows` (default) — rows survive the commit; table is dropped when
+///   the **session** ends.
+/// - `DeleteRows` — rows are truncated on each commit, but the table structure
+///   persists for the lifetime of the session.
+/// - `Drop` — the table (and all its rows) is dropped when the transaction
+///   commits.
+///
+/// If `CreateTableStatement::temporary` is `false` this field is always `None`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum OnCommitBehavior {
+    /// `ON COMMIT PRESERVE ROWS` — default if omitted.
+    PreserveRows,
+    /// `ON COMMIT DELETE ROWS` — truncate rows on each commit.
+    DeleteRows,
+    /// `ON COMMIT DROP` — drop the whole table on commit.
+    Drop,
+}
+
 /// A `CREATE TABLE` statement.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CreateTableStatement {
@@ -451,6 +472,11 @@ pub struct CreateTableStatement {
     pub temporary: bool,
     /// Parent tables to inherit from (`INHERITS (parent, ...)`).
     pub inherits: Vec<String>,
+    /// Lifecycle behavior for temporary tables (`ON COMMIT ...`).
+    ///
+    /// `None` means "default" (`PRESERVE ROWS` for temporary tables, ignored
+    /// for permanent tables).  See [`OnCommitBehavior`].
+    pub on_commit: Option<OnCommitBehavior>,
 }
 
 /// A `DROP TABLE` statement.
@@ -1338,12 +1364,18 @@ fn convert_create_table(ct: sp::CreateTable) -> Result<Statement, AstError> {
         .into_iter()
         .map(|n| object_name_to_string(&n))
         .collect();
+    let on_commit = ct.on_commit.map(|oc| match oc {
+        sp::OnCommit::DeleteRows => OnCommitBehavior::DeleteRows,
+        sp::OnCommit::PreserveRows => OnCommitBehavior::PreserveRows,
+        sp::OnCommit::Drop => OnCommitBehavior::Drop,
+    });
     Ok(Statement::CreateTable(CreateTableStatement {
         table,
         columns,
         if_not_exists: ct.if_not_exists,
         temporary: ct.temporary,
         inherits,
+        on_commit,
     }))
 }
 

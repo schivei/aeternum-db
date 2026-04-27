@@ -7,7 +7,7 @@
 //! - Semantic validation against an in-memory catalog
 
 use aeternumdb_core::sql::ast::{
-    BeginTransactionStatement, BinaryOperator, CommitStatement, DataType, Expr,
+    BeginTransactionStatement, BinaryOperator, CommitStatement, DataType, Expr, OnCommitBehavior,
     ReleaseSavepointStatement, RollbackStatement, SavepointStatement, SelectItem, Statement, Value,
 };
 use aeternumdb_core::sql::parser::{SqlError, SqlParser};
@@ -1002,6 +1002,47 @@ fn test_create_temporary_table() {
     assert_eq!(ct.table, "tmp_data");
     assert!(ct.temporary);
     assert_eq!(ct.columns.len(), 1);
+    // No explicit ON COMMIT clause — default (PreserveRows / session-scoped).
+    assert_eq!(ct.on_commit, None);
+}
+
+#[test]
+fn test_create_temporary_table_on_commit_drop() {
+    let stmt = parser()
+        .parse_one("CREATE TEMPORARY TABLE tmp_drop (id INTEGER) ON COMMIT DROP")
+        .unwrap();
+    let ct = match &stmt {
+        Statement::CreateTable(ct) => ct,
+        _ => panic!("expected CreateTable"),
+    };
+    assert!(ct.temporary);
+    assert_eq!(ct.on_commit, Some(OnCommitBehavior::Drop));
+}
+
+#[test]
+fn test_create_temporary_table_on_commit_delete_rows() {
+    let stmt = parser()
+        .parse_one("CREATE TEMPORARY TABLE tmp_del (id INTEGER) ON COMMIT DELETE ROWS")
+        .unwrap();
+    let ct = match &stmt {
+        Statement::CreateTable(ct) => ct,
+        _ => panic!("expected CreateTable"),
+    };
+    assert!(ct.temporary);
+    assert_eq!(ct.on_commit, Some(OnCommitBehavior::DeleteRows));
+}
+
+#[test]
+fn test_create_temporary_table_on_commit_preserve_rows() {
+    let stmt = parser()
+        .parse_one("CREATE TEMPORARY TABLE tmp_pres (id INTEGER) ON COMMIT PRESERVE ROWS")
+        .unwrap();
+    let ct = match &stmt {
+        Statement::CreateTable(ct) => ct,
+        _ => panic!("expected CreateTable"),
+    };
+    assert!(ct.temporary);
+    assert_eq!(ct.on_commit, Some(OnCommitBehavior::PreserveRows));
 }
 
 #[test]
