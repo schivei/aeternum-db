@@ -12,9 +12,9 @@
 //!
 //! # Example
 //! ```no_run
-//! # use std::sync::Arc;
 //! # use aeternumdb_core::storage::{StorageConfig, StorageEngine};
 //! # use aeternumdb_core::index::btree::{BTree, BTreeConfig};
+//! # use std::sync::Arc;
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! # let engine = Arc::new(StorageEngine::new(StorageConfig {
 //! #     data_path: "/tmp/mydb.db".into(),
