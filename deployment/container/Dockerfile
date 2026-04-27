@@ -1,10 +1,10 @@
 # Multi-stage build for AeternumDB
-FROM rust:slim AS builder
+FROM rust:alpine3.21 AS builder
 
 WORKDIR /build
 
-# Upgrade base packages in builder to apply latest security patches
-RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
+# Install build dependencies (musl headers for linking)
+RUN apk add --no-cache musl-dev
 
 # Copy core engine
 COPY core/ ./core/
@@ -13,20 +13,17 @@ COPY core/ ./core/
 WORKDIR /build/core
 RUN cargo build --release
 
-# Final stage
-FROM debian:bookworm-slim
+# Final stage – Alpine has far fewer CVEs than Debian-based images
+FROM alpine:3.21
 
-# Install runtime dependencies and apply all available security patches
-RUN apt-get update && apt-get upgrade -y && apt-get install -y \
-    --no-install-recommends \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+# Install runtime dependencies (ca-certificates, musl libc already included)
+RUN apk add --no-cache ca-certificates
 
 # Copy binary from builder
 COPY --from=builder /build/core/target/release/aeternumdb /usr/local/bin/
 
 # Create a non-root user and data directory
-RUN groupadd -r aeternumdb && useradd -r -g aeternumdb aeternumdb \
+RUN addgroup -S aeternumdb && adduser -S -G aeternumdb aeternumdb \
     && mkdir -p /var/lib/aeternumdb \
     && chown -R aeternumdb:aeternumdb /var/lib/aeternumdb
 
