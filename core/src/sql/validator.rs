@@ -936,6 +936,20 @@ impl<'a> Validator<'a> {
                 Ok(())
             }
             Expr::MatchAgainst { match_value, .. } => self.validate_expr(match_value, table),
+            Expr::Overlay {
+                expr,
+                overlay_what,
+                from_pos,
+                for_len,
+            } => {
+                self.validate_expr(expr, table)?;
+                self.validate_expr(overlay_what, table)?;
+                self.validate_expr(from_pos, table)?;
+                if let Some(e) = for_len {
+                    self.validate_expr(e, table)?;
+                }
+                Ok(())
+            }
         }
     }
 
@@ -1098,6 +1112,18 @@ fn view_as_children(expr: &Expr) -> Vec<&Expr> {
         | Expr::Literal(_)
         | Expr::Column { .. }
         | Expr::Wildcard => vec![],
+        Expr::Overlay {
+            expr,
+            overlay_what,
+            from_pos,
+            for_len,
+        } => {
+            let mut v = vec![expr.as_ref(), overlay_what.as_ref(), from_pos.as_ref()];
+            if let Some(e) = for_len {
+                v.push(e);
+            }
+            v
+        }
     }
 }
 

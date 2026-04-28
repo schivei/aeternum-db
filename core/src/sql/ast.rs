@@ -159,27 +159,6 @@ pub enum DataType {
     DateTime,
     /// `TIMESTAMP WITH TIME ZONE`.
     TimestampTz,
-    /// Anonymous inline `ENUM` with named variants (MySQL-compatible syntax).
-    ///
-    /// The system **automatically assigns** numeric values to variants —
-    /// users supply only the names (and the optional `NONE` marker for
-    /// FLAG enums).  Values are:
-    /// - Regular enum: sequential integers `0, 1, 2, …` in declaration order.
-    /// - FLAG enum: `NONE = 0`; other variants get powers of 2 (`1, 2, 4, …`).
-    ///
-    /// For a **named, reusable** enum type that can be shared across tables
-    /// and is protected from deletion when in use, use
-    /// `CREATE TYPE name AS ENUM [FLAG] (...)` and reference it via
-    /// [`DataType::EnumRef`].
-    ///
-    /// **Storage**: the column always stores the numeric `u64` value.
-    /// The engine auto-casts `'active'` → its assigned number, and
-    /// for FLAG enums `'read' | 'write'` → bitwise OR of their numbers.
-    Enum {
-        variants: Vec<EnumVariant>,
-        /// `true` for bitmask / flag enumerations (`[Flags]` in C# terms).
-        flag: bool,
-    },
     /// Reference to a **named user-defined type** created with
     /// `CREATE TYPE name AS ENUM [FLAG] (...)` or
     /// `CREATE TYPE name AS (field type, ...)`.
@@ -208,8 +187,7 @@ pub enum DataType {
 
 // ── EnumVariant ───────────────────────────────────────────────────────────────
 
-/// A single named variant in an [`DataType::Enum`] or a
-/// [`TypeDefinition::Enum`] type body.
+/// A single named variant in a [`TypeDefinition::Enum`] type body.
 ///
 /// **Users supply only the name** (and the `NONE` marker for FLAG enums).
 /// Numeric values are assigned automatically by the system and are **immutable**
@@ -301,21 +279,6 @@ impl std::fmt::Display for DataType {
             DataType::TimeTz => write!(f, "TIME WITH TIME ZONE"),
             DataType::DateTime => write!(f, "DATETIME"),
             DataType::TimestampTz => write!(f, "TIMESTAMP WITH TIME ZONE"),
-            DataType::Enum { variants, flag } => {
-                let kw = if *flag { "ENUM FLAG" } else { "ENUM" };
-                let list = variants
-                    .iter()
-                    .map(|v| {
-                        if v.is_none {
-                            "NONE".to_string()
-                        } else {
-                            format!("'{}'", v.name)
-                        }
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                write!(f, "{kw}({list})")
-            }
             DataType::EnumRef(name) => write!(f, "{name}"),
             DataType::Uuid => write!(f, "UUID"),
             DataType::Binary(Some(n)) => write!(f, "BINARY({n})"),
@@ -330,133 +293,6 @@ impl std::fmt::Display for DataType {
             DataType::Vector(elem) => write!(f, "[{elem}]"),
             DataType::Other(s) => write!(f, "{s}"),
         }
-    }
-}
-
-impl DataType {
-    /// Compute the resolved numeric value for every variant in one pass.
-    ///
-    /// Auto-assignment rules:
-    /// - Regular enum: sequential integers `0, 1, 2, …` (explicit values
-    ///   advance the counter past themselves).
-    /// - FLAG enum: powers of 2 `1, 2, 4, 8, …`; a NONE variant is always
-    ///   `0` regardless of position.
-    pub fn enum_resolved_values(&self) -> Vec<u64> {
-        let (variants, flag) = match self {
-            DataType::Enum { variants, flag } => (variants, *flag),
-            _ => return vec![],
-        };
-        let mut out = vec![0u64; variants.len()];
-        let mut next: u64 = if flag { 1 } else { 0 };
-        for (i, v) in variants.iter().enumerate() {
-            if v.is_none {
-                out[i] = 0;
-            } else {
-                out[i] = next;
-                next = if flag { next << 1 } else { next + 1 };
-            }
-        }
-        out
-    }
-
-    /// Look up the stored numeric value for an enum variant by name
-    /// (case-insensitive).  Returns `None` if `self` is not an `Enum` or
-    /// the name does not match any variant.
-    pub fn enum_value_of(&self, name: &str) -> Option<u64> {
-        let (variants, _) = match self {
-            DataType::Enum { variants, flag } => (variants, *flag),
-            _ => return None,
-        };
-        let lower = name.to_lowercase();
-        let resolved = self.enum_resolved_values();
-        variants
-            .iter()
-            .zip(resolved.iter())
-            .find(|(v, _)| {
-                (v.is_none && lower == "none") || (!v.is_none && v.name.to_lowercase() == lower)
-            })
-            .map(|(_, &val)| val)
-    }
-
-    /// Return the variant name for a stored numeric value (regular enums).
-    /// Returns `None` if `self` is not an `Enum` or the value does not
-    /// match any variant exactly.
-    pub fn enum_name_of(&self, value: u64) -> Option<&str> {
-        let variants = match self {
-            DataType::Enum { variants, .. } => variants,
-            _ => return None,
-        };
-        self.enum_resolved_values()
-            .into_iter()
-            .zip(variants.iter())
-            .find(|(v, _)| *v == value)
-            .map(|(_, var)| {
-                if var.is_none {
-                    "none"
-                } else {
-                    var.name.as_str()
-                }
-            })
-    }
-
-    /// For a FLAG enum, decompose a bitmask `value` into the list of
-    /// matching variant names.  For a regular enum returns a single-element
-    /// vec (or empty if invalid).  Returns `[]` for `self` not being `Enum`.
-    pub fn enum_decompose_flags(&self, value: u64) -> Vec<String> {
-        let (variants, flag) = match self {
-            DataType::Enum { variants, flag } => (variants, *flag),
-            _ => return vec![],
-        };
-        if value == 0 {
-            return variants
-                .iter()
-                .find(|v| v.is_none)
-                .map(|_| vec!["none".to_string()])
-                .unwrap_or_default();
-        }
-        if !flag {
-            return self
-                .enum_name_of(value)
-                .map(|n| vec![n.to_string()])
-                .unwrap_or_default();
-        }
-        self.enum_resolved_values()
-            .into_iter()
-            .zip(variants.iter())
-            .filter(|(v, var)| !var.is_none && *v != 0 && (value & v) == *v)
-            .map(|(_, var)| var.name.clone())
-            .collect()
-    }
-
-    /// Check whether a numeric value is valid for this enum.
-    ///
-    /// - Regular enum: `value` must equal exactly one variant's resolved value.
-    /// - FLAG enum: `value` must be a valid combination of variant bits;
-    ///   `0` is valid only when a NONE variant exists.
-    pub fn enum_is_valid_value(&self, value: u64) -> bool {
-        let (variants, flag) = match self {
-            DataType::Enum { variants, flag } => (variants, *flag),
-            _ => return false,
-        };
-        if value == 0 {
-            return variants.iter().any(|v| v.is_none);
-        }
-        if !flag {
-            return self.enum_name_of(value).is_some();
-        }
-        let all_bits: u64 = self
-            .enum_resolved_values()
-            .into_iter()
-            .zip(variants.iter())
-            .filter(|(_, v)| !v.is_none)
-            .fold(0, |acc, (v, _)| acc | v);
-        (value & !all_bits) == 0
-    }
-
-    /// Check whether a string name is a valid variant for this enum
-    /// (case-insensitive).
-    pub fn enum_is_valid_name(&self, name: &str) -> bool {
-        self.enum_value_of(name).is_some()
     }
 }
 
@@ -809,6 +645,20 @@ pub enum Expr {
         trim_where: Option<TrimWhereField>,
         /// Characters to strip; defaults to space when `None`.
         trim_what: Option<Box<Expr>>,
+    },
+    /// `OVERLAY(str PLACING repl FROM pos [FOR len])` — replace a substring at a
+    /// fixed position.
+    ///
+    /// - `expr`: the source string.
+    /// - `overlay_what`: the replacement string.
+    /// - `from_pos`: start position (1-based).
+    /// - `for_len`: number of characters to replace; defaults to the length of
+    ///   `overlay_what` when absent.
+    Overlay {
+        expr: Box<Expr>,
+        overlay_what: Box<Expr>,
+        from_pos: Box<Expr>,
+        for_len: Option<Box<Expr>>,
     },
     // ── Full-text search ──────────────────────────────────────────────────
     /// `MATCH (col1, col2, …) AGAINST ('pattern' [modifier])`.
@@ -2408,6 +2258,20 @@ pub fn convert_expr(expr: sp::Expr) -> Result<Expr, AstError> {
             match_value,
             opt_search_modifier,
         } => convert_match_against(columns, match_value, opt_search_modifier),
+        sp::Expr::Overlay {
+            expr,
+            overlay_what,
+            overlay_from,
+            overlay_for,
+        } => Ok(Expr::Overlay {
+            expr: Box::new(convert_expr(*expr)?),
+            overlay_what: Box::new(convert_expr(*overlay_what)?),
+            from_pos: Box::new(convert_expr(*overlay_from)?),
+            for_len: match overlay_for {
+                Some(e) => Some(Box::new(convert_expr(*e)?)),
+                None => None,
+            },
+        }),
         other => Err(AstError::Unsupported(format!(
             "expression not supported: {other}"
         ))),
@@ -2686,25 +2550,10 @@ fn convert_data_type(dt: sp::DataType) -> Result<DataType, AstError> {
         | sp::DataType::Time(_, sp::TimezoneInfo::Tz) => Ok(DataType::TimeTz),
         // ── Misc ───────────────────────────────────────────────────────────
         sp::DataType::Uuid => Ok(DataType::Uuid),
-        sp::DataType::Enum(members, _) => {
-            let variants = members
-                .into_iter()
-                .map(|m| {
-                    let name_str = match &m {
-                        sp::EnumMember::Name(s) => s.to_lowercase(),
-                        sp::EnumMember::NamedValue(s, _) => s.to_lowercase(),
-                    };
-                    // Users supply names only — system assigns values at creation time.
-                    // Any explicit value from NamedValue syntax is silently ignored
-                    // to enforce the "system-assigned, immutable" contract.
-                    EnumVariant {
-                        is_none: name_str == "none",
-                        name: name_str,
-                    }
-                })
-                .collect();
-            Ok(DataType::Enum { variants, flag: false })
-        }
+        sp::DataType::Enum(_, _) => Err(AstError::Unsupported(
+            "inline anonymous ENUM('a','b',...) is not supported; use CREATE ENUM first"
+                .to_string(),
+        )),
         sp::DataType::Array(sp::ArrayElemTypeDef::AngleBracket(inner))
         | sp::DataType::Array(sp::ArrayElemTypeDef::SquareBracket(inner, _)) => {
             Ok(DataType::Vector(Box::new(convert_data_type(*inner)?)))

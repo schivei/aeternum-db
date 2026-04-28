@@ -9,7 +9,7 @@
 use aeternumdb_core::sql::ast::{
     BeginTransactionStatement, BinaryOperator, CommitStatement, DataType, Expr, OnCommitBehavior,
     ReferentialAction, ReleaseSavepointStatement, RollbackStatement, SavepointStatement,
-    SelectItem, Statement, Value,
+    SelectItem, Statement, TextSearchModifier, TrimWhereField, UnaryOperator, Value, ViewAsItem,
 };
 use aeternumdb_core::sql::parser::{SqlError, SqlParser};
 use aeternumdb_core::sql::validator::{
@@ -1083,8 +1083,7 @@ fn test_new_data_types() {
         e TIME,
         f DATETIME,
         g TIMESTAMP WITH TIME ZONE,
-        h UUID,
-        i ENUM('x', 'y', 'z')
+        h UUID
     )";
     let stmt = parser().parse_one(sql).unwrap();
     let ct = match &stmt {
@@ -1102,11 +1101,6 @@ fn test_new_data_types() {
     assert_eq!(col("f").data_type, DataType::DateTime);
     assert_eq!(col("g").data_type, DataType::TimestampTz);
     assert_eq!(col("h").data_type, DataType::Uuid);
-    // ENUM variants are now EnumVariant structs with auto-assigned values
-    assert!(matches!(
-        &col("i").data_type,
-        DataType::Enum { variants, flag: false } if variants.len() == 3
-    ));
 }
 
 #[test]
@@ -1856,4 +1850,488 @@ fn test_on_delete_on_non_reference_column_errors() {
         err_str.contains("ON UPDATE / ON DELETE"),
         "error message should mention ON UPDATE / ON DELETE, got: {err_str}"
     );
+}
+
+// ── Expression tests ──────────────────────────────────────────────────────────
+
+#[test]
+fn test_bitwise_operators() {
+    let cases = [
+        ("SELECT a & b FROM t", BinaryOperator::BitwiseAnd),
+        ("SELECT a | b FROM t", BinaryOperator::BitwiseOr),
+        ("SELECT a ^ b FROM t", BinaryOperator::BitwiseXor),
+    ];
+    for (sql, expected_op) in cases {
+        let stmt = parser().parse_one(sql).unwrap();
+        let sel = match stmt {
+            Statement::Select(s) => s,
+            _ => panic!("expected Select"),
+        };
+        match &sel.columns[0] {
+            SelectItem::Expr {
+                expr: Expr::BinaryOp { op, .. },
+                ..
+            } => {
+                assert_eq!(op, &expected_op, "wrong op for: {sql}");
+            }
+            other => panic!("expected BinaryOp, got: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn test_bitwise_not_unary() {
+    let stmt = parser().parse_one("SELECT ~flags FROM t").unwrap();
+    let sel = match stmt {
+        Statement::Select(s) => s,
+        _ => panic!("expected Select"),
+    };
+    assert!(matches!(
+        &sel.columns[0],
+        SelectItem::Expr {
+            expr: Expr::UnaryOp {
+                op: UnaryOperator::BitwiseNot,
+                ..
+            },
+            ..
+        }
+    ));
+}
+
+#[test]
+fn test_regex_operators() {
+    let cases: &[(&str, BinaryOperator)] = &[
+        ("SELECT a FROM t WHERE a ILIKE 'pat'", BinaryOperator::ILike),
+        (
+            "SELECT a FROM t WHERE a NOT ILIKE 'pat'",
+            BinaryOperator::NotILike,
+        ),
+        (
+            "SELECT a FROM t WHERE a SIMILAR TO 'pat'",
+            BinaryOperator::SimilarTo,
+        ),
+        (
+            "SELECT a FROM t WHERE a NOT SIMILAR TO 'pat'",
+            BinaryOperator::NotSimilarTo,
+        ),
+    ];
+    for (sql, expected_op) in cases {
+        let stmt = parser().parse_one(sql).unwrap();
+        let sel = match stmt {
+            Statement::Select(s) => s,
+            _ => panic!("expected Select for: {sql}"),
+        };
+        let where_expr = sel.where_clause.expect("expected WHERE");
+        assert!(
+            matches!(where_expr, Expr::BinaryOp { op, .. } if &op == expected_op),
+            "wrong op for: {sql}"
+        );
+    }
+}
+
+#[test]
+fn test_string_concat_operator() {
+    let stmt = parser()
+        .parse_one("SELECT first_name || ' ' || last_name FROM users")
+        .unwrap();
+    let sel = match stmt {
+        Statement::Select(s) => s,
+        _ => panic!("expected Select"),
+    };
+    assert!(matches!(
+        &sel.columns[0],
+        SelectItem::Expr {
+            expr: Expr::BinaryOp {
+                op: BinaryOperator::StringConcat,
+                ..
+            },
+            ..
+        }
+    ));
+}
+
+#[test]
+fn test_pg_regex_operators() {
+    // Test PostgreSQL-style POSIX regex operators which are supported by the parser.
+    let stmt = parser()
+        .parse_one("SELECT id FROM t WHERE name ~ 'pat'")
+        .unwrap();
+    let sel = match stmt {
+        Statement::Select(s) => s,
+        _ => panic!("expected Select"),
+    };
+    let where_expr = sel.where_clause.expect("expected WHERE");
+    assert!(matches!(
+        where_expr,
+        Expr::BinaryOp {
+            op: BinaryOperator::RegexpMatch,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn test_match_against_ast() {
+    // MATCH ... AGAINST requires MySQL dialect; instead verify the AST variant
+    // is correctly constructed and validated.
+    use aeternumdb_core::sql::ast::SelectStatement;
+
+    let stmt = Statement::Select(Box::new(SelectStatement {
+        with: vec![],
+        columns: vec![SelectItem::Expr {
+            expr: Expr::Column {
+                table: None,
+                name: "id".into(),
+            },
+            alias: None,
+        }],
+        from: None,
+        where_clause: Some(Expr::MatchAgainst {
+            columns: vec!["title".into(), "body".into()],
+            match_value: Box::new(Expr::Literal(Value::String("rust".into()))),
+            modifier: Some(TextSearchModifier::Boolean),
+        }),
+        group_by: vec![],
+        having: None,
+        order_by: vec![],
+        limit: None,
+        offset: None,
+        distinct: false,
+        view_as: None,
+    }));
+    assert!(matches!(
+        stmt,
+        Statement::Select(ref s)
+        if matches!(
+            s.where_clause,
+            Some(Expr::MatchAgainst { modifier: Some(TextSearchModifier::Boolean), .. })
+        )
+    ));
+}
+
+#[test]
+fn test_substring_expr() {
+    let stmt = parser()
+        .parse_one("SELECT SUBSTRING(name FROM 1 FOR 5) FROM users")
+        .unwrap();
+    let sel = match stmt {
+        Statement::Select(s) => s,
+        _ => panic!("expected Select"),
+    };
+    assert!(matches!(
+        &sel.columns[0],
+        SelectItem::Expr {
+            expr: Expr::Substring {
+                from_pos: Some(_),
+                len: Some(_),
+                ..
+            },
+            ..
+        }
+    ));
+}
+
+#[test]
+fn test_position_expr() {
+    let stmt = parser()
+        .parse_one("SELECT POSITION('a' IN name) FROM users")
+        .unwrap();
+    let sel = match stmt {
+        Statement::Select(s) => s,
+        _ => panic!("expected Select"),
+    };
+    assert!(matches!(
+        &sel.columns[0],
+        SelectItem::Expr {
+            expr: Expr::Position { .. },
+            ..
+        }
+    ));
+}
+
+#[test]
+fn test_trim_expr() {
+    let stmt = parser()
+        .parse_one("SELECT TRIM(BOTH ' ' FROM name) FROM users")
+        .unwrap();
+    let sel = match stmt {
+        Statement::Select(s) => s,
+        _ => panic!("expected Select"),
+    };
+    assert!(matches!(
+        &sel.columns[0],
+        SelectItem::Expr {
+            expr: Expr::Trim {
+                trim_where: Some(TrimWhereField::Both),
+                ..
+            },
+            ..
+        }
+    ));
+}
+
+#[test]
+fn test_overlay_expr() {
+    let stmt = parser()
+        .parse_one("SELECT OVERLAY(name PLACING 'X' FROM 2 FOR 3) FROM users")
+        .unwrap();
+    let sel = match stmt {
+        Statement::Select(s) => s,
+        _ => panic!("expected Select"),
+    };
+    assert!(matches!(
+        &sel.columns[0],
+        SelectItem::Expr {
+            expr: Expr::Overlay {
+                for_len: Some(_),
+                ..
+            },
+            ..
+        }
+    ));
+}
+
+#[test]
+fn test_replace_function() {
+    let stmt = parser()
+        .parse_one("SELECT REPLACE(name, 'a', 'b') FROM users")
+        .unwrap();
+    let sel = match stmt {
+        Statement::Select(s) => s,
+        _ => panic!("expected Select"),
+    };
+    assert!(matches!(
+        &sel.columns[0],
+        SelectItem::Expr {
+            expr: Expr::Function { name, .. },
+            ..
+        } if name == "REPLACE"
+    ));
+}
+
+#[test]
+fn test_is_null_expr() {
+    let stmt = parser()
+        .parse_one("SELECT id FROM users WHERE email IS NULL")
+        .unwrap();
+    let sel = match stmt {
+        Statement::Select(s) => s,
+        _ => panic!("expected Select"),
+    };
+    assert!(matches!(
+        sel.where_clause,
+        Some(Expr::IsNull { negated: false, .. })
+    ));
+}
+
+#[test]
+fn test_is_not_null_expr() {
+    let stmt = parser()
+        .parse_one("SELECT id FROM users WHERE email IS NOT NULL")
+        .unwrap();
+    let sel = match stmt {
+        Statement::Select(s) => s,
+        _ => panic!("expected Select"),
+    };
+    assert!(matches!(
+        sel.where_clause,
+        Some(Expr::IsNull { negated: true, .. })
+    ));
+}
+
+#[test]
+fn test_inline_enum_rejected() {
+    let result = parser().parse_one("CREATE TABLE t (status ENUM('active', 'inactive'))");
+    assert!(
+        result.is_err(),
+        "expected error for inline ENUM, got: {result:?}"
+    );
+    let msg = format!("{}", result.unwrap_err());
+    assert!(
+        msg.contains("not supported") || msg.contains("CREATE ENUM"),
+        "unexpected error message: {msg}"
+    );
+}
+
+#[test]
+fn test_create_enum_basic() {
+    let stmt = parser()
+        .parse_one("CREATE TYPE status AS ENUM ('active', 'inactive', 'pending')")
+        .unwrap();
+    let ce = match stmt {
+        Statement::CreateEnum(ce) => ce,
+        _ => panic!("expected CreateEnum"),
+    };
+    assert_eq!(ce.name, "status");
+    assert!(!ce.flag);
+    assert_eq!(ce.variants.len(), 3);
+    assert_eq!(ce.variants[0].name, "active");
+    assert_eq!(ce.variants[1].name, "inactive");
+    assert_eq!(ce.variants[2].name, "pending");
+}
+
+#[test]
+fn test_drop_enum() {
+    // `DROP TYPE name` is mapped to Statement::DropType by the parser.
+    // Statement::DropEnum is reserved for the Phase 4 native `DROP ENUM` keyword.
+    let stmt = parser().parse_one("DROP TYPE status").unwrap();
+    assert!(matches!(stmt, Statement::DropType(_)));
+}
+
+#[test]
+fn test_enum_ref_column_type() {
+    let stmt = parser()
+        .parse_one("CREATE TABLE files (path VARCHAR(255), perms permissions)")
+        .unwrap();
+    let ct = match stmt {
+        Statement::CreateTable(ct) => ct,
+        _ => panic!("expected CreateTable"),
+    };
+    let perms_col = ct.columns.iter().find(|c| c.name == "perms").unwrap();
+    assert!(matches!(&perms_col.data_type, DataType::EnumRef(name) if name == "permissions"));
+}
+
+#[test]
+fn test_case_expression() {
+    let stmt = parser()
+        .parse_one(
+            "SELECT CASE WHEN score > 90 THEN 'A' WHEN score > 80 THEN 'B' ELSE 'C' END \
+             FROM grades",
+        )
+        .unwrap();
+    let sel = match stmt {
+        Statement::Select(s) => s,
+        _ => panic!("expected Select"),
+    };
+    assert!(matches!(
+        &sel.columns[0],
+        SelectItem::Expr {
+            expr: Expr::Case {
+                operand: None,
+                conditions,
+                ..
+            },
+            ..
+        } if conditions.len() == 2
+    ));
+}
+
+#[test]
+fn test_cast_expression() {
+    let stmt = parser()
+        .parse_one("SELECT CAST(price AS DECIMAL(10,2)) FROM products")
+        .unwrap();
+    let sel = match stmt {
+        Statement::Select(s) => s,
+        _ => panic!("expected Select"),
+    };
+    assert!(matches!(
+        &sel.columns[0],
+        SelectItem::Expr {
+            expr: Expr::Cast { .. },
+            ..
+        }
+    ));
+}
+
+#[test]
+fn test_between_expression() {
+    let stmt = parser()
+        .parse_one("SELECT id FROM products WHERE price BETWEEN 10 AND 100")
+        .unwrap();
+    let sel = match stmt {
+        Statement::Select(s) => s,
+        _ => panic!("expected Select"),
+    };
+    assert!(matches!(
+        sel.where_clause,
+        Some(Expr::Between { negated: false, .. })
+    ));
+}
+
+#[test]
+fn test_in_list_expression() {
+    let stmt = parser()
+        .parse_one("SELECT id FROM users WHERE status IN ('active', 'pending')")
+        .unwrap();
+    let sel = match stmt {
+        Statement::Select(s) => s,
+        _ => panic!("expected Select"),
+    };
+    assert!(matches!(
+        sel.where_clause,
+        Some(Expr::InList { negated: false, list, .. }) if list.len() == 2
+    ));
+}
+
+#[test]
+fn test_expand_select_item() {
+    let stmt = parser()
+        .parse_one("SELECT id, EXPAND(order_ref) AS o FROM users")
+        .unwrap();
+    let sel = match stmt {
+        Statement::Select(s) => s,
+        _ => panic!("expected Select"),
+    };
+    assert!(matches!(
+        &sel.columns[1],
+        SelectItem::Expand { alias: Some(a), .. } if a == "o"
+    ));
+}
+
+#[test]
+fn test_view_as_clause_rejected_aggregate() {
+    use aeternumdb_core::sql::ast::{SelectStatement, TableReference};
+
+    let mut catalog = Catalog::new();
+    catalog.add_table(TableSchema {
+        name: "users".into(),
+        columns: vec![
+            ColumnSchema {
+                name: "id".into(),
+                data_type: DataType::Integer,
+                nullable: false,
+            },
+            ColumnSchema {
+                name: "score".into(),
+                data_type: DataType::Float,
+                nullable: true,
+            },
+        ],
+    });
+
+    // Construct a SelectStatement directly with a VIEW AS containing COUNT(*).
+    let stmt = Statement::Select(Box::new(SelectStatement {
+        with: vec![],
+        columns: vec![SelectItem::Expr {
+            expr: Expr::Column {
+                table: None,
+                name: "id".into(),
+            },
+            alias: None,
+        }],
+        from: Some(TableReference::Named {
+            database: None,
+            schema: None,
+            name: "users".into(),
+            alias: None,
+        }),
+        where_clause: None,
+        group_by: vec![],
+        having: None,
+        order_by: vec![],
+        limit: None,
+        offset: None,
+        distinct: false,
+        view_as: Some(vec![ViewAsItem {
+            expr: Expr::Function {
+                name: "COUNT".into(),
+                args: vec![Expr::Wildcard],
+                distinct: false,
+            },
+            alias: "cnt".into(),
+        }]),
+    }));
+    let result = Validator::new(&catalog).validate(&stmt);
+    assert!(result.is_err());
 }

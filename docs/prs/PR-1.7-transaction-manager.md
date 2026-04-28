@@ -752,6 +752,24 @@ petgraph = "0.6"  # For deadlock detection graph
 - Savepoints → Phase 5
 - Prepared transactions → Phase 5
 
+## 🔄 Deferred AeternumDB Extensions
+
+The following AeternumDB extensions from earlier PRs (primarily PR 1.3) interact
+with the transaction manager and must be implemented here or in a later PR:
+
+### `FOR SYSTEM_TIME AS OF` queries
+
+Temporal / time-travel queries require the transaction manager to expose committed
+version history so the executor can reconstruct row state at an arbitrary past
+timestamp.  This requires extending the MVCC read-view to accept an explicit
+snapshot timestamp rather than always using the current timestamp.
+
+### Versioned table row history
+
+`CreateTableStatement::versioned = true` indicates the table retains full row
+history.  The version chain must **never** be garbage-collected for versioned
+tables; old versions must remain accessible for `FOR SYSTEM_TIME AS OF` reads.
+
 ## 🏁 Definition of Done
 
 This PR is complete when:

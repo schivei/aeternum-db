@@ -146,20 +146,18 @@ implementation is based on **SQL-92** with a subset of common SQL extensions.
 |-----------------------|----------------------------------------|
 | `BOOLEAN` / `BOOL`    | `TRUE` / `FALSE`                       |
 | `UUID` / `GUID`       | 128-bit universally-unique identifier  |
-| `ENUM('a', 'b', ...)` | Inline anonymous enumeration (see below) |
 
 ### Enumeration Types
 
-AeternumDB supports two forms of enum:
-
-#### Inline (Anonymous) Enum
-
-Declared directly on the column.  The system automatically assigns sequential
-integer values (`0, 1, 2, …`):
+AeternumDB supports named enumeration types created with `CREATE ENUM`.
+Inline anonymous `ENUM('a','b',...)` syntax is **not supported** — declare a
+named enum instead:
 
 ```sql
+CREATE ENUM order_status ('pending', 'shipped', 'delivered', 'cancelled');
+-- Then reference it by name:
 CREATE TABLE orders (
-  status ENUM('pending', 'shipped', 'delivered', 'cancelled')
+  status order_status
 );
 ```
 
@@ -170,10 +168,8 @@ combinations can be stored via bitwise OR.  A `NONE` variant (value `0`) is
 automatically added if not explicitly listed:
 
 ```sql
-CREATE TABLE files (
-  permissions ENUM FLAG ('read', 'write', 'admin')
-  -- NONE = 0, read = 1, write = 2, admin = 4
-);
+CREATE ENUM FLAG permissions (NONE, 'read', 'write', 'admin');
+-- NONE = 0, read = 1, write = 2, admin = 4
 ```
 
 Bitwise operators (`&`, `|`, `^`) work naturally with FLAG columns:
@@ -184,9 +180,9 @@ SELECT * FROM files WHERE permissions & 3 = 3;  -- has both read and write
 
 #### Named Enum (`CREATE ENUM`)
 
-Named enums are **reusable catalog objects** created with `CREATE ENUM` and
-referenced via the column type name.  They are protected from deletion while
-any column references them.  See [CREATE ENUM](#create-enum) below.
+Named enums are **reusable catalog objects** referenced via the column type name.
+They are protected from deletion while any column references them.
+See [CREATE ENUM](#create-enum) below.
 
 ```sql
 CREATE ENUM FLAG permissions (NONE, 'read', 'write', 'admin');
@@ -1499,7 +1495,7 @@ INSERT INTO articles (title@'en', title@'pt-BR') VALUES ('Hello', 'Olá');
 
 A **terms directive** attaches a named, strictly-typed metadata slot to each
 cell value without adding extra rows.  Possible kinds are `TEXT`, `INTEGER`,
-`FLOAT`, `BOOLEAN`, and `ENUM(...)`.
+`FLOAT`, `BOOLEAN`, and an enum type name.
 
 ```sql
 CREATE TABLE prices (

@@ -72,16 +72,16 @@ with suggestion to use a `CHECK` constraint.
 
 #### Other
 `BOOLEAN`/`BOOL`, `DATE`, `DATETIME`, `TIMESTAMP [WITH TIME ZONE]`,
-`TIME [WITH TIME ZONE]`, `UUID`, `ENUM('a','b',...)`.
+`TIME [WITH TIME ZONE]`, `UUID`.
 
 #### AeternumDB Extensions
 - **Reference types**: `table_name` (single ref), `[table_name]` (array ref),
   `~table_name(col)` (virtual ref), `~[table_name](col)` (virtual array ref).
   Resolved via `objid` at execution time — no `FOREIGN KEY` constraints.
 - **Vector types**: `ARRAY<T>` / `T[]` → `DataType::Vector(Box<DataType>)`.
-- **FLAG Enum** (AST scaffolding): `DataType::Enum { variants: Vec<EnumVariant>, flag: bool }`.
-  Each variant has `name`, `value: Option<u64>`, `is_none: bool`.
-  Execution-layer bitmask semantics is a future phase.
+- **Named enum refs**: `DataType::EnumRef(name)` references a named `ENUM` type
+  created via `CREATE ENUM`.  Inline anonymous `ENUM('a','b',...)` syntax is not
+  supported; use `CREATE ENUM … (variant, …)` instead.
 
 ### DML Statements
 | Statement | Notes |
@@ -353,8 +353,8 @@ clause.  Specifying referential actions on a non-reference column returns
 | `CREATE ENUM` / `DROP ENUM` catalog storage | PR 1.6 |
 | `EnumRef` type resolution at runtime | PR 1.6 |
 | FLAG enum bitmask storage, bitwise operator evaluation | PR 1.9 |
-| `FILTER BY` keyword in SQL grammar | Phase 4 |
-| `CREATE FLAT TABLE` keyword in SQL grammar | Phase 4 |
-| `FOR SYSTEM_TIME AS OF` historical queries | Phase 5 |
-| GRANT/REVOKE enforcement | Phase 6 |
-| Cluster-wide objid generation | Phase 3 |
+| `FOR SYSTEM_TIME AS OF` historical queries | PR 1.7 |
+| `FILTER BY` keyword in native SQL grammar | Phase 4 (post-1.x) |
+| `CREATE FLAT TABLE` keyword in native SQL grammar | Phase 4 (post-1.x) |
+| GRANT/REVOKE enforcement | PR 1.6 |
+| Cluster-wide objid generation | Phase 3 (Distribution) |
