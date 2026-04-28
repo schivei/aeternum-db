@@ -824,14 +824,14 @@ mod tests {
         let stmt = parse_select("SELECT age, COUNT(*) FROM users GROUP BY age");
         let plan = builder(&catalog).build_select(&stmt).unwrap();
         // Correct order: Project(Aggregate(Scan)). Root is Project, child is Aggregate.
-        let contains_aggregate = |p: &LogicalPlan| -> bool {
-            matches!(p, LogicalPlan::Aggregate { .. })
-                || matches!(p, LogicalPlan::Project { input, .. }
-                    if matches!(input.as_ref(), LogicalPlan::Aggregate { .. }))
+        // Walk one level to find the aggregate.
+        let inner = match &plan {
+            LogicalPlan::Project { input, .. } => input.as_ref(),
+            other => other,
         };
         assert!(
-            contains_aggregate(&plan),
-            "expected Aggregate in plan, got: {:?}",
+            matches!(inner, LogicalPlan::Aggregate { .. }),
+            "expected Aggregate below optional Project, got: {:?}",
             plan
         );
     }

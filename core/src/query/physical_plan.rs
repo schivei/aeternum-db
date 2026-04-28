@@ -657,9 +657,23 @@ fn reassemble_condition(
     residual: Option<Expr>,
 ) -> Option<Expr> {
     use crate::sql::ast::BinaryOperator;
+    debug_assert_eq!(
+        lk.len(),
+        rk.len(),
+        "equi-key left/right vectors must have equal length"
+    );
     if lk.is_empty() {
-        // No equi-keys were extracted; use original condition directly.
-        return original.cloned().or(residual);
+        // No equi-keys were extracted; combine original condition with any
+        // residual (should normally be the same value, but guard anyway).
+        return match (original.cloned(), residual) {
+            (None, r) => r,
+            (o, None) => o,
+            (Some(o), Some(r)) => Some(Expr::BinaryOp {
+                left: Box::new(o),
+                op: BinaryOperator::And,
+                right: Box::new(r),
+            }),
+        };
     }
     let equi = lk.into_iter().zip(rk).fold(None::<Expr>, |acc, (l, r)| {
         let eq = Expr::BinaryOp {
