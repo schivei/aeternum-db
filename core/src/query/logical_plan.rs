@@ -669,13 +669,27 @@ fn collect_databases(tr: &TableReference, out: &mut HashSet<String>) {
 
 // ── FLAT table enforcement ────────────────────────────────────────────────────
 
+fn find_underlying_scan_table(plan: &LogicalPlan) -> Option<&str> {
+    match plan {
+        LogicalPlan::Scan { table, .. } => Some(table.as_str()),
+        LogicalPlan::Filter { input, .. }
+        | LogicalPlan::Project { input, .. }
+        | LogicalPlan::Aggregate { input, .. }
+        | LogicalPlan::Sort { input, .. }
+        | LogicalPlan::Limit { input, .. }
+        | LogicalPlan::Unnest { input, .. }
+        | LogicalPlan::ViewAs { input, .. } => find_underlying_scan_table(input),
+        _ => None,
+    }
+}
+
 fn reject_flat_in_join(
     plan: &LogicalPlan,
     flat_tables: &HashSet<String>,
 ) -> Result<(), PlannerError> {
-    if let LogicalPlan::Scan { table, .. } = plan {
+    if let Some(table) = find_underlying_scan_table(plan) {
         if flat_tables.contains(table) {
-            return Err(PlannerError::FlatTableJoin(table.clone()));
+            return Err(PlannerError::FlatTableJoin(table.to_string()));
         }
     }
     Ok(())
