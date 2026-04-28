@@ -1626,40 +1626,7 @@ impl TryFrom<sp::Statement> for Statement {
             sp::Statement::AlterTable(alt) => convert_alter_table(alt),
             sp::Statement::Grant(grant) => convert_grant(grant),
             sp::Statement::Revoke(revoke) => convert_revoke(revoke),
-            sp::Statement::StartTransaction { modes, .. } => {
-                let isolation_level = modes.iter().find_map(|m| {
-                    if let sp::TransactionMode::IsolationLevel(lvl) = m {
-                        Some(match lvl {
-                            sp::TransactionIsolationLevel::ReadUncommitted => {
-                                IsolationLevel::ReadUncommitted
-                            }
-                            sp::TransactionIsolationLevel::ReadCommitted => {
-                                IsolationLevel::ReadCommitted
-                            }
-                            sp::TransactionIsolationLevel::RepeatableRead => {
-                                IsolationLevel::RepeatableRead
-                            }
-                            sp::TransactionIsolationLevel::Serializable
-                            | sp::TransactionIsolationLevel::Snapshot => {
-                                IsolationLevel::Serializable
-                            }
-                        })
-                    } else {
-                        None
-                    }
-                });
-                let read_only = modes.iter().any(|m| {
-                    matches!(
-                        m,
-                        sp::TransactionMode::AccessMode(sp::TransactionAccessMode::ReadOnly)
-                    )
-                });
-                Ok(Statement::BeginTransaction(BeginTransactionStatement {
-                    name: None, // named BEGIN requires AeternumDB custom grammar (Phase 4)
-                    isolation_level,
-                    read_only,
-                }))
-            }
+            sp::Statement::StartTransaction { modes, .. } => convert_start_transaction(modes),
             sp::Statement::Commit { chain, .. } => Ok(Statement::Commit(CommitStatement {
                 scope: CommitScope::Current,
                 chain,
@@ -1679,46 +1646,7 @@ impl TryFrom<sp::Statement> for Statement {
                     name: ident_to_string(&name),
                 }))
             }
-            sp::Statement::CreateIndex(ci) => {
-                let name = ci.name.as_ref().map(object_name_to_string);
-                let table = object_name_to_string(&ci.table_name);
-                let columns = ci
-                    .columns
-                    .into_iter()
-                    .map(|c| IndexColumn {
-                        name: match &c.column.expr {
-                            sp::Expr::Identifier(ident) => ident.value.clone(),
-                            other => other.to_string(),
-                        },
-                        ascending: c.column.options.asc,
-                    })
-                    .collect();
-                Ok(Statement::CreateIndex(CreateIndexStatement {
-                    name,
-                    table,
-                    columns,
-                    unique: ci.unique,
-                    if_not_exists: ci.if_not_exists,
-                    index_type: match ci.using {
-                        Some(sp::IndexType::BTree) => IndexType::BTree,
-                        Some(sp::IndexType::Hash) => IndexType::Hash,
-                        Some(sp::IndexType::GIN) => IndexType::Gin,
-                        Some(sp::IndexType::GiST) => IndexType::Gist,
-                        Some(sp::IndexType::SPGiST) => IndexType::SpGist,
-                        Some(sp::IndexType::BRIN) => IndexType::Brin,
-                        Some(sp::IndexType::Bloom) => IndexType::Bloom,
-                        Some(sp::IndexType::Custom(ident)) => {
-                            let name_lc = ident.value.to_lowercase();
-                            match name_lc.as_str() {
-                                "fulltext" | "full_text" => IndexType::FullText,
-                                "trigram" | "gin_trgm" | "gist_trgm" => IndexType::Trigram,
-                                _ => IndexType::Other(ident.value.clone()),
-                            }
-                        }
-                        None => IndexType::BTree,
-                    },
-                }))
-            }
+            sp::Statement::CreateIndex(ci) => convert_create_index(ci),
             sp::Statement::CreateUser(cu) => Ok(Statement::CreateUser(CreateUserStatement {
                 name: cu.name.value.clone(),
                 password: None,
@@ -1727,55 +1655,7 @@ impl TryFrom<sp::Statement> for Statement {
             sp::Statement::CreateType {
                 name,
                 representation,
-            } => {
-                let type_name = object_name_to_string(&name);
-                match representation {
-                    // `CREATE TYPE name AS ENUM ('a', 'b', 'c')` →
-                    // mapped to `CreateEnum` (the canonical AeternumDB form).
-                    // Users specify names only; system assigns numeric values.
-                    Some(sp::UserDefinedTypeRepresentation::Enum { labels }) => {
-                        let variants = labels
-                            .into_iter()
-                            .map(|lbl| {
-                                let n = lbl.value.to_lowercase();
-                                EnumVariant {
-                                    is_none: n == "none",
-                                    name: n,
-                                }
-                            })
-                            .collect();
-                        Ok(Statement::CreateEnum(CreateEnumStatement {
-                            name: type_name,
-                            flag: false,
-                            variants,
-                            if_not_exists: false,
-                        }))
-                    }
-                    // `CREATE TYPE name AS (field type, …)` → composite type.
-                    Some(sp::UserDefinedTypeRepresentation::Composite { attributes }) => {
-                        let fields = attributes
-                            .into_iter()
-                            .map(|attr| {
-                                let dt = convert_data_type(attr.data_type)?;
-                                Ok(CompositeField {
-                                    name: attr.name.value.to_lowercase(),
-                                    data_type: dt,
-                                    not_null: false,
-                                })
-                            })
-                            .collect::<Result<Vec<_>, AstError>>()?;
-                        Ok(Statement::CreateType(CreateTypeStatement {
-                            name: type_name,
-                            definition: TypeDefinition::Composite(fields),
-                        }))
-                    }
-                    // Other representations (Range, etc.) — scaffold as empty composite.
-                    _ => Ok(Statement::CreateType(CreateTypeStatement {
-                        name: type_name,
-                        definition: TypeDefinition::Composite(vec![]),
-                    })),
-                }
-            }
+            } => convert_create_type(name, representation),
             sp::Statement::CreateDatabase {
                 db_name,
                 if_not_exists,
@@ -1788,45 +1668,8 @@ impl TryFrom<sp::Statement> for Statement {
                 schema_name,
                 if_not_exists,
                 ..
-            } => {
-                let (database, name) = match schema_name {
-                    sp::SchemaName::Simple(n) => {
-                        let full = object_name_to_string(&n);
-                        let mut parts = full.splitn(2, '.').collect::<Vec<_>>();
-                        if parts.len() == 2 {
-                            (Some(parts[0].to_string()), parts[1].to_string())
-                        } else {
-                            (None, parts.remove(0).to_string())
-                        }
-                    }
-                    sp::SchemaName::UnnamedAuthorization(_)
-                    | sp::SchemaName::NamedAuthorization(_, _) => {
-                        return Err(AstError::Unsupported(
-                            "AUTHORIZATION form of CREATE SCHEMA is not supported".to_string(),
-                        ))
-                    }
-                };
-                Ok(Statement::CreateSchema(CreateSchemaStatement {
-                    database,
-                    name,
-                    if_not_exists,
-                }))
-            }
-            sp::Statement::Use(use_expr) => {
-                let name = match use_expr {
-                    sp::Use::Database(n)
-                    | sp::Use::Schema(n)
-                    | sp::Use::Catalog(n)
-                    | sp::Use::Object(n) => object_name_to_string(&n),
-                    sp::Use::Default => "default".to_string(),
-                    other => {
-                        return Err(AstError::Unsupported(format!(
-                            "USE variant not supported: {other}"
-                        )))
-                    }
-                };
-                Ok(Statement::UseDatabase(UseDatabaseStatement { name }))
-            }
+            } => convert_create_schema(schema_name, if_not_exists),
+            sp::Statement::Use(use_expr) => convert_use(use_expr),
             other => Err(AstError::Unsupported(format!(
                 "statement type not supported: {other}"
             ))),
@@ -1876,6 +1719,176 @@ fn parse_qualified_name(name: &sp::ObjectName) -> (Option<String>, Option<String
         2 => (None, Some(parts[0].clone()), parts[1].clone()),
         _ => (None, None, parts.into_iter().last().unwrap_or_default()),
     }
+}
+
+fn convert_start_transaction(modes: Vec<sp::TransactionMode>) -> Result<Statement, AstError> {
+    let isolation_level = modes.iter().find_map(|m| {
+        if let sp::TransactionMode::IsolationLevel(lvl) = m {
+            Some(convert_isolation_level(lvl))
+        } else {
+            None
+        }
+    });
+    let read_only = modes.iter().any(|m| {
+        matches!(
+            m,
+            sp::TransactionMode::AccessMode(sp::TransactionAccessMode::ReadOnly)
+        )
+    });
+    Ok(Statement::BeginTransaction(BeginTransactionStatement {
+        name: None, // named BEGIN requires AeternumDB custom grammar (Phase 4)
+        isolation_level,
+        read_only,
+    }))
+}
+
+fn convert_isolation_level(lvl: &sp::TransactionIsolationLevel) -> IsolationLevel {
+    match lvl {
+        sp::TransactionIsolationLevel::ReadUncommitted => IsolationLevel::ReadUncommitted,
+        sp::TransactionIsolationLevel::ReadCommitted => IsolationLevel::ReadCommitted,
+        sp::TransactionIsolationLevel::RepeatableRead => IsolationLevel::RepeatableRead,
+        sp::TransactionIsolationLevel::Serializable | sp::TransactionIsolationLevel::Snapshot => {
+            IsolationLevel::Serializable
+        }
+    }
+}
+
+fn convert_create_index(ci: sp::CreateIndex) -> Result<Statement, AstError> {
+    let name = ci.name.as_ref().map(object_name_to_string);
+    let table = object_name_to_string(&ci.table_name);
+    let columns = ci
+        .columns
+        .into_iter()
+        .map(|c| IndexColumn {
+            name: match &c.column.expr {
+                sp::Expr::Identifier(ident) => ident.value.clone(),
+                other => other.to_string(),
+            },
+            ascending: c.column.options.asc,
+        })
+        .collect();
+    Ok(Statement::CreateIndex(CreateIndexStatement {
+        name,
+        table,
+        columns,
+        unique: ci.unique,
+        if_not_exists: ci.if_not_exists,
+        index_type: convert_index_type(ci.using),
+    }))
+}
+
+fn convert_index_type(using: Option<sp::IndexType>) -> IndexType {
+    match using {
+        Some(sp::IndexType::BTree) => IndexType::BTree,
+        Some(sp::IndexType::Hash) => IndexType::Hash,
+        Some(sp::IndexType::GIN) => IndexType::Gin,
+        Some(sp::IndexType::GiST) => IndexType::Gist,
+        Some(sp::IndexType::SPGiST) => IndexType::SpGist,
+        Some(sp::IndexType::BRIN) => IndexType::Brin,
+        Some(sp::IndexType::Bloom) => IndexType::Bloom,
+        Some(sp::IndexType::Custom(ident)) => {
+            let name_lc = ident.value.to_lowercase();
+            match name_lc.as_str() {
+                "fulltext" | "full_text" => IndexType::FullText,
+                "trigram" | "gin_trgm" | "gist_trgm" => IndexType::Trigram,
+                _ => IndexType::Other(ident.value.clone()),
+            }
+        }
+        None => IndexType::BTree,
+    }
+}
+
+fn convert_create_type(
+    name: sp::ObjectName,
+    representation: Option<sp::UserDefinedTypeRepresentation>,
+) -> Result<Statement, AstError> {
+    let type_name = object_name_to_string(&name);
+    match representation {
+        // `CREATE TYPE name AS ENUM ('a', 'b', 'c')` → canonical AeternumDB CreateEnum.
+        Some(sp::UserDefinedTypeRepresentation::Enum { labels }) => {
+            let variants = labels
+                .into_iter()
+                .map(|lbl| {
+                    let n = lbl.value.to_lowercase();
+                    EnumVariant {
+                        is_none: n == "none",
+                        name: n,
+                    }
+                })
+                .collect();
+            Ok(Statement::CreateEnum(CreateEnumStatement {
+                name: type_name,
+                flag: false,
+                variants,
+                if_not_exists: false,
+            }))
+        }
+        // `CREATE TYPE name AS (field type, …)` → composite type.
+        Some(sp::UserDefinedTypeRepresentation::Composite { attributes }) => {
+            let fields = attributes
+                .into_iter()
+                .map(|attr| {
+                    let dt = convert_data_type(attr.data_type)?;
+                    Ok(CompositeField {
+                        name: attr.name.value.to_lowercase(),
+                        data_type: dt,
+                        not_null: false,
+                    })
+                })
+                .collect::<Result<Vec<_>, AstError>>()?;
+            Ok(Statement::CreateType(CreateTypeStatement {
+                name: type_name,
+                definition: TypeDefinition::Composite(fields),
+            }))
+        }
+        // Other representations (Range, etc.) — scaffold as empty composite.
+        _ => Ok(Statement::CreateType(CreateTypeStatement {
+            name: type_name,
+            definition: TypeDefinition::Composite(vec![]),
+        })),
+    }
+}
+
+fn convert_create_schema(
+    schema_name: sp::SchemaName,
+    if_not_exists: bool,
+) -> Result<Statement, AstError> {
+    let (database, name) = match schema_name {
+        sp::SchemaName::Simple(n) => {
+            let full = object_name_to_string(&n);
+            let mut parts = full.splitn(2, '.').collect::<Vec<_>>();
+            if parts.len() == 2 {
+                (Some(parts[0].to_string()), parts[1].to_string())
+            } else {
+                (None, parts.remove(0).to_string())
+            }
+        }
+        sp::SchemaName::UnnamedAuthorization(_) | sp::SchemaName::NamedAuthorization(_, _) => {
+            return Err(AstError::Unsupported(
+                "AUTHORIZATION form of CREATE SCHEMA is not supported".to_string(),
+            ))
+        }
+    };
+    Ok(Statement::CreateSchema(CreateSchemaStatement {
+        database,
+        name,
+        if_not_exists,
+    }))
+}
+
+fn convert_use(use_expr: sp::Use) -> Result<Statement, AstError> {
+    let name = match use_expr {
+        sp::Use::Database(n) | sp::Use::Schema(n) | sp::Use::Catalog(n) | sp::Use::Object(n) => {
+            object_name_to_string(&n)
+        }
+        sp::Use::Default => "default".to_string(),
+        other => {
+            return Err(AstError::Unsupported(format!(
+                "USE variant not supported: {other}"
+            )))
+        }
+    };
+    Ok(Statement::UseDatabase(UseDatabaseStatement { name }))
 }
 
 // ── SELECT conversion ──────────────────────────────────────────────────────────
@@ -2064,26 +2077,27 @@ fn convert_select_item(item: sp::SelectItem) -> Result<SelectItem, AstError> {
 /// Checks whether `expr` is a call to `EXPAND(single_arg)` and, if so,
 /// returns the corresponding [`SelectItem::Expand`] node.
 fn try_expand_function(expr: &sp::Expr, alias: Option<String>) -> Option<SelectItem> {
-    if let sp::Expr::Function(f) = expr {
-        let name = object_name_to_string(&f.name).to_uppercase();
-        if name == "EXPAND" {
-            if let sp::FunctionArguments::List(ref list) = f.args {
-                if list.args.len() == 1 {
-                    if let sp::FunctionArg::Unnamed(sp::FunctionArgExpr::Expr(inner)) =
-                        list.args[0].clone()
-                    {
-                        if let Ok(inner_expr) = convert_expr(inner) {
-                            return Some(SelectItem::Expand {
-                                expr: Box::new(inner_expr),
-                                alias,
-                            });
-                        }
-                    }
-                }
-            }
-        }
+    let f = match expr {
+        sp::Expr::Function(f) => f,
+        _ => return None,
+    };
+    if !object_name_to_string(&f.name).eq_ignore_ascii_case("expand") {
+        return None;
     }
-    None
+    let list = match &f.args {
+        sp::FunctionArguments::List(l) if l.args.len() == 1 => l,
+        _ => return None,
+    };
+    let inner = match list.args[0].clone() {
+        sp::FunctionArg::Unnamed(sp::FunctionArgExpr::Expr(e)) => e,
+        _ => return None,
+    };
+    convert_expr(inner)
+        .ok()
+        .map(|inner_expr| SelectItem::Expand {
+            expr: Box::new(inner_expr),
+            alias,
+        })
 }
 
 fn convert_table_with_joins(twj: sp::TableWithJoins) -> Result<TableReference, AstError> {
@@ -2268,65 +2282,43 @@ pub fn convert_expr(expr: sp::Expr) -> Result<Expr, AstError> {
             negated,
             pattern,
             ..
-        } => Ok(Expr::BinaryOp {
-            left: Box::new(convert_expr(*expr)?),
-            op: if negated {
-                BinaryOperator::NotLike
-            } else {
-                BinaryOperator::Like
-            },
-            right: Box::new(convert_expr(*pattern)?),
-        }),
+        } => convert_negated_pattern_op(
+            *expr,
+            negated,
+            *pattern,
+            BinaryOperator::Like,
+            BinaryOperator::NotLike,
+        ),
         sp::Expr::Case {
             operand,
             conditions,
             else_result,
             ..
-        } => {
-            let ops = operand.map(|o| convert_expr(*o)).transpose()?;
-            let conds = conditions
-                .into_iter()
-                .map(|c| {
-                    let cond = convert_expr(c.condition)?;
-                    let result = convert_expr(c.result)?;
-                    Ok((cond, result))
-                })
-                .collect::<Result<Vec<_>, AstError>>()?;
-            let els = else_result.map(|e| convert_expr(*e)).transpose()?;
-            Ok(Expr::Case {
-                operand: ops.map(Box::new),
-                conditions: conds,
-                else_result: els.map(Box::new),
-            })
-        }
+        } => convert_case_expr(operand, conditions, else_result),
         sp::Expr::ILike {
             expr,
             negated,
             pattern,
             ..
-        } => Ok(Expr::BinaryOp {
-            left: Box::new(convert_expr(*expr)?),
-            op: if negated {
-                BinaryOperator::NotILike
-            } else {
-                BinaryOperator::ILike
-            },
-            right: Box::new(convert_expr(*pattern)?),
-        }),
+        } => convert_negated_pattern_op(
+            *expr,
+            negated,
+            *pattern,
+            BinaryOperator::ILike,
+            BinaryOperator::NotILike,
+        ),
         sp::Expr::SimilarTo {
             expr,
             negated,
             pattern,
             ..
-        } => Ok(Expr::BinaryOp {
-            left: Box::new(convert_expr(*expr)?),
-            op: if negated {
-                BinaryOperator::NotSimilarTo
-            } else {
-                BinaryOperator::SimilarTo
-            },
-            right: Box::new(convert_expr(*pattern)?),
-        }),
+        } => convert_negated_pattern_op(
+            *expr,
+            negated,
+            *pattern,
+            BinaryOperator::SimilarTo,
+            BinaryOperator::NotSimilarTo,
+        ),
         sp::Expr::AnyOp {
             left,
             compare_op,
@@ -2389,30 +2381,75 @@ pub fn convert_expr(expr: sp::Expr) -> Result<Expr, AstError> {
             columns,
             match_value,
             opt_search_modifier,
-        } => {
-            let cols = columns
-                .into_iter()
-                .map(|c| object_name_to_string(&c))
-                .collect();
-            let pattern = convert_value(match_value)?;
-            let modifier = opt_search_modifier.map(|m| match m {
-                sp::SearchModifier::InNaturalLanguageMode => TextSearchModifier::NaturalLanguage,
-                sp::SearchModifier::InNaturalLanguageModeWithQueryExpansion => {
-                    TextSearchModifier::NaturalLanguageWithExpansion
-                }
-                sp::SearchModifier::InBooleanMode => TextSearchModifier::Boolean,
-                sp::SearchModifier::WithQueryExpansion => TextSearchModifier::WithExpansion,
-            });
-            Ok(Expr::MatchAgainst {
-                columns: cols,
-                match_value: Box::new(Expr::Literal(pattern)),
-                modifier,
-            })
-        }
+        } => convert_match_against(columns, match_value, opt_search_modifier),
         other => Err(AstError::Unsupported(format!(
             "expression not supported: {other}"
         ))),
     }
+}
+
+/// Convert a negatable pattern-match expression (`LIKE`, `ILIKE`, `SIMILAR TO`).
+fn convert_negated_pattern_op(
+    expr: sp::Expr,
+    negated: bool,
+    pattern: sp::Expr,
+    op_pos: BinaryOperator,
+    op_neg: BinaryOperator,
+) -> Result<Expr, AstError> {
+    Ok(Expr::BinaryOp {
+        left: Box::new(convert_expr(expr)?),
+        op: if negated { op_neg } else { op_pos },
+        right: Box::new(convert_expr(pattern)?),
+    })
+}
+
+/// Convert a `CASE … WHEN … THEN … [ELSE …] END` expression.
+fn convert_case_expr(
+    operand: Option<Box<sp::Expr>>,
+    conditions: Vec<sp::CaseWhen>,
+    else_result: Option<Box<sp::Expr>>,
+) -> Result<Expr, AstError> {
+    let ops = operand.map(|o| convert_expr(*o)).transpose()?;
+    let conds = conditions
+        .into_iter()
+        .map(|c| {
+            let cond = convert_expr(c.condition)?;
+            let result = convert_expr(c.result)?;
+            Ok((cond, result))
+        })
+        .collect::<Result<Vec<_>, AstError>>()?;
+    let els = else_result.map(|e| convert_expr(*e)).transpose()?;
+    Ok(Expr::Case {
+        operand: ops.map(Box::new),
+        conditions: conds,
+        else_result: els.map(Box::new),
+    })
+}
+
+/// Convert a `MATCH (cols) AGAINST (value [modifier])` expression.
+fn convert_match_against(
+    columns: Vec<sp::ObjectName>,
+    match_value: sp::Value,
+    opt_search_modifier: Option<sp::SearchModifier>,
+) -> Result<Expr, AstError> {
+    let cols = columns
+        .into_iter()
+        .map(|c| object_name_to_string(&c))
+        .collect();
+    let pattern = convert_value(match_value)?;
+    let modifier = opt_search_modifier.map(|m| match m {
+        sp::SearchModifier::InNaturalLanguageMode => TextSearchModifier::NaturalLanguage,
+        sp::SearchModifier::InNaturalLanguageModeWithQueryExpansion => {
+            TextSearchModifier::NaturalLanguageWithExpansion
+        }
+        sp::SearchModifier::InBooleanMode => TextSearchModifier::Boolean,
+        sp::SearchModifier::WithQueryExpansion => TextSearchModifier::WithExpansion,
+    });
+    Ok(Expr::MatchAgainst {
+        columns: cols,
+        match_value: Box::new(Expr::Literal(pattern)),
+        modifier,
+    })
 }
 
 fn convert_value(val: sp::Value) -> Result<Value, AstError> {
