@@ -302,16 +302,22 @@ fn push_projection_project(input: LogicalPlan, items: Vec<ProjectionItem>) -> Lo
             filter,
             ..
         } => {
-            let columns = extract_column_names(&items);
+            let columns = if filter.is_some() {
+                None
+            } else {
+                let columns = extract_column_names(&items);
+                if columns.is_empty() {
+                    None
+                } else {
+                    Some(columns)
+                }
+            };
+
             LogicalPlan::Project {
                 input: Box::new(LogicalPlan::Scan {
                     table,
                     alias,
-                    columns: if columns.is_empty() {
-                        None
-                    } else {
-                        Some(columns)
-                    },
+                    columns,
                     filter,
                 }),
                 items,
