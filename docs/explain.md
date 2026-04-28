@@ -18,6 +18,7 @@ use aeternumdb_core::sql::parser::SqlParser;
 let planner = QueryPlanner::new();
 let parser  = SqlParser::new();
 let stmt    = parser.parse_one("SELECT id FROM users WHERE age > 18").unwrap();
+let ctx     = PlannerContext::default();
 
 let physical = planner.plan(&stmt, &ctx).unwrap();
 println!("{}", planner.explain(&physical));
