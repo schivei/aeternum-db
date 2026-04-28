@@ -42,7 +42,7 @@ use crate::sql::ast::{
     AlterTableOperation, AlterTableStatement, BeginTransactionStatement, ColumnDef, CommitScope,
     CommitStatement, CreateTableStatement, DataType, DeleteStatement, EnumVariant, Expr,
     InsertStatement, RollbackScope, RollbackStatement, SelectItem, SelectStatement, Statement,
-    UpdateStatement,
+    UpdateStatement, ViewAsItem,
 };
 
 // ── Catalog ───────────────────────────────────────────────────────────────────
@@ -245,6 +245,17 @@ pub enum ValidationError {
         /// and must be resolved first.
         blocking: String,
     },
+
+    // ── VIEW AS restriction errors ─────────────────────────────────────────
+    /// An aggregate function was used inside a `VIEW AS` clause.
+    ///
+    /// `VIEW AS` only allows primitive expressions — no `COUNT`, `SUM`, etc.
+    ViewAsAggregateNotAllowed(String),
+    /// A sub-select was used inside a `VIEW AS` clause.
+    ///
+    /// `VIEW AS` only allows primitive expressions — scalar sub-selects are
+    /// not permitted.
+    ViewAsSubqueryNotAllowed,
 }
 
 impl std::fmt::Display for ValidationError {
@@ -304,6 +315,16 @@ impl std::fmt::Display for ValidationError {
                 f,
                 "cannot commit or rollback transaction '{target}': \
                  nested transaction '{blocking}' is still open and must be resolved first"
+            ),
+            ValidationError::ViewAsAggregateNotAllowed(func) => write!(
+                f,
+                "aggregate function '{func}' is not allowed in a VIEW AS clause; \
+                 VIEW AS only supports primitive expressions"
+            ),
+            ValidationError::ViewAsSubqueryNotAllowed => write!(
+                f,
+                "sub-selects are not allowed in a VIEW AS clause; \
+                 VIEW AS only supports primitive expressions"
             ),
         }
     }
@@ -590,6 +611,10 @@ impl<'a> Validator<'a> {
                 SelectItem::Expr { expr, .. } => {
                     self.validate_select_expr(expr, table_name, &aliases)?;
                 }
+                SelectItem::Expand { expr, .. } => {
+                    // EXPAND must reference a column; validate the inner expr
+                    self.validate_select_expr(expr, table_name, &aliases)?;
+                }
             }
         }
 
@@ -614,7 +639,200 @@ impl<'a> Validator<'a> {
             self.validate_select_expr(&o.expr, table_name, &aliases)?;
         }
 
+        // Validate VIEW AS — only primitive expressions allowed
+        if let Some(view_as) = &sel.view_as {
+            for item in view_as {
+                self.validate_view_as_item(item)?;
+            }
+        }
+
         Ok(())
+    }
+
+    /// Validate a single [`ViewAsItem`]: reject aggregates and sub-selects.
+    fn validate_view_as_item(&self, item: &ViewAsItem) -> Result<(), ValidationError> {
+        self.check_no_aggregate_in_view_as(&item.expr)?;
+        self.check_no_subquery_in_view_as(&item.expr)?;
+        Ok(())
+    }
+
+    /// Recursively check that `expr` contains no aggregate function calls.
+    fn check_no_aggregate_in_view_as(&self, expr: &Expr) -> Result<(), ValidationError> {
+        if let Expr::Function { name, .. } = expr {
+            if is_aggregate_function(name) {
+                return Err(ValidationError::ViewAsAggregateNotAllowed(name.clone()));
+            }
+        }
+        match expr {
+            Expr::BinaryOp { left, right, .. } => {
+                self.check_no_aggregate_in_view_as(left)?;
+                self.check_no_aggregate_in_view_as(right)?;
+            }
+            Expr::UnaryOp { expr, .. } => self.check_no_aggregate_in_view_as(expr)?,
+            Expr::Function { args, .. } => {
+                for a in args {
+                    self.check_no_aggregate_in_view_as(a)?;
+                }
+            }
+            Expr::Cast { expr, .. } => self.check_no_aggregate_in_view_as(expr)?,
+            Expr::Case {
+                operand,
+                conditions,
+                else_result,
+            } => {
+                if let Some(op) = operand {
+                    self.check_no_aggregate_in_view_as(op)?;
+                }
+                for (cond, then) in conditions {
+                    self.check_no_aggregate_in_view_as(cond)?;
+                    self.check_no_aggregate_in_view_as(then)?;
+                }
+                if let Some(e) = else_result {
+                    self.check_no_aggregate_in_view_as(e)?;
+                }
+            }
+            Expr::IsNull { expr, .. } => self.check_no_aggregate_in_view_as(expr)?,
+            Expr::Between {
+                expr, low, high, ..
+            } => {
+                self.check_no_aggregate_in_view_as(expr)?;
+                self.check_no_aggregate_in_view_as(low)?;
+                self.check_no_aggregate_in_view_as(high)?;
+            }
+            Expr::InList { expr, list, .. } => {
+                self.check_no_aggregate_in_view_as(expr)?;
+                for e in list {
+                    self.check_no_aggregate_in_view_as(e)?;
+                }
+            }
+            Expr::Substring {
+                expr,
+                from_pos,
+                len,
+            } => {
+                self.check_no_aggregate_in_view_as(expr)?;
+                if let Some(fp) = from_pos {
+                    self.check_no_aggregate_in_view_as(fp)?;
+                }
+                if let Some(l) = len {
+                    self.check_no_aggregate_in_view_as(l)?;
+                }
+            }
+            Expr::Position { substr, in_expr } => {
+                self.check_no_aggregate_in_view_as(substr)?;
+                self.check_no_aggregate_in_view_as(in_expr)?;
+            }
+            Expr::Trim {
+                expr, trim_what, ..
+            } => {
+                self.check_no_aggregate_in_view_as(expr)?;
+                if let Some(tw) = trim_what {
+                    self.check_no_aggregate_in_view_as(tw)?;
+                }
+            }
+            Expr::MatchAgainst { match_value, .. } => {
+                self.check_no_aggregate_in_view_as(match_value)?;
+            }
+            Expr::ArrayOp { expr, right, .. } => {
+                self.check_no_aggregate_in_view_as(expr)?;
+                self.check_no_aggregate_in_view_as(right)?;
+            }
+            // Scalar subquery handled by check_no_subquery_in_view_as
+            Expr::Subquery(_) | Expr::InSubquery { .. } => {}
+            // Leaves — nothing to recurse into
+            Expr::Literal(_) | Expr::Column { .. } | Expr::Wildcard => {}
+        }
+        Ok(())
+    }
+
+    /// Recursively check that `expr` contains no scalar sub-selects.
+    fn check_no_subquery_in_view_as(&self, expr: &Expr) -> Result<(), ValidationError> {
+        match expr {
+            Expr::Subquery(_) | Expr::InSubquery { .. } => {
+                Err(ValidationError::ViewAsSubqueryNotAllowed)
+            }
+            Expr::BinaryOp { left, right, .. } => {
+                self.check_no_subquery_in_view_as(left)?;
+                self.check_no_subquery_in_view_as(right)?;
+                Ok(())
+            }
+            Expr::UnaryOp { expr, .. } => self.check_no_subquery_in_view_as(expr),
+            Expr::Function { args, .. } => {
+                for a in args {
+                    self.check_no_subquery_in_view_as(a)?;
+                }
+                Ok(())
+            }
+            Expr::Cast { expr, .. } => self.check_no_subquery_in_view_as(expr),
+            Expr::Case {
+                operand,
+                conditions,
+                else_result,
+            } => {
+                if let Some(op) = operand {
+                    self.check_no_subquery_in_view_as(op)?;
+                }
+                for (cond, then) in conditions {
+                    self.check_no_subquery_in_view_as(cond)?;
+                    self.check_no_subquery_in_view_as(then)?;
+                }
+                if let Some(e) = else_result {
+                    self.check_no_subquery_in_view_as(e)?;
+                }
+                Ok(())
+            }
+            Expr::IsNull { expr, .. } => self.check_no_subquery_in_view_as(expr),
+            Expr::Between {
+                expr, low, high, ..
+            } => {
+                self.check_no_subquery_in_view_as(expr)?;
+                self.check_no_subquery_in_view_as(low)?;
+                self.check_no_subquery_in_view_as(high)
+            }
+            Expr::InList { expr, list, .. } => {
+                self.check_no_subquery_in_view_as(expr)?;
+                for e in list {
+                    self.check_no_subquery_in_view_as(e)?;
+                }
+                Ok(())
+            }
+            Expr::Substring {
+                expr,
+                from_pos,
+                len,
+            } => {
+                self.check_no_subquery_in_view_as(expr)?;
+                if let Some(fp) = from_pos {
+                    self.check_no_subquery_in_view_as(fp)?;
+                }
+                if let Some(l) = len {
+                    self.check_no_subquery_in_view_as(l)?;
+                }
+                Ok(())
+            }
+            Expr::Position { substr, in_expr } => {
+                self.check_no_subquery_in_view_as(substr)?;
+                self.check_no_subquery_in_view_as(in_expr)
+            }
+            Expr::Trim {
+                expr, trim_what, ..
+            } => {
+                self.check_no_subquery_in_view_as(expr)?;
+                if let Some(tw) = trim_what {
+                    self.check_no_subquery_in_view_as(tw)?;
+                }
+                Ok(())
+            }
+            Expr::MatchAgainst { match_value, .. } => {
+                self.check_no_subquery_in_view_as(match_value)
+            }
+            Expr::ArrayOp { expr, right, .. } => {
+                self.check_no_subquery_in_view_as(expr)?;
+                self.check_no_subquery_in_view_as(right)
+            }
+            // Leaves
+            Expr::Literal(_) | Expr::Column { .. } | Expr::Wildcard => Ok(()),
+        }
     }
 
     // ── INSERT ────────────────────────────────────────────────────────────────
@@ -996,6 +1214,16 @@ impl<'a> Validator<'a> {
         }
         Ok(())
     }
+}
+
+// ── Aggregate detection helper ─────────────────────────────────────────────────
+
+/// Returns `true` if `name` (uppercase) is a standard aggregate function.
+fn is_aggregate_function(name: &str) -> bool {
+    matches!(
+        name.to_uppercase().as_str(),
+        "COUNT" | "SUM" | "AVG" | "MIN" | "MAX" | "GROUP_CONCAT" | "ARRAY_AGG" | "STRING_AGG"
+    )
 }
 
 // ── Apply DDL to catalog ───────────────────────────────────────────────────────

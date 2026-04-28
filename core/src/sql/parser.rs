@@ -222,6 +222,11 @@ impl SqlParser {
                             line: None,
                             col: None,
                         }),
+                        SelectItem::Expand { .. } => Err(SqlError::ParseError {
+                            message: "EXPAND is not a scalar expression".to_string(),
+                            line: None,
+                            col: None,
+                        }),
                     }
                 } else {
                     Err(SqlError::ParseError {

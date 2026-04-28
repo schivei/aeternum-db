@@ -86,7 +86,7 @@ with suggestion to use a `CHECK` constraint.
 ### DML Statements
 | Statement | Notes |
 |-----------|-------|
-| `SELECT` | DISTINCT, aliases, JOINs, subqueries, GROUP BY, HAVING, ORDER BY, LIMIT/OFFSET, CTEs |
+| `SELECT` | DISTINCT, aliases, `EXPAND ref_col [AS prefix]`, JOINs, subqueries, GROUP BY, HAVING, ORDER BY, LIMIT/OFFSET, CTEs, `VIEW AS (expr AS alias, ...)` |
 | `INSERT` | Single/multi-row VALUES |
 | `UPDATE` | SET … WHERE |
 | `DELETE` | WHERE |
@@ -157,6 +157,44 @@ execution is a Phase 4 task.
 `Expr::Path(Vec<String>)` — a reference chain used in SELECT expressions, e.g.
 `my_table.my_refs.their_name`.  Planner resolves to the appropriate join chain.
 
+### `SelectItem::Expand` — Reference Column Expansion
+`SelectItem::Expand { expr: Box<Expr>, alias: Option<String> }` — expands
+**all columns** of the table referenced by a reference-typed column.  When the
+column is a **vector reference** (multi-valued), the expansion also
+auto-unnests the reference so each referenced row becomes its own result row.
+
+Mapped from a function call `EXPAND(col)` or `EXPAND(col) AS prefix` in the
+SQL text (via `convert_select_item`).  The planner (PR 1.4) resolves the full
+column list and injects the unnest step.
+
+```sql
+SELECT u.name, EXPAND u.order_ref AS o FROM users u;
+-- → u.name, o.id, o.total, o.status  (one row per order)
+```
+
+### `SelectStatement::view_as` — Result Transformation Clause
+`SelectStatement::view_as: Option<Vec<ViewAsItem>>` — an optional
+post-result projection applied after all filtering, grouping, ordering, and
+limiting.  Each `ViewAsItem { expr, alias }` transforms an output column using
+a **primitive expression**.
+
+Semantic restrictions (enforced by the validator):
+- `ValidationError::ViewAsAggregateNotAllowed(func_name)` — aggregate
+  functions are not allowed.
+- `ValidationError::ViewAsSubqueryNotAllowed` — sub-selects are not allowed.
+
+```sql
+SELECT id, score FROM users
+VIEW AS (
+    score * 100  AS pct_score,
+    UPPER(name)  AS display_name
+);
+```
+
+> **Parsing note**: `VIEW AS` is a Phase 4 custom-grammar extension.  The AST
+> field (`view_as`) is available for programmatic construction; sqlparser
+> lowering sets it to `None`.
+
 ### Bitwise Operators
 `BinaryOperator::{BitwiseAnd, BitwiseOr, BitwiseXor, BitwiseShiftLeft, BitwiseShiftRight}`
 and `UnaryOperator::BitwiseNot`.  Used primarily with FLAG enums and integer
@@ -220,6 +258,11 @@ carry column-level permission lists.  Enforcement is a Phase 6 task.
 - Duplicate columns in CREATE TABLE.
 - NOT NULL insert violations.
 - Aggregate functions not allowed in WHERE clause.
+- `VIEW AS` restrictions: `ValidationError::ViewAsAggregateNotAllowed` and
+  `ValidationError::ViewAsSubqueryNotAllowed` — ensures only primitive
+  expressions are used in `VIEW AS` items.
+- `EXPAND` items in SELECT list: the inner column expression is validated like
+  any other column reference.
 
 ---
 

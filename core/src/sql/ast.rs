@@ -821,6 +821,52 @@ pub enum SelectItem {
     QualifiedWildcard(String),
     /// An expression, optionally aliased.
     Expr { expr: Expr, alias: Option<String> },
+    /// `EXPAND ref_col [AS alias]`
+    ///
+    /// Expands **all** columns from the target of a reference-typed column.
+    /// When the column is a vector reference (multi-valued), the expansion also
+    /// **unnests** the reference so each referenced row becomes its own result
+    /// row.  Only valid in the `SELECT` list.
+    ///
+    /// The planner (PR 1.4) resolves `EXPAND` to the full column list of the
+    /// referenced table and adds an implicit `UNNEST` step when the reference
+    /// cardinality is > 1.
+    ///
+    /// When lowering from `sqlparser`, a function call named `EXPAND` (or
+    /// `expand`) with a single argument is mapped to this variant.
+    Expand {
+        /// The reference-typed column to expand.
+        expr: Box<Expr>,
+        /// Optional alias prefix applied to all expanded columns
+        /// (e.g. `EXPAND order_ref AS o` → `o.total`, `o.status`, …).
+        alias: Option<String>,
+    },
+}
+
+/// A single transformation item in a `VIEW AS` clause.
+///
+/// The `VIEW AS` clause is a post-result projection that applies primitive
+/// expressions over the columns returned by the main `SELECT`.  Only primitive
+/// expressions are allowed — **no aggregate functions and no sub-selects**.
+/// The restriction is enforced by the semantic validator
+/// ([`ValidationError::ViewAsAggregateNotAllowed`],
+/// [`ValidationError::ViewAsSubqueryNotAllowed`]).
+///
+/// Syntax:
+/// ```sql
+/// SELECT id, score FROM users
+/// VIEW AS (
+///     score * 100 AS pct_score,
+///     UPPER(name)  AS display_name
+/// )
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+pub struct ViewAsItem {
+    /// The transformation expression (primitive only — no aggregates, no
+    /// sub-selects).
+    pub expr: Expr,
+    /// The name of the output column produced by this transformation.
+    pub alias: String,
 }
 
 /// A table reference in the FROM clause.
@@ -907,6 +953,16 @@ pub struct SelectStatement {
     pub offset: Option<u64>,
     /// Whether DISTINCT was specified.
     pub distinct: bool,
+    /// Optional `VIEW AS (expr AS name, ...)` result-transformation clause.
+    ///
+    /// Applied as a final post-result projection after all filtering,
+    /// grouping, ordering, and limiting.  Each item transforms or renames one
+    /// output column using a **primitive** expression — aggregate functions and
+    /// sub-selects are not permitted (validator enforces this).
+    ///
+    /// This is an AeternumDB-specific extension; parsing from raw SQL is a
+    /// Phase 4 custom-grammar task.
+    pub view_as: Option<Vec<ViewAsItem>>,
 }
 
 /// A Common Table Expression (CTE) in a WITH clause.
@@ -1913,6 +1969,7 @@ fn convert_select(
         limit: limit_val,
         offset: offset_val,
         distinct,
+        view_as: None, // VIEW AS is a Phase 4 custom-grammar extension
     })
 }
 
@@ -1940,15 +1997,53 @@ fn convert_select_item(item: sp::SelectItem) -> Result<SelectItem, AstError> {
             };
             Ok(SelectItem::QualifiedWildcard(name))
         }
-        sp::SelectItem::UnnamedExpr(e) => Ok(SelectItem::Expr {
-            expr: convert_expr(e)?,
-            alias: None,
-        }),
-        sp::SelectItem::ExprWithAlias { expr, alias } => Ok(SelectItem::Expr {
-            expr: convert_expr(expr)?,
-            alias: Some(ident_to_string(&alias)),
-        }),
+        sp::SelectItem::UnnamedExpr(e) => {
+            // Map EXPAND(col) function calls to SelectItem::Expand
+            if let Some(expand) = try_expand_function(&e, None) {
+                return Ok(expand);
+            }
+            Ok(SelectItem::Expr {
+                expr: convert_expr(e)?,
+                alias: None,
+            })
+        }
+        sp::SelectItem::ExprWithAlias { expr, alias } => {
+            let alias_str = ident_to_string(&alias);
+            // Map EXPAND(col) AS alias to SelectItem::Expand
+            if let Some(expand) = try_expand_function(&expr, Some(alias_str.clone())) {
+                return Ok(expand);
+            }
+            Ok(SelectItem::Expr {
+                expr: convert_expr(expr)?,
+                alias: Some(alias_str),
+            })
+        }
     }
+}
+
+/// Checks whether `expr` is a call to `EXPAND(single_arg)` and, if so,
+/// returns the corresponding [`SelectItem::Expand`] node.
+fn try_expand_function(expr: &sp::Expr, alias: Option<String>) -> Option<SelectItem> {
+    if let sp::Expr::Function(f) = expr {
+        let name = object_name_to_string(&f.name).to_uppercase();
+        if name == "EXPAND" {
+            if let sp::FunctionArguments::List(ref list) = f.args {
+                if list.args.len() == 1 {
+                    if let sp::FunctionArg::Unnamed(sp::FunctionArgExpr::Expr(inner)) =
+                        list.args[0].clone()
+                    {
+                        if let Ok(inner_expr) = convert_expr(inner) {
+                            return Some(SelectItem::Expand {
+                                expr: Box::new(inner_expr),
+                                alias,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 fn convert_table_with_joins(twj: sp::TableWithJoins) -> Result<TableReference, AstError> {

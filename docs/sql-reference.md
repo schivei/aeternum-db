@@ -25,6 +25,10 @@ implementation is based on **SQL-92** with a subset of common SQL extensions.
 7. [Functions](#functions)
 8. [Statements](#statements)
    - [SELECT](#select)
+      - [JOIN](#join)
+      - [Subqueries](#subqueries)
+      - [EXPAND](#expand)
+      - [VIEW AS](#view-as)
    - [INSERT](#insert)
    - [UPDATE](#update)
    - [DELETE](#delete)
@@ -533,13 +537,16 @@ They are valid in the `SELECT` list and `HAVING` clause, but **not** in
 ```sql
 [WITH cte_name [(column, ...)] AS (subquery), ...]
 SELECT [DISTINCT]
-    { * | column [AS alias] | expr [AS alias] }, ...
+    { * | column [AS alias] | expr [AS alias] | EXPAND ref_col [AS prefix] }, ...
 FROM table_reference
 [WHERE condition]
 [GROUP BY expr, ...]
 [HAVING condition]
 [ORDER BY expr [ASC | DESC], ...]
 [LIMIT n [OFFSET m]]
+[VIEW AS (
+    expr AS alias [, expr AS alias ...]
+)]
 ```
 
 **Common Table Expressions (WITH clause):**
@@ -651,6 +658,81 @@ Subqueries can appear:
   SELECT id, (SELECT COUNT(*) FROM orders WHERE user_id = users.id) AS cnt
   FROM users;
   ```
+
+#### EXPAND
+
+`EXPAND ref_col [AS prefix]` extracts **all columns** from the table referenced
+by a reference-typed column.  If the reference is a **vector** (multi-valued),
+`EXPAND` also automatically **unnests** the reference so each referenced row
+becomes its own result row.
+
+`EXPAND` may only appear in the `SELECT` list.
+
+```sql
+-- Expand all columns from the table referenced by order_ref
+SELECT u.name, EXPAND u.order_ref
+FROM users u;
+-- → same as: SELECT u.name, o.id, o.total, o.status FROM users u (for each order)
+
+-- Expand with alias prefix applied to all expanded columns
+SELECT u.name, EXPAND u.order_ref AS o
+FROM users u;
+-- → columns: u.name, o.id, o.total, o.status
+
+-- Vector reference (multi-valued): each referenced row becomes its own result row
+SELECT u.name, EXPAND u.tag_refs AS t
+FROM users u;
+-- The tag_refs column is a [TagRef] (vector); EXPAND auto-unnests it.
+```
+
+> **Execution note**: `EXPAND` is resolved by the query planner (PR 1.4).  The
+> planner looks up the target table schema via the reference column type and
+> injects the full column list plus an implicit `UNNEST` step when the
+> cardinality is > 1.
+
+#### VIEW AS
+
+`VIEW AS (expr AS alias, ...)` is a **post-result transformation clause**
+applied after all filtering, grouping, ordering, and limiting.  Each item
+projects a new column by applying a primitive expression to the output row.
+
+**Restrictions** (enforced by the semantic validator):
+- **No aggregate functions** (`COUNT`, `SUM`, `AVG`, `MIN`, `MAX`, …).
+- **No sub-selects** (scalar or `IN (subquery)` forms).
+- Only primitive expressions: arithmetic, comparisons, `CASE`, `CAST`,
+  string functions (`UPPER`, `LOWER`, `SUBSTRING`, `TRIM`, `REPLACE`, …),
+  and column references.
+
+```sql
+-- Scale score to percentage and display name in upper-case
+SELECT id, name, score FROM users
+VIEW AS (
+    score * 100  AS pct_score,
+    UPPER(name)  AS display_name
+);
+
+-- Combine multiple columns with a separator
+SELECT first_name, last_name, birth_year FROM people
+VIEW AS (
+    first_name || ' ' || last_name AS full_name,
+    2025 - birth_year              AS age
+);
+
+-- Conditional transformation
+SELECT id, status_code FROM orders
+VIEW AS (
+    CASE status_code
+        WHEN 1 THEN 'pending'
+        WHEN 2 THEN 'shipped'
+        ELSE       'unknown'
+    END AS status_label
+);
+```
+
+> **Parsing note**: `VIEW AS` is an AeternumDB-specific extension.  Parsing
+> from raw SQL strings is a Phase 4 custom-grammar task.  The AST scaffolding
+> (`SelectStatement::view_as`) is available now for programmatic construction
+> and testing.
 
 ---
 
