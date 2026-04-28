@@ -203,6 +203,8 @@ semantic enforcement, and query execution will be implemented in later phases.
 **Example — referential actions on object references:**
 
 ```sql
+-- `customer` is a reference column of type `customers` (references the customers table).
+-- The `REFERENCES customers` clause is required by the SQL parser to attach ON DELETE/ON UPDATE.
 CREATE TABLE orders (
   id       INTEGER PRIMARY KEY AUTO_INCREMENT,
   customer customers REFERENCES customers ON DELETE CASCADE ON UPDATE CASCADE,

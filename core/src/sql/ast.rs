@@ -2890,6 +2890,7 @@ fn convert_create_table(ct: sp::CreateTable) -> Result<Statement, AstError> {
 
 fn convert_column_def(col: sp::ColumnDef) -> Result<ColumnDef, AstError> {
     let name = ident_to_string(&col.name);
+    // Mutable so that a ForeignKey option can upgrade EnumRef → Reference in-place.
     let mut data_type = convert_data_type(col.data_type)?;
 
     let mut nullable = true;

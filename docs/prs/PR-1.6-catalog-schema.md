@@ -621,7 +621,7 @@ The following items from earlier PRs must be persisted in the catalog:
 |-------------|-------------|
 | **Persistent catalog for multi-DB/schema** | Persist the full database/schema/table hierarchy across restarts; the in-memory `Catalog` built in PR 1.3 is replaced by a durable store. |
 | **objid persistent storage** | Every table's `objid` sequence state must be persisted so that node restarts do not produce duplicate identifiers. |
-| **EnumRef type registry persistence** | Named user-defined `ENUM` and composite types (`CREATE TYPE … AS ENUM / AS (…)`) must survive restarts and be resolved during query planning against the persistent catalog. |
+| **Named type registry persistence** | Named user-defined `ENUM` and composite types (`CREATE TYPE … AS ENUM / AS (…)`) must survive restarts and be resolved during query planning against the persistent catalog. |
 
 ## 🏁 Definition of Done
 
