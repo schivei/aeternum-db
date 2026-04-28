@@ -725,6 +725,17 @@ proptest = "1.4"  # Property-based testing
 - Adaptive execution (runtime optimization) → Phase 3
 - Spilling optimizations → Phase 5
 
+### AeternumDB-Specific Executor Requirements
+
+The following AeternumDB extensions deferred from earlier PRs must be enforced
+during query execution:
+
+| Requirement | Description |
+|-------------|-------------|
+| **Reference column referential actions** | Enforce `ON DELETE` and `ON UPDATE` actions (CASCADE, SET NULL, SET DEFAULT, RESTRICT, NO ACTION) stored in the `ColumnDef.on_delete` / `ColumnDef.on_update` AST fields when rows in referenced tables are mutated. |
+| **GRANT / REVOKE enforcement** | Apply access-control rules recorded by `GRANT` / `REVOKE` statements before executing any DML; reject with a permission error when the current user lacks required privileges. |
+| **Cluster-wide objid generation** | Assign a globally unique `objid` to every new row on `INSERT`.  This requires coordination with the cluster (Phase 3); for Phase 1 a node-local monotonic counter is acceptable as a placeholder. |
+
 ## 🏁 Definition of Done
 
 This PR is complete when:

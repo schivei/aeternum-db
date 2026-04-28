@@ -129,77 +129,61 @@ impl BTreeKey for u64 {
     }
 }
 
-impl BTreeKey for String {
-    fn to_bytes(&self) -> Vec<u8> {
-        self.as_bytes().to_vec()
-    }
+/// Implement `BTreeKey` for a string-like type by converting to/from UTF-8 bytes.
+macro_rules! impl_string_bytes_trait {
+    ($trait:ident, $label:literal) => {
+        impl $trait for String {
+            fn to_bytes(&self) -> Vec<u8> {
+                self.as_bytes().to_vec()
+            }
 
-    fn from_bytes(bytes: &[u8]) -> Result<Self, IndexError> {
-        String::from_utf8(bytes.to_vec())
-            .map_err(|e| IndexError::Serialization(format!("invalid UTF-8 in key: {e}")))
-    }
-}
-
-impl BTreeKey for Vec<u8> {
-    fn to_bytes(&self) -> Vec<u8> {
-        self.clone()
-    }
-
-    fn from_bytes(bytes: &[u8]) -> Result<Self, IndexError> {
-        Ok(bytes.to_vec())
-    }
-}
-
-impl BTreeValue for String {
-    fn to_bytes(&self) -> Vec<u8> {
-        self.as_bytes().to_vec()
-    }
-
-    fn from_bytes(bytes: &[u8]) -> Result<Self, IndexError> {
-        String::from_utf8(bytes.to_vec())
-            .map_err(|e| IndexError::Serialization(format!("invalid UTF-8 in value: {e}")))
-    }
-}
-
-impl BTreeValue for Vec<u8> {
-    fn to_bytes(&self) -> Vec<u8> {
-        self.clone()
-    }
-
-    fn from_bytes(bytes: &[u8]) -> Result<Self, IndexError> {
-        Ok(bytes.to_vec())
-    }
-}
-
-impl BTreeValue for u64 {
-    fn to_bytes(&self) -> Vec<u8> {
-        self.to_le_bytes().to_vec()
-    }
-
-    fn from_bytes(bytes: &[u8]) -> Result<Self, IndexError> {
-        if bytes.len() != 8 {
-            return Err(IndexError::Serialization(
-                "u64 value must be 8 bytes".into(),
-            ));
+            fn from_bytes(bytes: &[u8]) -> Result<Self, IndexError> {
+                String::from_utf8(bytes.to_vec()).map_err(|e| {
+                    IndexError::Serialization(format!(
+                        concat!("invalid UTF-8 in ", $label, ": {e}"),
+                        e = e
+                    ))
+                })
+            }
         }
-        Ok(u64::from_le_bytes(bytes.try_into().unwrap()))
-    }
-}
 
-impl BTreeValue for i64 {
-    fn to_bytes(&self) -> Vec<u8> {
-        self.to_le_bytes().to_vec()
-    }
+        impl $trait for Vec<u8> {
+            fn to_bytes(&self) -> Vec<u8> {
+                self.clone()
+            }
 
-    fn from_bytes(bytes: &[u8]) -> Result<Self, IndexError> {
-        if bytes.len() != 8 {
-            return Err(IndexError::Serialization(
-                "i64 value must be 8 bytes".into(),
-            ));
+            fn from_bytes(bytes: &[u8]) -> Result<Self, IndexError> {
+                Ok(bytes.to_vec())
+            }
         }
-        Ok(i64::from_le_bytes(bytes.try_into().unwrap()))
-    }
+    };
 }
+
+impl_string_bytes_trait!(BTreeKey, "key");
+impl_string_bytes_trait!(BTreeValue, "value");
+
+/// Implement `BTreeValue` for a fixed-width little-endian integer type.
+macro_rules! impl_integer_btree_value {
+    ($ty:ty, $n:literal, $label:literal) => {
+        impl BTreeValue for $ty {
+            fn to_bytes(&self) -> Vec<u8> {
+                self.to_le_bytes().to_vec()
+            }
+
+            fn from_bytes(bytes: &[u8]) -> Result<Self, IndexError> {
+                if bytes.len() != $n {
+                    return Err(IndexError::Serialization(
+                        concat!($label, " value must be ", stringify!($n), " bytes").into(),
+                    ));
+                }
+                Ok(<$ty>::from_le_bytes(bytes.try_into().unwrap()))
+            }
+        }
+    };
+}
+
+impl_integer_btree_value!(u64, 8, "u64");
+impl_integer_btree_value!(i64, 8, "i64");
 
 // ── Metadata ──────────────────────────────────────────────────────────────────
 

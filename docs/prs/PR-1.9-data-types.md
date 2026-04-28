@@ -479,6 +479,15 @@ rust_decimal = "1.33"  # For Decimal type
 - Geospatial types → Phase 5
 - Binary/Blob types → Phase 3
 
+### AeternumDB-Specific Data-Type Requirements
+
+The following items from PR 1.3 must be fully implemented in this PR:
+
+| Requirement | Description |
+|-------------|-------------|
+| **FLAG enum bitmask storage** | `ENUM FLAG` columns store a `u64` bitmask; the executor must enforce that only valid bit-combinations (i.e. subsets of declared variant bits) are stored, and handle `NONE` (value `0`) correctly. |
+| **Bitwise operator evaluation** | Evaluate `&`, `\|`, `^`, `~`, `<<`, `>>` on integer columns and on FLAG enum columns (bitmask testing / combination). The parser already emits `BitwiseAnd`, `BitwiseOr`, etc. in the AST — this PR wires them to real evaluation. |
+
 ## 🏁 Definition of Done
 
 This PR is complete when:

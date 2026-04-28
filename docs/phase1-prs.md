@@ -130,9 +130,11 @@ This document details all pull requests needed to complete Phase 1 of the Aetern
 - `core/src/sql/validator.rs`
 
 **Key Features:**
-- Support SQL-92 subset
-- Parse DDL (CREATE TABLE, DROP TABLE)
+- Support SQL-92 subset + AeternumDB extended dialect
+- Parse DDL (CREATE TABLE, DROP TABLE, ALTER TABLE, CREATE TYPE, CREATE INDEX, etc.)
 - Parse DML (SELECT, INSERT, UPDATE, DELETE)
+- AeternumDB extensions: EXPAND, VIEW AS, REVLIKE / REVILIKE, FLAG enum, reference types
+- Reference column ON UPDATE / ON DELETE referential actions (AST only; enforcement in PR 1.5)
 - Syntax validation
 - Semantic validation
 
@@ -142,6 +144,7 @@ This document details all pull requests needed to complete Phase 1 of the Aetern
 - Complex queries with JOINs
 - Subqueries
 - Aggregate functions
+- ON DELETE / ON UPDATE on reference columns
 
 **Documentation:**
 - Supported SQL syntax
