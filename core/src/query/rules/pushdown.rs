@@ -293,9 +293,10 @@ fn references_table(expr: &Expr, table: &str) -> bool {
                 || references_table(from_pos, table)
                 || for_len.as_ref().is_some_and(|e| references_table(e, table))
         }
-        // Subqueries are treated conservatively — assume they reference both
-        // sides so we don't accidentally push a predicate into an input when
-        // the subquery could reference the other side.
+        // Subqueries and complex expressions with embedded column references
+        // are treated conservatively: returning `true` prevents accidentally
+        // pushing a predicate into a join input when the expression could
+        // reference the other side.
         Expr::InSubquery { .. } | Expr::Subquery(_) | Expr::MatchAgainst { .. } => true,
     }
 }
