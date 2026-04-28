@@ -1860,6 +1860,9 @@ fn test_bitwise_operators() {
         ("SELECT a & b FROM t", BinaryOperator::BitwiseAnd),
         ("SELECT a | b FROM t", BinaryOperator::BitwiseOr),
         ("SELECT a ^ b FROM t", BinaryOperator::BitwiseXor),
+        // Bit-shift operators (parsed as PGBitwiseShiftLeft/Right internally)
+        ("SELECT a << 2 FROM t", BinaryOperator::ShiftLeft),
+        ("SELECT a >> 2 FROM t", BinaryOperator::ShiftRight),
     ];
     for (sql, expected_op) in cases {
         let stmt = parser().parse_one(sql).unwrap();
@@ -2334,4 +2337,174 @@ fn test_view_as_clause_rejected_aggregate() {
     }));
     let result = Validator::new(&catalog).validate(&stmt);
     assert!(result.is_err());
+}
+
+// ── CREATE_REGEX / REGEX_REPLACE ──────────────────────────────────────────────
+
+#[test]
+fn test_create_regex_function() {
+    // CREATE_REGEX(expr) — escapes a plain string for use as a regex pattern.
+    let stmt = parser()
+        .parse_one("SELECT id FROM docs WHERE body REGEXP CREATE_REGEX(title)")
+        .unwrap();
+    let sel = match stmt {
+        Statement::Select(s) => s,
+        _ => panic!("expected Select"),
+    };
+    let where_expr = sel.where_clause.expect("expected WHERE");
+    // Right side of REGEXP should be a CREATE_REGEX function call.
+    match where_expr {
+        Expr::BinaryOp { op, right, .. } => {
+            assert_eq!(op, BinaryOperator::Regexp);
+            assert!(
+                matches!(
+                    *right,
+                    Expr::Function { ref name, .. } if name == "CREATE_REGEX"
+                ),
+                "right side should be CREATE_REGEX function, got: {right:?}"
+            );
+        }
+        other => panic!("expected BinaryOp(REGEXP), got: {other:?}"),
+    }
+}
+
+#[test]
+fn test_create_regex_with_literal() {
+    // CREATE_REGEX with a string literal argument.
+    let stmt = parser()
+        .parse_one("SELECT CREATE_REGEX('hello.world') FROM t")
+        .unwrap();
+    let sel = match stmt {
+        Statement::Select(s) => s,
+        _ => panic!("expected Select"),
+    };
+    assert!(matches!(
+        &sel.columns[0],
+        SelectItem::Expr {
+            expr: Expr::Function { name, .. },
+            ..
+        } if name == "CREATE_REGEX"
+    ));
+}
+
+#[test]
+fn test_regex_replace_three_args() {
+    // REGEX_REPLACE(str, pattern, replacement) — replaces all matches.
+    let stmt = parser()
+        .parse_one("SELECT REGEX_REPLACE(name, '[0-9]+', '#') FROM users")
+        .unwrap();
+    let sel = match stmt {
+        Statement::Select(s) => s,
+        _ => panic!("expected Select"),
+    };
+    match &sel.columns[0] {
+        SelectItem::Expr {
+            expr: Expr::Function { name, args, .. },
+            ..
+        } => {
+            assert_eq!(name, "REGEX_REPLACE");
+            assert_eq!(args.len(), 3);
+        }
+        other => panic!("expected REGEX_REPLACE Function, got: {other:?}"),
+    }
+}
+
+#[test]
+fn test_regex_replace_with_flags() {
+    // REGEX_REPLACE(str, pattern, replacement, flags) — JavaScript-style flags.
+    let stmt = parser()
+        .parse_one("SELECT REGEX_REPLACE(code, '[a-z]+', 'X', 'gi') FROM items")
+        .unwrap();
+    let sel = match stmt {
+        Statement::Select(s) => s,
+        _ => panic!("expected Select"),
+    };
+    match &sel.columns[0] {
+        SelectItem::Expr {
+            expr: Expr::Function { name, args, .. },
+            ..
+        } => {
+            assert_eq!(name, "REGEX_REPLACE");
+            // 4 arguments: str, pattern, replacement, flags
+            assert_eq!(args.len(), 4);
+            // flags argument is a string literal 'gi'
+            assert!(matches!(&args[3], Expr::Literal(Value::String(s)) if s == "gi"));
+        }
+        other => panic!("expected REGEX_REPLACE Function, got: {other:?}"),
+    }
+}
+
+// ── Enum coercion in comparisons ──────────────────────────────────────────────
+
+#[test]
+fn test_enum_string_comparison_parses() {
+    // Comparing an enum column with a quoted string literal should parse fine.
+    // The execution layer resolves 'active' to the enum variant's integer value.
+    let stmt = parser()
+        .parse_one("SELECT id FROM users WHERE status = 'active'")
+        .unwrap();
+    assert!(matches!(stmt, Statement::Select(_)));
+}
+
+#[test]
+fn test_enum_integer_comparison_parses() {
+    // Comparing an enum column with an integer literal should parse fine.
+    // The execution layer compares directly to the stored numeric value.
+    let stmt = parser()
+        .parse_one("SELECT id FROM users WHERE status = 4")
+        .unwrap();
+    assert!(matches!(stmt, Statement::Select(_)));
+}
+
+#[test]
+fn test_enum_bitwise_comparison_parses() {
+    // FLAG enum columns support bitwise AND comparisons.
+    // e.g. permissions & 4 = 4  checks if the bit for value 4 is set.
+    let stmt = parser()
+        .parse_one("SELECT id FROM roles WHERE permissions & 4 = 4")
+        .unwrap();
+    let sel = match stmt {
+        Statement::Select(s) => s,
+        _ => panic!("expected Select"),
+    };
+    // WHERE should contain a BinaryOp(=) whose left is a BinaryOp(&).
+    let where_expr = sel.where_clause.expect("expected WHERE");
+    match &where_expr {
+        Expr::BinaryOp { op, left, .. } => {
+            assert_eq!(op, &BinaryOperator::Eq);
+            assert!(matches!(
+                left.as_ref(),
+                Expr::BinaryOp { op: BinaryOperator::BitwiseAnd, .. }
+            ));
+        }
+        other => panic!("expected outer Eq BinaryOp, got: {other:?}"),
+    }
+}
+
+#[test]
+fn test_enum_unquoted_identifier_comparison_parses() {
+    // Unquoted names in comparisons are parsed as identifiers/column refs.
+    // The execution layer resolves them as enum variant names when the LHS
+    // is an EnumRef column.
+    let stmt = parser()
+        .parse_one("SELECT id FROM users WHERE status = active")
+        .unwrap();
+    let sel = match stmt {
+        Statement::Select(s) => s,
+        _ => panic!("expected Select"),
+    };
+    let where_expr = sel.where_clause.expect("expected WHERE");
+    // 'active' should be parsed as a column/identifier expression
+    match where_expr {
+        Expr::BinaryOp { right, .. } => {
+            assert!(
+                matches!(
+                    *right,
+                    Expr::Column { ref name, .. } if name == "active"
+                ),
+                "expected 'active' as column identifier, got: {right:?}"
+            );
+        }
+        other => panic!("expected BinaryOp, got: {other:?}"),
+    }
 }

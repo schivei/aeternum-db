@@ -165,6 +165,38 @@ pub enum DataType {
     ///
     /// The catalog resolves the type and its auto-assigned values.
     /// The type cannot be dropped while any column references it.
+    ///
+    /// ### Automatic coercion in comparisons (execution-layer behaviour)
+    ///
+    /// When an `EnumRef` column is used in a comparison or arithmetic
+    /// expression, the execution layer automatically coerces the right-hand
+    /// side:
+    ///
+    /// - **String literal** — looked up by variant name; the comparison
+    ///   succeeds if the name matches any variant (case-insensitive).
+    ///   ```sql
+    ///   status = 'active'    -- matches the 'active' variant
+    ///   ```
+    /// - **Integer literal** — compared directly to the column's stored
+    ///   numeric value.
+    ///   ```sql
+    ///   status = 0           -- matches whichever variant has value 0
+    ///   ```
+    /// - **Bitwise expressions** — the stored integer is used directly.
+    ///   ```sql
+    ///   permissions & 4 = 4  -- checks whether the bit for value 4 is set
+    ///   ```
+    /// - **Unquoted identifier** — if the identifier does not resolve to a
+    ///   column, the execution layer tries to match it as a variant name.
+    ///   ```sql
+    ///   status = active      -- same as status = 'active' (execution-layer)
+    ///   ```
+    ///
+    /// ### Display
+    ///
+    /// `SELECT` projections that include an `EnumRef` column always return
+    /// the **string name** of the variant, not the stored integer.  Callers
+    /// that need the raw integer can use `CAST(col AS INTEGER)`.
     EnumRef(String),
     /// `UUID` / `GUID`.
     Uuid,
@@ -551,6 +583,38 @@ pub enum Expr {
     /// `RPAD`, `CHAR_LENGTH`) and their regex variants (`REGEXP_REPLACE`,
     /// `REGEXP_SUBSTR`, `REGEXP_INSTR`, `REGEXP_LIKE`, `REGEXP_COUNT`) are
     /// captured here with the function name normalized to uppercase.
+    ///
+    /// ### AeternumDB built-in scalar functions
+    ///
+    /// - **`CREATE_REGEX(expr)`** — escapes every POSIX regex metacharacter in
+    ///   `expr` and returns a literal-match pattern.  Useful when building a
+    ///   regex from a user-supplied or computed string that should be matched
+    ///   verbatim rather than as a regex:
+    ///   ```sql
+    ///   -- Match the exact string "hello.world" (dot must not act as regex wildcard)
+    ///   SELECT id FROM docs WHERE body REGEXP CREATE_REGEX('hello.world');
+    ///   ```
+    ///
+    /// - **`REGEX_REPLACE(str, pattern, replacement [, flags])`** — replaces
+    ///   occurrences of `pattern` (a regex) in `str` with `replacement`.
+    ///   `flags` is an optional string of JavaScript-style modifier characters:
+    ///
+    ///   | Flag | Meaning                              |
+    ///   |------|--------------------------------------|
+    ///   | `g`  | Replace all occurrences (default)    |
+    ///   | `i`  | Case-insensitive match               |
+    ///   | `m`  | Multi-line anchors (`^`/`$`)         |
+    ///   | `s`  | Dot matches newline                  |
+    ///
+    ///   ```sql
+    ///   -- Replace all digits case-insensitively
+    ///   SELECT REGEX_REPLACE(code, '[0-9]+', '#', 'gi') FROM products;
+    ///
+    ///   -- First occurrence only
+    ///   SELECT REGEX_REPLACE(note, 'foo', 'bar') FROM logs;
+    ///   ```
+    ///
+    ///   Execution by the query executor (PR 1.5).
     Function {
         /// Function name (normalized to uppercase).
         name: String,
