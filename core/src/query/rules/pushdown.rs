@@ -1,0 +1,500 @@
+//! Predicate pushdown and projection pushdown optimization rules.
+//!
+//! ## Predicate pushdown
+//!
+//! [`PredicatePushdown`] moves `Filter` nodes as close as possible to the leaf
+//! `Scan` nodes that produce the rows being filtered.  This reduces the number
+//! of rows flowing through expensive operators such as joins and aggregations.
+//!
+//! ## Projection pushdown
+//!
+//! [`ProjectionPushdown`] removes columns from `Scan` nodes that are not
+//! referenced by any upstream operator, reducing I/O when the storage layer
+//! supports column pruning.
+
+use crate::query::logical_plan::{LogicalPlan, ProjectionItem};
+use crate::query::rules::OptimizationRule;
+use crate::sql::ast::Expr;
+
+// ── PredicatePushdown ─────────────────────────────────────────────────────────
+
+/// Pushes `Filter` nodes towards leaf `Scan` nodes.
+pub struct PredicatePushdown;
+
+impl OptimizationRule for PredicatePushdown {
+    fn name(&self) -> &str {
+        "predicate_pushdown"
+    }
+
+    fn apply(&self, plan: LogicalPlan) -> LogicalPlan {
+        push_predicate(plan)
+    }
+}
+
+fn push_predicate(plan: LogicalPlan) -> LogicalPlan {
+    match plan {
+        LogicalPlan::Filter { input, predicate } => push_predicate_filter(*input, predicate),
+        LogicalPlan::Project { input, items } => LogicalPlan::Project {
+            input: Box::new(push_predicate(*input)),
+            items,
+        },
+        LogicalPlan::Join {
+            left,
+            right,
+            join_type,
+            condition,
+        } => LogicalPlan::Join {
+            left: Box::new(push_predicate(*left)),
+            right: Box::new(push_predicate(*right)),
+            join_type,
+            condition,
+        },
+        LogicalPlan::Sort { input, order_by } => LogicalPlan::Sort {
+            input: Box::new(push_predicate(*input)),
+            order_by,
+        },
+        LogicalPlan::Limit {
+            input,
+            limit,
+            offset,
+        } => LogicalPlan::Limit {
+            input: Box::new(push_predicate(*input)),
+            limit,
+            offset,
+        },
+        LogicalPlan::Aggregate {
+            input,
+            group_by,
+            aggregates,
+            having,
+        } => LogicalPlan::Aggregate {
+            input: Box::new(push_predicate(*input)),
+            group_by,
+            aggregates,
+            having,
+        },
+        LogicalPlan::Unnest {
+            input,
+            column,
+            alias,
+        } => LogicalPlan::Unnest {
+            input: Box::new(push_predicate(*input)),
+            column,
+            alias,
+        },
+        LogicalPlan::ViewAs { input, items } => LogicalPlan::ViewAs {
+            input: Box::new(push_predicate(*input)),
+            items,
+        },
+        other => other,
+    }
+}
+
+fn push_predicate_filter(input: LogicalPlan, predicate: Expr) -> LogicalPlan {
+    match input {
+        // Filter directly above a Scan with no existing filter — merge.
+        LogicalPlan::Scan {
+            table,
+            alias,
+            columns,
+            filter: None,
+        } => LogicalPlan::Scan {
+            table,
+            alias,
+            columns,
+            filter: Some(predicate),
+        },
+
+        // Filter above a Scan that already has a filter — AND them.
+        LogicalPlan::Scan {
+            table,
+            alias,
+            columns,
+            filter: Some(existing),
+        } => LogicalPlan::Scan {
+            table,
+            alias,
+            columns,
+            filter: Some(combine_predicates(existing, predicate)),
+        },
+
+        // Filter above a Join — try to push into one of the join sides.
+        LogicalPlan::Join {
+            left,
+            right,
+            join_type,
+            condition,
+        } => push_filter_through_join(*left, *right, join_type, condition, predicate),
+
+        // For all other input types, recurse and keep the filter.
+        other => LogicalPlan::Filter {
+            input: Box::new(push_predicate(other)),
+            predicate,
+        },
+    }
+}
+
+/// Attempt to push a filter predicate through a join node.
+fn push_filter_through_join(
+    left: LogicalPlan,
+    right: LogicalPlan,
+    join_type: crate::sql::ast::JoinType,
+    condition: Option<Expr>,
+    predicate: Expr,
+) -> LogicalPlan {
+    let left_table = scan_table_name(&left);
+    let right_table = scan_table_name(&right);
+
+    let refs_left = left_table
+        .as_deref()
+        .map(|t| references_table(&predicate, t))
+        .unwrap_or(false);
+    let refs_right = right_table
+        .as_deref()
+        .map(|t| references_table(&predicate, t))
+        .unwrap_or(false);
+
+    match (refs_left, refs_right) {
+        (true, false) => LogicalPlan::Join {
+            left: Box::new(push_predicate(LogicalPlan::Filter {
+                input: Box::new(left),
+                predicate,
+            })),
+            right: Box::new(push_predicate(right)),
+            join_type,
+            condition,
+        },
+        (false, true) => LogicalPlan::Join {
+            left: Box::new(push_predicate(left)),
+            right: Box::new(push_predicate(LogicalPlan::Filter {
+                input: Box::new(right),
+                predicate,
+            })),
+            join_type,
+            condition,
+        },
+        _ => LogicalPlan::Filter {
+            input: Box::new(LogicalPlan::Join {
+                left: Box::new(push_predicate(left)),
+                right: Box::new(push_predicate(right)),
+                join_type,
+                condition,
+            }),
+            predicate,
+        },
+    }
+}
+
+/// Extract the table name from a `Scan` node, if present.
+fn scan_table_name(plan: &LogicalPlan) -> Option<String> {
+    match plan {
+        LogicalPlan::Scan { table, alias, .. } => Some(alias.as_deref().unwrap_or(table).into()),
+        _ => None,
+    }
+}
+
+/// Returns `true` if `expr` references the given `table` qualifier.
+fn references_table(expr: &Expr, table: &str) -> bool {
+    match expr {
+        Expr::Column { table: Some(t), .. } => t.eq_ignore_ascii_case(table),
+        Expr::Column { table: None, .. } => false,
+        Expr::BinaryOp { left, right, .. } => {
+            references_table(left, table) || references_table(right, table)
+        }
+        Expr::UnaryOp { expr, .. } => references_table(expr, table),
+        _ => false,
+    }
+}
+
+/// Combine two predicates with a logical AND.
+fn combine_predicates(a: Expr, b: Expr) -> Expr {
+    Expr::BinaryOp {
+        left: Box::new(a),
+        op: crate::sql::ast::BinaryOperator::And,
+        right: Box::new(b),
+    }
+}
+
+// ── ProjectionPushdown ────────────────────────────────────────────────────────
+
+/// Removes unreferenced columns from `Scan` nodes.
+///
+/// When upstream `Project` nodes name explicit columns the rule annotates the
+/// scan with the minimal column list needed, avoiding full-row reads when the
+/// storage layer supports column projection.
+pub struct ProjectionPushdown;
+
+impl OptimizationRule for ProjectionPushdown {
+    fn name(&self) -> &str {
+        "projection_pushdown"
+    }
+
+    fn apply(&self, plan: LogicalPlan) -> LogicalPlan {
+        push_projection(plan)
+    }
+}
+
+fn push_projection(plan: LogicalPlan) -> LogicalPlan {
+    match plan {
+        LogicalPlan::Project { input, items } => push_projection_project(*input, items),
+        LogicalPlan::Filter { input, predicate } => LogicalPlan::Filter {
+            input: Box::new(push_projection(*input)),
+            predicate,
+        },
+        LogicalPlan::Join {
+            left,
+            right,
+            join_type,
+            condition,
+        } => LogicalPlan::Join {
+            left: Box::new(push_projection(*left)),
+            right: Box::new(push_projection(*right)),
+            join_type,
+            condition,
+        },
+        LogicalPlan::Sort { input, order_by } => LogicalPlan::Sort {
+            input: Box::new(push_projection(*input)),
+            order_by,
+        },
+        LogicalPlan::Limit {
+            input,
+            limit,
+            offset,
+        } => LogicalPlan::Limit {
+            input: Box::new(push_projection(*input)),
+            limit,
+            offset,
+        },
+        LogicalPlan::Aggregate {
+            input,
+            group_by,
+            aggregates,
+            having,
+        } => LogicalPlan::Aggregate {
+            input: Box::new(push_projection(*input)),
+            group_by,
+            aggregates,
+            having,
+        },
+        LogicalPlan::Unnest {
+            input,
+            column,
+            alias,
+        } => LogicalPlan::Unnest {
+            input: Box::new(push_projection(*input)),
+            column,
+            alias,
+        },
+        LogicalPlan::ViewAs { input, items } => LogicalPlan::ViewAs {
+            input: Box::new(push_projection(*input)),
+            items,
+        },
+        other => other,
+    }
+}
+
+fn push_projection_project(input: LogicalPlan, items: Vec<ProjectionItem>) -> LogicalPlan {
+    match input {
+        // Project directly above a Scan — push column list into scan.
+        LogicalPlan::Scan {
+            table,
+            alias,
+            filter,
+            ..
+        } => {
+            let columns = extract_column_names(&items);
+            LogicalPlan::Project {
+                input: Box::new(LogicalPlan::Scan {
+                    table,
+                    alias,
+                    columns: if columns.is_empty() {
+                        None
+                    } else {
+                        Some(columns)
+                    },
+                    filter,
+                }),
+                items,
+            }
+        }
+        // For other inputs, recurse normally.
+        other => LogicalPlan::Project {
+            input: Box::new(push_projection(other)),
+            items,
+        },
+    }
+}
+
+/// Extract simple column names referenced by a projection item list.
+fn extract_column_names(items: &[ProjectionItem]) -> Vec<String> {
+    items
+        .iter()
+        .filter_map(|item| {
+            if let Expr::Column { name, .. } = &item.expr {
+                Some(name.clone())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::query::logical_plan::{LogicalPlan, ProjectionItem};
+    use crate::sql::ast::{BinaryOperator, Expr, JoinType, Value};
+
+    fn col(table: &str, name: &str) -> Expr {
+        Expr::Column {
+            table: Some(table.into()),
+            name: name.into(),
+        }
+    }
+
+    fn lit(v: i64) -> Expr {
+        Expr::Literal(Value::Integer(v))
+    }
+
+    fn scan(table: &str) -> LogicalPlan {
+        LogicalPlan::Scan {
+            table: table.into(),
+            alias: Some(table.into()),
+            columns: None,
+            filter: None,
+        }
+    }
+
+    fn filter_plan(input: LogicalPlan, pred: Expr) -> LogicalPlan {
+        LogicalPlan::Filter {
+            input: Box::new(input),
+            predicate: pred,
+        }
+    }
+
+    #[test]
+    fn predicate_merges_into_scan() {
+        let pred = Expr::BinaryOp {
+            left: Box::new(Expr::Column {
+                table: None,
+                name: "age".into(),
+            }),
+            op: BinaryOperator::Gt,
+            right: Box::new(lit(18)),
+        };
+        let plan = filter_plan(scan("users"), pred.clone());
+        let rule = PredicatePushdown;
+        let optimized = rule.apply(plan);
+        assert!(
+            matches!(
+                &optimized,
+                LogicalPlan::Scan {
+                    filter: Some(_),
+                    ..
+                }
+            ),
+            "expected scan with filter, got {optimized:?}"
+        );
+    }
+
+    #[test]
+    fn predicate_stays_above_join_when_cross_table() {
+        let pred = Expr::BinaryOp {
+            left: Box::new(col("u", "id")),
+            op: BinaryOperator::Eq,
+            right: Box::new(col("o", "user_id")),
+        };
+        let join = LogicalPlan::Join {
+            left: Box::new(scan("u")),
+            right: Box::new(scan("o")),
+            join_type: JoinType::Inner,
+            condition: None,
+        };
+        let plan = filter_plan(join, pred);
+        let rule = PredicatePushdown;
+        let optimized = rule.apply(plan);
+        assert!(matches!(optimized, LogicalPlan::Filter { .. }));
+    }
+
+    #[test]
+    fn predicate_pushed_into_join_left_side() {
+        let pred = Expr::BinaryOp {
+            left: Box::new(col("users", "age")),
+            op: BinaryOperator::Gt,
+            right: Box::new(lit(18)),
+        };
+        let join = LogicalPlan::Join {
+            left: Box::new(scan("users")),
+            right: Box::new(scan("orders")),
+            join_type: JoinType::Inner,
+            condition: None,
+        };
+        let plan = filter_plan(join, pred);
+        let rule = PredicatePushdown;
+        let optimized = rule.apply(plan);
+        if let LogicalPlan::Join { left, .. } = &optimized {
+            assert!(
+                matches!(
+                    left.as_ref(),
+                    LogicalPlan::Scan {
+                        filter: Some(_),
+                        ..
+                    }
+                ),
+                "expected left scan with filter"
+            );
+        } else {
+            panic!("expected Join");
+        }
+    }
+
+    #[test]
+    fn projection_pushes_columns_into_scan() {
+        let items = vec![ProjectionItem {
+            expr: Expr::Column {
+                table: None,
+                name: "id".into(),
+            },
+            alias: None,
+        }];
+        let plan = LogicalPlan::Project {
+            input: Box::new(scan("users")),
+            items,
+        };
+        let rule = ProjectionPushdown;
+        let optimized = rule.apply(plan);
+        if let LogicalPlan::Project { input, .. } = &optimized {
+            assert!(
+                matches!(
+                    input.as_ref(),
+                    LogicalPlan::Scan {
+                        columns: Some(_),
+                        ..
+                    }
+                ),
+                "expected scan with column list"
+            );
+        } else {
+            panic!("expected Project");
+        }
+    }
+
+    #[test]
+    fn combine_predicates_produces_and() {
+        let a = Expr::Literal(Value::Boolean(true));
+        let b = Expr::Literal(Value::Boolean(false));
+        let combined = combine_predicates(a.clone(), b.clone());
+        assert!(
+            matches!(
+                &combined,
+                Expr::BinaryOp {
+                    op: BinaryOperator::And,
+                    ..
+                }
+            ),
+            "expected AND"
+        );
+    }
+}

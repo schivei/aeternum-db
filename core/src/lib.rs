@@ -4,5 +4,6 @@
 //! integration tests and future crates can depend on them.
 
 pub mod index;
+pub mod query;
 pub mod sql;
 pub mod storage;

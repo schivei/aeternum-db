@@ -43,3 +43,7 @@ harness = false
 [[bench]]
 name = "btree_bench"
 harness = false
+
+[[bench]]
+name = "query_bench"
+harness = false
