@@ -348,11 +348,10 @@ impl<'a> LogicalPlanBuilder<'a> {
         let _schema: &TableSchema = self.catalog.get_table(&lower).ok_or_else(|| {
             PlannerError::CatalogError(format!("table not found in catalog: {}", name))
         })?;
-        let is_flat = self.flat_tables.contains(&lower);
+        let _is_flat = self.flat_tables.contains(&lower);
         // If this is a FLAT table, record it for join-rejection later.
         // The Scan node itself doesn't carry flat-ness; enforcement happens in
         // reject_flat_in_join when a join is attempted.
-        let _ = is_flat;
 
         Ok(LogicalPlan::Scan {
             table: lower,
@@ -482,7 +481,7 @@ impl<'a> LogicalPlanBuilder<'a> {
         out: &mut Vec<ProjectionItem>,
         unnest_queue: &mut Vec<(Expr, Option<String>)>,
     ) -> Result<(), PlannerError> {
-        let col_name = match expr {
+        let _col_name = match expr {
             Expr::Column { name, .. } => name.clone(),
             _ => {
                 return Err(PlannerError::InvalidExpand(
@@ -501,7 +500,7 @@ impl<'a> LogicalPlanBuilder<'a> {
             // separate concern handled by the executor.
             alias: alias.map(str::to_string),
         });
-        let _ = (col_name, self.catalog); // suppress unused warnings
+        let _ = self.catalog; // suppress unused warning
 
         Ok(())
     }
