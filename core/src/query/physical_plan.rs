@@ -10,7 +10,7 @@
 //! | Logical | Physical choices | Selection heuristic |
 //! |---------|-----------------|---------------------|
 //! | `Scan` | [`PhysicalPlan::SeqScan`] / [`PhysicalPlan::IndexScan`] | Use index when an equality or range predicate on an indexed column is detected |
-//! | `Join` | [`PhysicalPlan::NestedLoopJoin`] / [`PhysicalPlan::HashJoin`] | Hash join when both sides are estimated > 100 rows |
+//! | `Join` | [`PhysicalPlan::NestedLoopJoin`] / [`PhysicalPlan::HashJoin`] | Hash join when either side is estimated > 100 rows |
 //! | `Aggregate` | [`PhysicalPlan::HashAggregate`] | Always |
 //! | `Sort` | [`PhysicalPlan::Sort`] with [`SortAlgorithm`] | External sort when estimated rows > threshold |
 
