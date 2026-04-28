@@ -661,34 +661,71 @@ Subqueries can appear:
 
 #### EXPAND
 
-`EXPAND ref_col [AS prefix]` extracts **all columns** from the table referenced
-by a reference-typed column.  If the reference is a **vector** (multi-valued),
-`EXPAND` also automatically **unnests** the reference so each referenced row
-becomes its own result row.
+`EXPAND(ref_col) [AS alias]` extracts **all columns** from the table referenced
+by a reference-typed column into the result set as individual top-level columns.
+If the reference is a **vector** (multi-valued), `EXPAND` also automatically
+**unnests** the reference so each referenced row becomes its own result row.
 
 `EXPAND` may only appear in the `SELECT` list.
 
-```sql
--- Expand all columns from the table referenced by order_ref
-SELECT u.name, EXPAND u.order_ref
-FROM users u;
--- → same as: SELECT u.name, o.id, o.total, o.status FROM users u (for each order)
+##### Alias as a namespace prefix
 
--- Expand with alias prefix applied to all expanded columns
-SELECT u.name, EXPAND u.order_ref AS o
+When an alias is attached to `EXPAND`, it becomes a **namespace prefix** for
+every expanded column.  The prefixed names are then accessible by that dotted
+path in `GROUP BY`, `HAVING`, and `VIEW AS` clauses:
+
+```sql
+-- EXPAND(my_refs) AS mr  →  mr.col_a, mr.col_b, …
+SELECT u.name, EXPAND(u.order_ref) AS o
 FROM users u;
--- → columns: u.name, o.id, o.total, o.status
+-- Expanded columns: o.id, o.total, o.status
+
+-- GROUP BY using the expanded namespace
+SELECT u.name, EXPAND(u.order_ref) AS o
+FROM users u
+GROUP BY o.status;
+
+-- HAVING using the expanded namespace
+SELECT u.name, EXPAND(u.order_ref) AS o
+FROM users u
+GROUP BY o.status
+HAVING COUNT(*) > 2;
+
+-- VIEW AS referencing the expanded namespace
+SELECT u.name, EXPAND(u.order_ref) AS o
+FROM users u
+VIEW AS (
+    UPPER(o.status)  AS status_label,
+    o.total * 1.2    AS total_with_tax
+);
+```
+
+Without an alias the expanded columns carry their original names (unqualified),
+but an alias is **strongly recommended** when multiple `EXPAND` items are
+present in the same query to avoid name collisions.
+
+```sql
+-- Without alias — original column names exposed directly
+SELECT u.name, EXPAND(u.order_ref)
+FROM users u;
+-- Columns: u.name, id, total, status  (could collide with other columns)
+
+-- With alias — safe, unambiguous
+SELECT u.name, EXPAND(u.order_ref) AS o
+FROM users u;
+-- Columns: u.name, o.id, o.total, o.status
 
 -- Vector reference (multi-valued): each referenced row becomes its own result row
-SELECT u.name, EXPAND u.tag_refs AS t
+SELECT u.name, EXPAND(u.tag_refs) AS t
 FROM users u;
--- The tag_refs column is a [TagRef] (vector); EXPAND auto-unnests it.
+-- tag_refs is a [TagRef] vector; EXPAND auto-unnests it.
+-- Columns: u.name, t.id, t.label, t.color  (one row per tag)
 ```
 
 > **Execution note**: `EXPAND` is resolved by the query planner (PR 1.4).  The
-> planner looks up the target table schema via the reference column type and
-> injects the full column list plus an implicit `UNNEST` step when the
-> cardinality is > 1.
+> planner looks up the target table schema via the reference column type,
+> rewrites the alias prefix into qualified column references, and injects an
+> implicit `UNNEST` step when the cardinality is > 1.
 
 #### VIEW AS
 
@@ -702,6 +739,10 @@ projects a new column by applying a primitive expression to the output row.
 - Only primitive expressions: arithmetic, comparisons, `CASE`, `CAST`,
   string functions (`UPPER`, `LOWER`, `SUBSTRING`, `TRIM`, `REPLACE`, …),
   and column references.
+
+**Referencing `EXPAND` columns**: when the `SELECT` list contains
+`EXPAND(ref_col) AS alias`, the expanded columns are available in `VIEW AS`
+via the `alias.column_name` dotted path.
 
 ```sql
 -- Scale score to percentage and display name in upper-case
@@ -726,6 +767,15 @@ VIEW AS (
         WHEN 2 THEN 'shipped'
         ELSE       'unknown'
     END AS status_label
+);
+
+-- Combining EXPAND alias with VIEW AS
+-- EXPAND(u.order_ref) AS o  →  o.id, o.total, o.status
+SELECT u.name, EXPAND(u.order_ref) AS o
+FROM users u
+VIEW AS (
+    UPPER(o.status)  AS status_label,
+    o.total * 1.2    AS total_with_tax
 );
 ```
 

@@ -163,13 +163,30 @@ execution is a Phase 4 task.
 column is a **vector reference** (multi-valued), the expansion also
 auto-unnests the reference so each referenced row becomes its own result row.
 
-Mapped from a function call `EXPAND(col)` or `EXPAND(col) AS prefix` in the
+Mapped from a function call `EXPAND(col)` or `EXPAND(col) AS alias` in the
 SQL text (via `convert_select_item`).  The planner (PR 1.4) resolves the full
-column list and injects the unnest step.
+column list, rewrites alias-prefixed column references, and injects the unnest
+step when needed.
+
+#### Alias as namespace prefix
+When `alias` is `Some(name)`, the alias is a **namespace prefix** for all
+expanded columns.  The prefixed names (`alias.column`) are then usable in
+`GROUP BY`, `HAVING`, and `VIEW AS`:
 
 ```sql
-SELECT u.name, EXPAND u.order_ref AS o FROM users u;
--- → u.name, o.id, o.total, o.status  (one row per order)
+-- EXPAND(my_refs) AS mr  → columns mr.col_a, mr.col_b, …
+SELECT u.name, EXPAND(u.order_ref) AS o FROM users u;
+-- Columns produced: u.name, o.id, o.total, o.status
+
+-- Access in GROUP BY / HAVING
+GROUP BY o.status
+HAVING COUNT(*) > 2
+
+-- Access in VIEW AS
+VIEW AS (
+    UPPER(o.status) AS status_label,
+    o.total * 1.2   AS total_with_tax
+)
 ```
 
 ### `SelectStatement::view_as` — Result Transformation Clause

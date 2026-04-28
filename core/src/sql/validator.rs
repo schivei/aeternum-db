@@ -1218,12 +1218,19 @@ impl<'a> Validator<'a> {
 
 // ── Aggregate detection helper ─────────────────────────────────────────────────
 
-/// Returns `true` if `name` (uppercase) is a standard aggregate function.
+/// Returns `true` if `name` is a standard aggregate function (case-insensitive).
 fn is_aggregate_function(name: &str) -> bool {
-    matches!(
-        name.to_uppercase().as_str(),
-        "COUNT" | "SUM" | "AVG" | "MIN" | "MAX" | "GROUP_CONCAT" | "ARRAY_AGG" | "STRING_AGG"
-    )
+    let aggs = [
+        "COUNT",
+        "SUM",
+        "AVG",
+        "MIN",
+        "MAX",
+        "GROUP_CONCAT",
+        "ARRAY_AGG",
+        "STRING_AGG",
+    ];
+    aggs.iter().any(|agg| name.eq_ignore_ascii_case(agg))
 }
 
 // ── Apply DDL to catalog ───────────────────────────────────────────────────────

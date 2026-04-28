@@ -821,12 +821,35 @@ pub enum SelectItem {
     QualifiedWildcard(String),
     /// An expression, optionally aliased.
     Expr { expr: Expr, alias: Option<String> },
-    /// `EXPAND ref_col [AS alias]`
+    /// `EXPAND(ref_col) [AS alias]`
     ///
-    /// Expands **all** columns from the target of a reference-typed column.
-    /// When the column is a vector reference (multi-valued), the expansion also
-    /// **unnests** the reference so each referenced row becomes its own result
-    /// row.  Only valid in the `SELECT` list.
+    /// Expands **all** columns from the target of a reference-typed column into
+    /// the result set as individual top-level columns.  When the column is a
+    /// vector reference (multi-valued), the expansion also **unnests** the
+    /// reference so each referenced row becomes its own result row.
+    /// Only valid in the `SELECT` list.
+    ///
+    /// ### Alias as a namespace prefix
+    ///
+    /// When an alias is supplied, it acts as a **namespace prefix** for every
+    /// expanded column.  The prefixed names are then accessible by that
+    /// dotted path in any subsequent clause — `GROUP BY`, `HAVING`, and
+    /// `VIEW AS`:
+    ///
+    /// ```text
+    /// EXPAND(my_refs) AS mr
+    ///   → mr.col_a, mr.col_b, …
+    ///
+    /// GROUP BY mr.col_a
+    /// HAVING   COUNT(*) > 1
+    /// VIEW AS  (UPPER(mr.col_a) AS label)
+    /// ```
+    ///
+    /// Without an alias the expanded columns carry their original names
+    /// (unqualified), but using an alias is recommended to avoid ambiguity
+    /// when multiple EXPAND items are present in the same query.
+    ///
+    /// ### Resolution
     ///
     /// The planner (PR 1.4) resolves `EXPAND` to the full column list of the
     /// referenced table and adds an implicit `UNNEST` step when the reference
@@ -837,8 +860,10 @@ pub enum SelectItem {
     Expand {
         /// The reference-typed column to expand.
         expr: Box<Expr>,
-        /// Optional alias prefix applied to all expanded columns
-        /// (e.g. `EXPAND order_ref AS o` → `o.total`, `o.status`, …).
+        /// Optional alias that becomes the **namespace prefix** for all
+        /// expanded columns (e.g. `EXPAND(order_ref) AS o` → columns `o.id`,
+        /// `o.total`, `o.status`, …).  Without an alias the expanded columns
+        /// use their original names.
         alias: Option<String>,
     },
 }
@@ -959,6 +984,21 @@ pub struct SelectStatement {
     /// grouping, ordering, and limiting.  Each item transforms or renames one
     /// output column using a **primitive** expression — aggregate functions and
     /// sub-selects are not permitted (validator enforces this).
+    ///
+    /// ### Referencing EXPAND columns
+    ///
+    /// When the `SELECT` list contains an `EXPAND(col) AS alias` item, the
+    /// expanded columns are accessible inside `VIEW AS` expressions via the
+    /// dotted path `alias.column_name`.  For example:
+    ///
+    /// ```text
+    /// SELECT u.name, EXPAND(u.order_ref) AS o
+    /// FROM users u
+    /// VIEW AS (
+    ///     UPPER(o.status) AS status_label,
+    ///     o.total * 1.2   AS total_with_tax
+    /// )
+    /// ```
     ///
     /// This is an AeternumDB-specific extension; parsing from raw SQL is a
     /// Phase 4 custom-grammar task.
