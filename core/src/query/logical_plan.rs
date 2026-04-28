@@ -344,12 +344,10 @@ impl<'a> LogicalPlanBuilder<'a> {
         alias: Option<&str>,
     ) -> Result<LogicalPlan, PlannerError> {
         let lower = name.to_lowercase();
-        let schema: Option<&TableSchema> = self.catalog.get_table(&lower);
-        let is_flat = if schema.is_none() {
-            false
-        } else {
-            self.flat_tables.contains(&lower)
-        };
+        let _schema: &TableSchema = self.catalog.get_table(&lower).ok_or_else(|| {
+            PlannerError::CatalogError(format!("table not found in catalog: {}", name))
+        })?;
+        let is_flat = self.flat_tables.contains(&lower);
 
         Ok(LogicalPlan::Scan {
             table: lower,
