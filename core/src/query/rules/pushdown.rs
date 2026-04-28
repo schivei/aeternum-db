@@ -173,6 +173,21 @@ fn push_filter_through_join(
             join_type,
             condition,
         },
+        // Predicate spans both sides of the join — promote it to the join
+        // condition so the physical planner can use it for join strategy
+        // selection (e.g. HashJoin on equi-keys).
+        (true, true) => {
+            let merged_condition = match condition {
+                None => Some(predicate),
+                Some(existing) => Some(combine_predicates(existing, predicate)),
+            };
+            LogicalPlan::Join {
+                left: Box::new(push_predicate(left)),
+                right: Box::new(push_predicate(right)),
+                join_type,
+                condition: merged_condition,
+            }
+        }
         _ => LogicalPlan::Filter {
             input: Box::new(LogicalPlan::Join {
                 left: Box::new(push_predicate(left)),
@@ -406,7 +421,7 @@ mod tests {
     }
 
     #[test]
-    fn predicate_stays_above_join_when_cross_table() {
+    fn predicate_promoted_to_join_condition_when_cross_table() {
         let pred = Expr::BinaryOp {
             left: Box::new(col("u", "id")),
             op: BinaryOperator::Eq,
@@ -421,7 +436,18 @@ mod tests {
         let plan = filter_plan(join, pred);
         let rule = PredicatePushdown;
         let optimized = rule.apply(plan);
-        assert!(matches!(optimized, LogicalPlan::Filter { .. }));
+        // A cross-table predicate should be promoted to the join condition
+        // so the physical planner can use it for equi-join key extraction.
+        assert!(
+            matches!(
+                &optimized,
+                LogicalPlan::Join {
+                    condition: Some(_),
+                    ..
+                }
+            ),
+            "expected cross-table predicate promoted to join condition, got {optimized:?}"
+        );
     }
 
     #[test]

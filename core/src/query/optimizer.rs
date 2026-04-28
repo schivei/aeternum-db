@@ -13,7 +13,9 @@
 //! Join reordering based on cardinality estimates is performed separately in
 //! [`reorder_joins`] and called as a post-pass after rule convergence.
 
-use crate::query::logical_plan::{LogicalPlan, SortExpr};
+use crate::query::logical_plan::{
+    AggregateExpr, LogicalPlan, ProjectionItem, SortExpr, ViewAsProjection,
+};
 use crate::query::rules::pushdown::{PredicatePushdown, ProjectionPushdown};
 use crate::query::rules::{OptimizationRule, RuleEngine};
 use crate::query::statistics::StatisticsRegistry;
@@ -141,7 +143,13 @@ fn rewrite_plan_exprs(plan: LogicalPlan, f: fn(Expr) -> Expr) -> LogicalPlan {
         },
         LogicalPlan::Project { input, items } => LogicalPlan::Project {
             input: Box::new(rewrite_plan_exprs(*input, f)),
-            items,
+            items: items
+                .into_iter()
+                .map(|i| ProjectionItem {
+                    expr: f(i.expr),
+                    alias: i.alias,
+                })
+                .collect(),
         },
         LogicalPlan::Join {
             left,
@@ -161,8 +169,14 @@ fn rewrite_plan_exprs(plan: LogicalPlan, f: fn(Expr) -> Expr) -> LogicalPlan {
             having,
         } => LogicalPlan::Aggregate {
             input: Box::new(rewrite_plan_exprs(*input, f)),
-            group_by,
-            aggregates,
+            group_by: group_by.into_iter().map(f).collect(),
+            aggregates: aggregates
+                .into_iter()
+                .map(|a| AggregateExpr {
+                    func: f(a.func),
+                    alias: a.alias,
+                })
+                .collect(),
             having: having.map(f),
         },
         LogicalPlan::Sort { input, order_by } => LogicalPlan::Sort {
@@ -195,7 +209,13 @@ fn rewrite_plan_exprs(plan: LogicalPlan, f: fn(Expr) -> Expr) -> LogicalPlan {
         },
         LogicalPlan::ViewAs { input, items } => LogicalPlan::ViewAs {
             input: Box::new(rewrite_plan_exprs(*input, f)),
-            items,
+            items: items
+                .into_iter()
+                .map(|v| ViewAsProjection {
+                    expr: f(v.expr),
+                    alias: v.alias,
+                })
+                .collect(),
         },
         other => other,
     }

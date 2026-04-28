@@ -297,9 +297,10 @@ impl<'a> LogicalPlanBuilder<'a> {
 
         let base = self.build_from_clause(stmt.from.as_ref())?;
         let filtered = self.apply_where(base, stmt.where_clause.as_ref());
-        let projected = self.apply_projection(filtered, &stmt.columns)?;
-        let grouped = self.apply_group_by(projected, stmt, self.needs_aggregate(stmt));
-        let sorted = apply_sort(grouped, &stmt.order_by);
+        let needs_aggregate = self.needs_aggregate(stmt);
+        let grouped = self.apply_group_by(filtered, stmt, needs_aggregate);
+        let projected = self.apply_projection(grouped, &stmt.columns)?;
+        let sorted = apply_sort(projected, &stmt.order_by);
         let limited = apply_limit(sorted, stmt.limit, stmt.offset);
         let view_as = apply_view_as(limited, stmt.view_as.as_deref())?;
         Ok(view_as)
@@ -460,7 +461,10 @@ impl<'a> LogicalPlanBuilder<'a> {
             }
             SelectItem::QualifiedWildcard(table) => {
                 out.push(ProjectionItem {
-                    expr: Expr::QualifiedWildcard(table.clone()),
+                    expr: Expr::Column {
+                        table: Some(table.clone()),
+                        name: "*".into(),
+                    },
                     alias: None,
                 });
             }
@@ -666,7 +670,11 @@ fn collect_databases(tr: &TableReference, out: &mut HashSet<String>) {
             out.insert(db.to_lowercase());
         }
         TableReference::Named { .. } => {}
-        TableReference::Subquery { .. } => {}
+        TableReference::Subquery { query, .. } => {
+            if let Some(from) = &query.from {
+                collect_databases(from, out);
+            }
+        }
         TableReference::Join { left, right, .. } => {
             collect_databases(left, out);
             collect_databases(right, out);
@@ -815,7 +823,17 @@ mod tests {
         let catalog = make_catalog();
         let stmt = parse_select("SELECT age, COUNT(*) FROM users GROUP BY age");
         let plan = builder(&catalog).build_select(&stmt).unwrap();
-        assert!(matches!(plan, LogicalPlan::Aggregate { .. }));
+        // Correct order: Project(Aggregate(Scan)). Root is Project, child is Aggregate.
+        let contains_aggregate = |p: &LogicalPlan| -> bool {
+            matches!(p, LogicalPlan::Aggregate { .. })
+                || matches!(p, LogicalPlan::Project { input, .. }
+                    if matches!(input.as_ref(), LogicalPlan::Aggregate { .. }))
+        };
+        assert!(
+            contains_aggregate(&plan),
+            "expected Aggregate in plan, got: {:?}",
+            plan
+        );
     }
 
     #[test]

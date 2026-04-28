@@ -314,6 +314,7 @@ mod tests {
             join_type: JoinType::Inner,
             left_keys: vec![],
             right_keys: vec![],
+            residual: None,
             cost: default_cost(500),
         };
         let out = explain_physical(&plan);

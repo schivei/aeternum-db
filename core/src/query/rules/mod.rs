@@ -79,12 +79,11 @@ impl RuleEngine {
     /// sweep through all rules counts as one iteration.
     pub fn optimize(&self, mut plan: LogicalPlan) -> LogicalPlan {
         for _ in 0..self.max_iterations {
-            let before = format!("{plan:?}");
+            let before = plan.clone();
             for rule in &self.rules {
                 plan = rule.apply(plan);
             }
-            let after = format!("{plan:?}");
-            if before == after {
+            if plan == before {
                 break;
             }
         }

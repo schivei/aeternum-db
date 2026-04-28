@@ -133,6 +133,8 @@ pub enum PhysicalPlan {
         left_keys: Vec<Expr>,
         /// Equi-join key expressions on the probe side.
         right_keys: Vec<Expr>,
+        /// Residual (non-equi) predicate applied after the hash probe, if any.
+        residual: Option<Expr>,
         /// Cost annotation.
         cost: NodeCost,
     },
@@ -415,40 +417,42 @@ impl<'a> PhysicalPlanner<'a> {
         let lr = left_phys.cost().estimated_rows;
         let rr = right_phys.cost().estimated_rows;
 
-        let use_hash = lr > 100 || rr > 100;
+        // Only select HashJoin when equi-keys can be extracted from the predicate.
+        // If no equi-keys are found, fall back to NestedLoopJoin with the
+        // original condition.
+        let (lk, rk, residual) = split_join_condition(condition);
+        let has_equi_keys = !lk.is_empty();
+        let use_hash = has_equi_keys && (lr > 100 || rr > 100);
 
         if use_hash {
-            self.make_hash_join(left_phys, right_phys, join_type.clone(), condition, lr, rr)
+            let cpu = self.cost_model.estimate_hash_join_cost(lr, rr);
+            let total = left_phys.cost().total + right_phys.cost().total + cpu;
+            let out_rows = CostModel::estimated_rows(lr * rr / 100, 1.0);
+            PhysicalPlan::HashJoin {
+                left: Box::new(left_phys),
+                right: Box::new(right_phys),
+                join_type: join_type.clone(),
+                left_keys: lk,
+                right_keys: rk,
+                residual,
+                cost: NodeCost {
+                    total,
+                    io: 0.0,
+                    cpu,
+                    estimated_rows: out_rows,
+                },
+            }
         } else {
-            self.make_nested_loop(left_phys, right_phys, join_type.clone(), condition, lr, rr)
-        }
-    }
-
-    fn make_hash_join(
-        &self,
-        left: PhysicalPlan,
-        right: PhysicalPlan,
-        join_type: JoinType,
-        condition: Option<&Expr>,
-        lr: usize,
-        rr: usize,
-    ) -> PhysicalPlan {
-        let cpu = self.cost_model.estimate_hash_join_cost(lr, rr);
-        let total = left.cost().total + right.cost().total + cpu;
-        let out_rows = CostModel::estimated_rows(lr * rr / 100, 1.0);
-        let (lk, rk) = extract_equi_keys(condition);
-        PhysicalPlan::HashJoin {
-            left: Box::new(left),
-            right: Box::new(right),
-            join_type,
-            left_keys: lk,
-            right_keys: rk,
-            cost: NodeCost {
-                total,
-                io: 0.0,
-                cpu,
-                estimated_rows: out_rows,
-            },
+            // Reassemble full condition (equi + residual) for NestedLoopJoin.
+            let nl_condition = reassemble_condition(condition, lk, rk, residual);
+            self.make_nested_loop(
+                left_phys,
+                right_phys,
+                join_type.clone(),
+                nl_condition.as_ref(),
+                lr,
+                rr,
+            )
         }
     }
 
@@ -623,19 +627,63 @@ fn detect_index_predicate(
     }
 }
 
-/// Try to extract equi-join key expressions from a predicate.
+/// Split a join condition into equi-join key pairs and a residual non-equi predicate.
 ///
-/// Returns `(left_keys, right_keys)`.  Falls back to empty vectors when the
-/// predicate is not a simple equality.
-fn extract_equi_keys(condition: Option<&Expr>) -> (Vec<Expr>, Vec<Expr>) {
+/// Returns `(left_keys, right_keys, residual)`.
+/// - For a simple `col_a = col_b` predicate the residual is `None`.
+/// - For anything that is not a simple equality the predicate is placed entirely
+///   in the residual and the key vectors are empty.
+fn split_join_condition(condition: Option<&Expr>) -> (Vec<Expr>, Vec<Expr>, Option<Expr>) {
     use crate::sql::ast::BinaryOperator;
     match condition {
         Some(Expr::BinaryOp {
             left,
             op: BinaryOperator::Eq,
             right,
-        }) => (vec![*left.clone()], vec![*right.clone()]),
-        _ => (vec![], vec![]),
+        }) => (vec![*left.clone()], vec![*right.clone()], None),
+        Some(other) => (vec![], vec![], Some(other.clone())),
+        None => (vec![], vec![], None),
+    }
+}
+
+/// Reassemble a condition from equi-key pairs and a residual.
+///
+/// Used when falling back to NestedLoopJoin so that the original full predicate
+/// is preserved.
+fn reassemble_condition(
+    original: Option<&Expr>,
+    lk: Vec<Expr>,
+    rk: Vec<Expr>,
+    residual: Option<Expr>,
+) -> Option<Expr> {
+    use crate::sql::ast::BinaryOperator;
+    if lk.is_empty() {
+        // No equi-keys were extracted; use original condition directly.
+        return original.cloned().or(residual);
+    }
+    let equi = lk.into_iter().zip(rk).fold(None::<Expr>, |acc, (l, r)| {
+        let eq = Expr::BinaryOp {
+            left: Box::new(l),
+            op: BinaryOperator::Eq,
+            right: Box::new(r),
+        };
+        Some(match acc {
+            None => eq,
+            Some(prev) => Expr::BinaryOp {
+                left: Box::new(prev),
+                op: BinaryOperator::And,
+                right: Box::new(eq),
+            },
+        })
+    });
+    match (equi, residual) {
+        (None, r) => r,
+        (e, None) => e,
+        (Some(e), Some(r)) => Some(Expr::BinaryOp {
+            left: Box::new(e),
+            op: BinaryOperator::And,
+            right: Box::new(r),
+        }),
     }
 }
 
@@ -706,6 +754,43 @@ mod tests {
     fn hash_join_for_large_tables() {
         let reg = make_registry();
         let p = planner(&reg);
+        // Provide an equi-join condition so HashJoin can be selected.
+        let condition = Expr::BinaryOp {
+            left: Box::new(Expr::Column {
+                table: Some("users".into()),
+                name: "id".into(),
+            }),
+            op: crate::sql::ast::BinaryOperator::Eq,
+            right: Box::new(Expr::Column {
+                table: Some("orders".into()),
+                name: "user_id".into(),
+            }),
+        };
+        let logical = LogicalPlan::Join {
+            left: Box::new(LogicalPlan::Scan {
+                table: "users".into(),
+                alias: None,
+                columns: None,
+                filter: None,
+            }),
+            right: Box::new(LogicalPlan::Scan {
+                table: "orders".into(),
+                alias: None,
+                columns: None,
+                filter: None,
+            }),
+            join_type: JoinType::Inner,
+            condition: Some(condition),
+        };
+        let phys = p.lower(&logical);
+        assert!(matches!(phys, PhysicalPlan::HashJoin { .. }));
+    }
+
+    #[test]
+    fn no_equi_keys_uses_nested_loop_for_large_tables() {
+        // No condition → no equi-keys → must use NestedLoopJoin even for large tables.
+        let reg = make_registry();
+        let p = planner(&reg);
         let logical = LogicalPlan::Join {
             left: Box::new(LogicalPlan::Scan {
                 table: "users".into(),
@@ -723,7 +808,11 @@ mod tests {
             condition: None,
         };
         let phys = p.lower(&logical);
-        assert!(matches!(phys, PhysicalPlan::HashJoin { .. }));
+        assert!(
+            matches!(phys, PhysicalPlan::NestedLoopJoin { .. }),
+            "expected NestedLoopJoin when no equi-keys, got: {:?}",
+            phys
+        );
     }
 
     #[test]
