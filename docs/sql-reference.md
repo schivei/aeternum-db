@@ -48,8 +48,16 @@ implementation is based on **SQL-92** with a subset of common SQL extensions.
    - [CREATE USER](#create-user)
    - [DROP USER](#drop-user)
    - [CREATE TYPE](#create-type)
+   - [DROP TYPE](#drop-type)
+   - [CREATE ENUM](#create-enum)
+   - [DROP ENUM](#drop-enum)
    - [GRANT / REVOKE](#grant--revoke)
 9. [Transaction Control](#transaction-control)
+   - [BEGIN TRANSACTION / START TRANSACTION](#begin-transaction--start-transaction)
+   - [COMMIT](#commit)
+   - [ROLLBACK](#rollback)
+   - [SAVEPOINT](#savepoint)
+   - [Nested Transaction Rules](#nested-transaction-rules-lifo-enforcement)
 10. [Column Extensions](#column-extensions)
     - [Text Directive (Multilingual)](#text-directive-multilingual)
     - [Terms Directives](#terms-directives)
@@ -138,7 +146,56 @@ implementation is based on **SQL-92** with a subset of common SQL extensions.
 |-----------------------|----------------------------------------|
 | `BOOLEAN` / `BOOL`    | `TRUE` / `FALSE`                       |
 | `UUID` / `GUID`       | 128-bit universally-unique identifier  |
-| `ENUM('a', 'b', ...)` | Enumerated string values               |
+| `ENUM('a', 'b', ...)` | Inline anonymous enumeration (see below) |
+
+### Enumeration Types
+
+AeternumDB supports two forms of enum:
+
+#### Inline (Anonymous) Enum
+
+Declared directly on the column.  The system automatically assigns sequential
+integer values (`0, 1, 2, …`):
+
+```sql
+CREATE TABLE orders (
+  status ENUM('pending', 'shipped', 'delivered', 'cancelled')
+);
+```
+
+#### FLAG Enum (Bitmask)
+
+When the `FLAG` keyword is used, values are assigned as powers-of-two so that
+combinations can be stored via bitwise OR.  A `NONE` variant (value `0`) is
+automatically added if not explicitly listed:
+
+```sql
+CREATE TABLE files (
+  permissions ENUM FLAG ('read', 'write', 'admin')
+  -- NONE = 0, read = 1, write = 2, admin = 4
+);
+```
+
+Bitwise operators (`&`, `|`, `^`) work naturally with FLAG columns:
+
+```sql
+SELECT * FROM files WHERE permissions & 3 = 3;  -- has both read and write
+```
+
+#### Named Enum (`CREATE ENUM`)
+
+Named enums are **reusable catalog objects** created with `CREATE ENUM` and
+referenced via the column type name.  They are protected from deletion while
+any column references them.  See [CREATE ENUM](#create-enum) below.
+
+```sql
+CREATE ENUM FLAG permissions (NONE, 'read', 'write', 'admin');
+
+CREATE TABLE files (
+  path        VARCHAR(1024) NOT NULL,
+  access_bits permissions            -- references the named enum
+);
+```
 
 ### Vector Types
 
@@ -1197,6 +1254,73 @@ CREATE TYPE contact_info AS (
 
 ---
 
+### DROP TYPE
+
+Removes a user-defined composite type.  The type **cannot be dropped** while any
+column still references it — the validator returns a `TypeInUse` error.
+
+> **Scaffolding** — parsed; enforcement is a future phase.
+
+```sql
+DROP TYPE [IF EXISTS] type_name;
+```
+
+---
+
+### CREATE ENUM
+
+Creates a **named, reusable enumeration type** that can be shared across multiple
+tables.  The system automatically assigns immutable numeric values to variants —
+users supply only the names.
+
+| Enum kind  | Value assignment                                    |
+|------------|-----------------------------------------------------|
+| Regular    | Sequential integers: `0, 1, 2, …`                  |
+| FLAG       | `NONE = 0`; others get powers of two: `1, 2, 4, …` |
+
+The enum **cannot be dropped** while any column references it.
+
+```sql
+-- Regular enum
+CREATE ENUM [IF NOT EXISTS] order_status ('pending', 'shipped', 'delivered', 'cancelled');
+
+-- FLAG (bitmask) enum — combines values with bitwise OR
+CREATE ENUM FLAG [IF NOT EXISTS] permissions (NONE, 'read', 'write', 'admin');
+```
+
+Reference the named enum as a column type:
+
+```sql
+CREATE TABLE orders (
+  id     INTEGER PRIMARY KEY AUTO_INCREMENT,
+  status order_status NOT NULL    -- references the named enum
+);
+
+CREATE TABLE files (
+  path   VARCHAR(1024),
+  access permissions              -- FLAG enum; store bitmask combos
+);
+```
+
+> **AST node**: `CreateEnumStatement { name, variants, flag, if_not_exists }`.
+> Variant values are auto-assigned — they cannot be overridden in SQL.
+
+---
+
+### DROP ENUM
+
+Removes a named enumeration type.  Like `DROP TYPE`, the operation is **blocked**
+when any table column still references the enum (validator error `EnumInUse`).
+
+> **Scaffolding** — parsed; enforcement is a future phase.
+
+```sql
+DROP ENUM [IF EXISTS] enum_name;
+```
+
+---
+
+
 ### GRANT / REVOKE
 
 Column-level grants are supported:
@@ -1218,27 +1342,58 @@ REVOKE SELECT (salary) ON employees FROM hr_readonly;
 
 ## Transaction Control
 
-AeternumDB supports standard SQL transaction control statements (scaffolding for future execution):
+AeternumDB supports standard SQL transaction control statements plus an extended
+**named nested-transaction** model (scaffolding — parsed; execution is PR 1.7):
 
 ### BEGIN TRANSACTION / START TRANSACTION
 
 ```sql
+-- Plain transaction
 BEGIN [TRANSACTION] [READ ONLY]
   [ISOLATION LEVEL { READ UNCOMMITTED | READ COMMITTED
                    | REPEATABLE READ  | SERIALIZABLE }];
 START TRANSACTION [READ ONLY] [ISOLATION LEVEL ...];
+
+-- Named transaction (opens a nested transaction inside an active one)
+BEGIN TRANSACTION transaction_name;
 ```
+
+Issuing `BEGIN` while a transaction is already open starts a **nested
+(savepoint-like) transaction**.  Each name must be unique within the session.
 
 ### COMMIT
 
 ```sql
+-- Commit the innermost open transaction
 COMMIT [TRANSACTION];
+
+-- Commit a specific named transaction (and everything nested inside it)
+COMMIT TRANSACTION transaction_name;
+
+-- Commit all open transactions at once
+COMMIT ALL;
+
+-- Commit and immediately open a new transaction
+COMMIT [TRANSACTION] AND CHAIN;
 ```
 
 ### ROLLBACK
 
 ```sql
-ROLLBACK [TRANSACTION] [TO SAVEPOINT savepoint_name];
+-- Roll back the innermost open transaction
+ROLLBACK [TRANSACTION];
+
+-- Roll back a specific named transaction (and everything nested inside it)
+ROLLBACK TRANSACTION transaction_name;
+
+-- Roll back all open transactions at once
+ROLLBACK ALL;
+
+-- Roll back to a savepoint (not a named transaction)
+ROLLBACK [TRANSACTION] TO SAVEPOINT savepoint_name;
+
+-- Roll back and immediately open a new transaction
+ROLLBACK [TRANSACTION] AND CHAIN;
 ```
 
 ### SAVEPOINT
@@ -1248,7 +1403,39 @@ SAVEPOINT savepoint_name;
 RELEASE SAVEPOINT savepoint_name;
 ```
 
-**Example:**
+### Nested Transaction Rules (LIFO enforcement)
+
+The validator enforces **Last-In-First-Out** nesting order:
+- You cannot commit or roll back a transaction that still has open nested
+  transactions inside it — doing so returns a `TransactionNestingViolation` error.
+- Transaction names must be unique within the session; reusing an active name
+  returns `TransactionNameConflict`.
+- Committing / rolling back a transaction name that was never opened returns
+  `TransactionNotFound`.
+
+**Example — nested named transactions:**
+
+```sql
+BEGIN TRANSACTION outer;
+  INSERT INTO accounts (id, balance) VALUES (1, 1000);
+
+  BEGIN TRANSACTION inner;
+    SAVEPOINT sp1;
+    UPDATE accounts SET balance = balance - 100 WHERE id = 1;
+    ROLLBACK TO SAVEPOINT sp1;   -- undo the debit without closing inner
+  COMMIT TRANSACTION inner;      -- close inner first
+
+COMMIT TRANSACTION outer;        -- now outer can be closed
+
+-- AND CHAIN: commit and start a fresh transaction in one step
+BEGIN TRANSACTION;
+INSERT INTO logs (msg) VALUES ('done');
+COMMIT AND CHAIN;
+INSERT INTO logs (msg) VALUES ('next');
+COMMIT;
+```
+
+**Example — ON COMMIT for temporary tables:**
 
 ```sql
 BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
@@ -1573,17 +1760,20 @@ The following SQL features are **not yet supported** or are **partially implemen
 | Transaction execution                       | Parsed; not yet executed         |
 | Temporary table auto-drop enforcement       | Future execution layer           |
 | Materialized view refresh                  | Future execution layer           |
-| Reference type storage + querying           | Future execution layer           |
-| `objid` generation (cluster-unique ID)      | Future execution layer           |
+| Reference type storage + querying           | PR 1.5 (executor)                |
+| `ON UPDATE` / `ON DELETE` enforcement       | PR 1.5 (executor)                |
+| `CREATE ENUM` / `DROP ENUM` catalog storage | PR 1.6 (catalog)                 |
+| `EnumRef` type resolution at runtime        | PR 1.6 (catalog)                 |
+| `objid` generation (cluster-unique ID)      | Phase 3 (distribution)           |
 | Temporal / versioned table mechanics        | Future execution layer           |
-| `FOR SYSTEM_TIME` historical queries        | Future execution layer           |
+| `FOR SYSTEM_TIME` historical queries        | Phase 5                          |
 | Backup / restore execution                  | Future execution layer           |
 | `CREATE USER` / `DROP USER` execution       | Future execution layer           |
-| `CREATE TYPE` (UTD) execution               | Future execution layer           |
+| `CREATE TYPE` / `DROP TYPE` execution       | Future execution layer           |
 | Text Directive locale-keyed storage         | Future execution layer           |
 | Terms Directive storage + retrieval         | Future execution layer           |
 | Vector element-level DML                    | Future execution layer           |
-| Full-text search syntax                     | Extension                        |
+| Full-text search execution                  | Extension                        |
 | JSON path expressions                       | Extension                        |
 | `RETURNING` clause                          | Phase 3                          |
 | `ON CONFLICT` / `UPSERT`                    | Phase 3                          |
@@ -1597,6 +1787,9 @@ The following SQL features are **not yet supported** or are **partially implemen
 | `FILTER BY` keyword in SQL JOIN             | Phase 4 (ON mapped to filter_by now)  |
 | FLAT table join enforcement                 | Future execution layer           |
 | Cross-database join rejection               | Future execution layer           |
+| FLAG enum bitmask storage + evaluation      | PR 1.9 (data types)              |
+| EXPAND / VIEW AS query-planner resolution   | PR 1.4 (planner)                 |
+| Path/chain join resolution                  | PR 1.4 (planner)                 |
 
 ### Known Dialect Edge Cases
 

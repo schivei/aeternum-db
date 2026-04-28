@@ -264,9 +264,42 @@ Requires `FULLTEXT` or `TRIGRAM` index on the target columns.
 `REVOKE … FROM role` — `GrantStatement::columns` / `RevokeStatement::columns`
 carry column-level permission lists.  Enforcement is a Phase 6 task.
 
-### Transaction Control
-`BEGIN [TRANSACTION]`, `COMMIT [WORK]`, `ROLLBACK [WORK]`, `SAVEPOINT`,
-`RELEASE SAVEPOINT` — parsed to AST; execution is PR 1.7.
+### Transaction Control — Named / Nested Transactions
+`BEGIN [TRANSACTION [name]]`, `COMMIT [TRANSACTION [name] | ALL]`,
+`ROLLBACK [TRANSACTION [name] | ALL | TO SAVEPOINT name]`,
+`COMMIT AND CHAIN`, `ROLLBACK AND CHAIN`, `SAVEPOINT`, `RELEASE SAVEPOINT`
+— all parsed to AST; execution is PR 1.7.
+
+Nested transaction AST nodes:
+- `BeginTransactionStatement { name: Option<String>, chain: bool, … }`
+- `CommitStatement { scope: CommitScope, chain: bool }` where `CommitScope` is
+  `CurrentTransaction | Named(String) | All`.
+- `RollbackStatement { scope: RollbackScope, chain: bool }` where `RollbackScope`
+  is `CurrentTransaction | Named(String) | All | ToSavepoint(String)`.
+
+Semantic validator enforces LIFO nesting order at parse time:
+- `TransactionNestingViolation` — attempt to close a transaction that has inner
+  open transactions.
+- `TransactionNameConflict` — reuse of an active transaction name.
+- `TransactionNotFound` — commit/rollback of an unknown transaction name.
+
+### CREATE ENUM / DROP ENUM
+`CREATE ENUM [FLAG] [IF NOT EXISTS] name (variant, ...)` →
+`CreateEnumStatement { name, variants: Vec<EnumVariant>, flag, if_not_exists }`.
+`DROP ENUM [IF EXISTS] name` → `DropEnumStatement { name, if_exists }`.
+
+Named enums are catalog objects and **cannot be dropped while any column
+references them** — the validator returns `EnumInUse`.
+
+### ON UPDATE / ON DELETE for Reference Columns
+`ReferentialAction` enum: `Cascade | SetNull | SetDefault | Restrict | NoAction`.
+`ColumnDef` carries `on_update: Option<ReferentialAction>` and
+`on_delete: Option<ReferentialAction>`.
+
+Actions are parsed from a column-level `REFERENCES table ON DELETE … ON UPDATE …`
+clause.  Specifying referential actions on a non-reference column returns
+`AstError::Invalid`.  Cascade execution is PR 1.5.
+
 
 ### Semantic Validator (in-memory)
 `Validator` + `Catalog` check:
@@ -291,7 +324,12 @@ carry column-level permission lists.  Enforcement is a Phase 6 task.
 - [x] FOREIGN KEY rejected with helpful message
 - [x] All identifiers normalized to lowercase
 - [x] Syntax errors with helpful messages
-- [x] 107 tests pass
+- [x] Named / nested transactions with LIFO validator enforcement
+- [x] CREATE ENUM / DROP ENUM with EnumInUse guard
+- [x] ON UPDATE / ON DELETE on reference columns (`ReferentialAction`)
+- [x] EXPAND operator with alias namespace prefix
+- [x] VIEW AS clause with aggregate/subquery guard
+- [x] 117 tests pass
 - [x] No clippy warnings; formatted with rustfmt
 
 ---
@@ -307,11 +345,14 @@ carry column-level permission lists.  Enforcement is a Phase 6 task.
 | Work Item | Target PR |
 |-----------|-----------|
 | Query planning for path joins, UNNEST, FLAT, filter_by | PR 1.4 |
+| EXPAND / VIEW AS resolution in query planner | PR 1.4 |
 | Execution of all statement types | PR 1.5 |
-| Persistent catalog with multi-DB/schema, objid | PR 1.6 |
-| FLAG enum bitmask storage, bitwise operator evaluation | PR 1.9 |
 | `ON UPDATE` / `ON DELETE` referential action enforcement | PR 1.5 |
 | `ON UPDATE` / `ON DELETE` cascade execution | PR 1.5 |
+| Persistent catalog with multi-DB/schema, objid | PR 1.6 |
+| `CREATE ENUM` / `DROP ENUM` catalog storage | PR 1.6 |
+| `EnumRef` type resolution at runtime | PR 1.6 |
+| FLAG enum bitmask storage, bitwise operator evaluation | PR 1.9 |
 | `FILTER BY` keyword in SQL grammar | Phase 4 |
 | `CREATE FLAT TABLE` keyword in SQL grammar | Phase 4 |
 | `FOR SYSTEM_TIME AS OF` historical queries | Phase 5 |
