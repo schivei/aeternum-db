@@ -145,11 +145,11 @@ pub enum DataType {
     UnsignedBigInt,
     /// `CHAR(n)` — fixed-length character string.
     Char(Option<u64>),
-    /// MySQL `TINYTEXT`.
+    /// Very short text column (up to 255 bytes); alias `TINYTEXT`.
     TinyText,
-    /// MySQL `MEDIUMTEXT`.
+    /// Medium-length text column (up to 16 MB); alias `MEDIUMTEXT`.
     MediumText,
-    /// MySQL `LONGTEXT`.
+    /// Long text column (up to 4 GB); alias `LONGTEXT`.
     LongText,
     /// `TIME` — time of day without a date component.
     Time,
@@ -206,11 +206,11 @@ pub enum DataType {
     Varbinary(Option<u64>),
     /// `BLOB(n)` — binary large object.
     Blob(Option<u64>),
-    /// MySQL `TINYBLOB`.
+    /// Very short binary large object (up to 255 bytes); alias `TINYBLOB`.
     TinyBlob,
-    /// MySQL `MEDIUMBLOB`.
+    /// Medium-length binary large object (up to 16 MB); alias `MEDIUMBLOB`.
     MediumBlob,
-    /// MySQL `LONGBLOB`.
+    /// Long binary large object (up to 4 GB); alias `LONGBLOB`.
     LongBlob,
     /// A vector of values of the given element type: `[DataType]`.
     /// Elements can be any base type, e.g. `[INTEGER]`, `[VARCHAR(100)]`.
@@ -354,7 +354,7 @@ pub enum BinaryOperator {
     Like,
     /// `NOT LIKE`.
     NotLike,
-    /// `ILIKE` — case-insensitive wildcard match (PostgreSQL / AeternumDB).
+    /// `ILIKE` — case-insensitive wildcard match (`%`, `_`).
     ILike,
     /// `NOT ILIKE`.
     NotILike,
@@ -363,11 +363,11 @@ pub enum BinaryOperator {
     /// `NOT SIMILAR TO`.
     NotSimilarTo,
     // ── Regular expression ────────────────────────────────────────────────
-    /// `REGEXP` / `RLIKE` — case-sensitive regex match (MySQL-style).
+    /// `REGEXP` / `RLIKE` — case-sensitive regex match.
     Regexp,
     /// `NOT REGEXP` / `NOT RLIKE`.
     NotRegexp,
-    /// `~` — case-sensitive POSIX regex match (PostgreSQL-style).
+    /// `~` — case-sensitive POSIX regex match.
     RegexpMatch,
     /// `~*` — case-insensitive POSIX regex match.
     RegexpIMatch,
@@ -387,7 +387,7 @@ pub enum BinaryOperator {
     /// `>>` — right shift.
     ShiftRight,
     // ── String concatenation ─────────────────────────────────────────────
-    /// `||` — string concatenation (SQL standard / PostgreSQL).
+    /// `||` — string concatenation (SQL standard).
     StringConcat,
     // ── Reverse pattern matching ─────────────────────────────────────────
     /// `pattern REVLIKE string` — reverse LIKE: the **left** side is the
@@ -517,7 +517,7 @@ pub enum TrimWhereField {
 /// Search modifier for [`Expr::MatchAgainst`].
 #[derive(Debug, Clone, PartialEq)]
 pub enum TextSearchModifier {
-    /// `IN NATURAL LANGUAGE MODE` (default, MySQL-style).
+    /// `IN NATURAL LANGUAGE MODE` (default full-text mode).
     NaturalLanguage,
     /// `IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION`.
     NaturalLanguageWithExpansion,
@@ -545,10 +545,10 @@ pub enum IndexType {
     Brin,
     /// Bloom filter — probabilistic; low false-negative rate.
     Bloom,
-    /// MySQL-style `FULLTEXT` index (uses inverted word lists).
+    /// Full-text index using inverted word lists with stemming and stop-words.
     FullText,
-    /// Trigram index (`pg_trgm`-style) — fast `LIKE`/`REGEXP` substring
-    /// search by storing all 3-character substrings of text values.
+    /// Trigram index — fast `LIKE`/`REGEXP` substring search by storing all
+    /// 3-character substrings of text values.
     Trigram,
     /// Any other index type forwarded as a string.
     Other(String),
@@ -727,13 +727,13 @@ pub enum Expr {
     // ── Full-text search ──────────────────────────────────────────────────
     /// `MATCH (col1, col2, …) AGAINST ('pattern' [modifier])`.
     ///
-    /// MySQL-style full-text search.  Column names must reference indexed
+    /// Full-text search expression.  Column names must reference indexed
     /// full-text or trigram columns.  Use [`TextSearchModifier::Boolean`]
     /// for boolean-mode queries (`+word -word "phrase" word*`).
     ///
-    /// AeternumDB also supports the `@@` operator for PostgreSQL-compatible
-    /// `tsquery` / `tsvector` style search; that is mapped to this node with
-    /// `modifier: None` and the pattern in `match_value`.
+    /// AeternumDB also supports the `@@` operator for `tsquery`/`tsvector`
+    /// style search; that is mapped to this node with `modifier: None` and
+    /// the pattern in `match_value`.
     MatchAgainst {
         /// Columns to search (must have a FULLTEXT or TRIGRAM index).
         columns: Vec<String>,
@@ -2336,6 +2336,27 @@ pub fn convert_expr(expr: sp::Expr) -> Result<Expr, AstError> {
                 None => None,
             },
         }),
+        // `REGEXP` / `RLIKE` and their negations are parsed by sqlparser as
+        // `Expr::RLike { regexp, negated, expr, pattern }` rather than as a
+        // `BinaryOp`. Map them to the corresponding `BinaryOperator` variants.
+        sp::Expr::RLike {
+            negated,
+            expr,
+            pattern,
+            regexp,
+        } => {
+            let op = match (regexp, negated) {
+                (true, false) => BinaryOperator::Regexp,
+                (true, true) => BinaryOperator::NotRegexp,
+                (false, false) => BinaryOperator::Like, // RLIKE without REGEXP flag acts as LIKE
+                (false, true) => BinaryOperator::NotLike,
+            };
+            Ok(Expr::BinaryOp {
+                left: Box::new(convert_expr(*expr)?),
+                op,
+                right: Box::new(convert_expr(*pattern)?),
+            })
+        }
         other => Err(AstError::Unsupported(format!(
             "expression not supported: {other}"
         ))),

@@ -28,7 +28,7 @@ use sqlparser::dialect::Dialect;
 ///   is valid when quoted).
 /// - Nested block comments (`/* /* */ */`) are supported.
 /// - Double-quote (`"`) and backtick (`` ` ``) are identifier quoting characters.
-/// - Backticks allow using SQL keywords as identifiers (MySQL-style).
+/// - Backticks allow using SQL keywords as identifiers.
 #[derive(Debug, Default)]
 pub struct AeternumDialect;
 
@@ -59,9 +59,20 @@ impl Dialect for AeternumDialect {
         true
     }
 
-    /// Support backtick (`` ` ``) as an identifier quoting character (MySQL-style)
-    /// in addition to the standard double-quote.
+    /// Support backtick (`` ` ``) as an identifier quoting character in
+    /// addition to the standard double-quote.
     fn is_delimited_identifier_start(&self, ch: char) -> bool {
         ch == '"' || ch == '`'
+    }
+
+    /// Enable bitwise shift operators (`<<` and `>>`).
+    fn supports_bitwise_shift_operators(&self) -> bool {
+        true
+    }
+
+    /// Enable `MATCH (cols) AGAINST (expr [modifier])` full-text search
+    /// expression syntax.
+    fn supports_match_against(&self) -> bool {
+        true
     }
 }

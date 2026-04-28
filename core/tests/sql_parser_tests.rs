@@ -1860,7 +1860,7 @@ fn test_bitwise_operators() {
         ("SELECT a & b FROM t", BinaryOperator::BitwiseAnd),
         ("SELECT a | b FROM t", BinaryOperator::BitwiseOr),
         ("SELECT a ^ b FROM t", BinaryOperator::BitwiseXor),
-        // Bit-shift operators (parsed as PGBitwiseShiftLeft/Right internally)
+        // Bit-shift operators (`<<` and `>>`).
         ("SELECT a << 2 FROM t", BinaryOperator::ShiftLeft),
         ("SELECT a >> 2 FROM t", BinaryOperator::ShiftRight),
     ];
@@ -1904,6 +1904,14 @@ fn test_bitwise_not_unary() {
 #[test]
 fn test_regex_operators() {
     let cases: &[(&str, BinaryOperator)] = &[
+        (
+            "SELECT a FROM t WHERE a REGEXP 'pat'",
+            BinaryOperator::Regexp,
+        ),
+        (
+            "SELECT a FROM t WHERE a NOT REGEXP 'pat'",
+            BinaryOperator::NotRegexp,
+        ),
         ("SELECT a FROM t WHERE a ILIKE 'pat'", BinaryOperator::ILike),
         (
             "SELECT a FROM t WHERE a NOT ILIKE 'pat'",
@@ -1954,8 +1962,8 @@ fn test_string_concat_operator() {
 }
 
 #[test]
-fn test_pg_regex_operators() {
-    // Test PostgreSQL-style POSIX regex operators which are supported by the parser.
+fn test_posix_regex_operators() {
+    // POSIX tilde regex operators: ~ !~ ~* !~*
     let stmt = parser()
         .parse_one("SELECT id FROM t WHERE name ~ 'pat'")
         .unwrap();
@@ -1975,8 +1983,7 @@ fn test_pg_regex_operators() {
 
 #[test]
 fn test_match_against_ast() {
-    // MATCH ... AGAINST requires MySQL dialect; instead verify the AST variant
-    // is correctly constructed and validated.
+    // Verify the MatchAgainst AST variant is correctly constructed and validated.
     use aeternumdb_core::sql::ast::SelectStatement;
 
     let stmt = Statement::Select(Box::new(SelectStatement {
@@ -2474,7 +2481,10 @@ fn test_enum_bitwise_comparison_parses() {
             assert_eq!(op, &BinaryOperator::Eq);
             assert!(matches!(
                 left.as_ref(),
-                Expr::BinaryOp { op: BinaryOperator::BitwiseAnd, .. }
+                Expr::BinaryOp {
+                    op: BinaryOperator::BitwiseAnd,
+                    ..
+                }
             ));
         }
         other => panic!("expected outer Eq BinaryOp, got: {other:?}"),
