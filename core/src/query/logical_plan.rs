@@ -454,8 +454,17 @@ impl<'a> LogicalPlanBuilder<'a> {
         unnest_queue: &mut Vec<(Expr, Option<String>)>,
     ) -> Result<(), PlannerError> {
         match item {
-            SelectItem::Wildcard | SelectItem::QualifiedWildcard(_) => {
-                // Retain all columns; no explicit projection needed.
+            SelectItem::Wildcard => {
+                out.push(ProjectionItem {
+                    expr: Expr::Wildcard,
+                    alias: None,
+                });
+            }
+            SelectItem::QualifiedWildcard(table) => {
+                out.push(ProjectionItem {
+                    expr: Expr::QualifiedWildcard(table.clone()),
+                    alias: None,
+                });
             }
             SelectItem::Expr { expr, alias } => {
                 out.push(ProjectionItem {
