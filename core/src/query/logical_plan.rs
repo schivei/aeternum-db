@@ -382,17 +382,13 @@ impl<'a> LogicalPlanBuilder<'a> {
             left: Box::new(left_plan),
             right: Box::new(right_plan),
             join_type: join_type.clone(),
-            condition: None,
+            // Store the ON condition directly in the join so outer-join
+            // semantics are preserved.  A post-join WHERE filter is added
+            // separately by apply_where.
+            condition: filter_by.cloned(),
         };
 
-        if let Some(pred) = filter_by {
-            Ok(LogicalPlan::Filter {
-                input: Box::new(join_node),
-                predicate: pred.clone(),
-            })
-        } else {
-            Ok(join_node)
-        }
+        Ok(join_node)
     }
 
     // ── WHERE ─────────────────────────────────────────────────────────────
@@ -633,9 +629,61 @@ fn collect_aggregates(columns: &[SelectItem]) -> Vec<AggregateExpr> {
 /// Returns `true` if `expr` contains a call to an aggregate function.
 fn contains_aggregate(expr: &Expr) -> bool {
     match expr {
-        Expr::Function { name, .. } => is_agg_fn(name),
+        Expr::Function { name, args, .. } => is_agg_fn(name) || args.iter().any(contains_aggregate),
         Expr::BinaryOp { left, right, .. } => contains_aggregate(left) || contains_aggregate(right),
-        _ => false,
+        Expr::UnaryOp { expr, .. } | Expr::Cast { expr, .. } => contains_aggregate(expr),
+        Expr::IsNull { expr, .. } => contains_aggregate(expr),
+        Expr::Between {
+            expr, low, high, ..
+        } => contains_aggregate(expr) || contains_aggregate(low) || contains_aggregate(high),
+        Expr::InList { expr, list, .. } => {
+            contains_aggregate(expr) || list.iter().any(contains_aggregate)
+        }
+        Expr::Case {
+            operand,
+            conditions,
+            else_result,
+        } => {
+            operand.as_ref().is_some_and(|e| contains_aggregate(e))
+                || conditions
+                    .iter()
+                    .any(|(w, t)| contains_aggregate(w) || contains_aggregate(t))
+                || else_result.as_ref().is_some_and(|e| contains_aggregate(e))
+        }
+        Expr::ArrayOp { expr, right, .. } => contains_aggregate(expr) || contains_aggregate(right),
+        Expr::Substring {
+            expr,
+            from_pos,
+            len,
+        } => {
+            contains_aggregate(expr)
+                || from_pos.as_ref().is_some_and(|e| contains_aggregate(e))
+                || len.as_ref().is_some_and(|e| contains_aggregate(e))
+        }
+        Expr::Position { substr, in_expr } => {
+            contains_aggregate(substr) || contains_aggregate(in_expr)
+        }
+        Expr::Trim {
+            expr, trim_what, ..
+        } => contains_aggregate(expr) || trim_what.as_ref().is_some_and(|e| contains_aggregate(e)),
+        Expr::Overlay {
+            expr,
+            overlay_what,
+            from_pos,
+            for_len,
+        } => {
+            contains_aggregate(expr)
+                || contains_aggregate(overlay_what)
+                || contains_aggregate(from_pos)
+                || for_len.as_ref().is_some_and(|e| contains_aggregate(e))
+        }
+        // Leaf nodes — no child expressions that can contain an aggregate.
+        Expr::Literal(_)
+        | Expr::Column { .. }
+        | Expr::Wildcard
+        | Expr::MatchAgainst { .. }
+        | Expr::InSubquery { .. }
+        | Expr::Subquery(_) => false,
     }
 }
 
@@ -866,5 +914,45 @@ mod tests {
             offset: 0,
         };
         assert_eq!(plan.estimated_rows(), 42);
+    }
+
+    #[test]
+    fn contains_aggregate_detects_nested_count() {
+        // -COUNT(*) — aggregate inside UnaryOp
+        let neg_count = Expr::UnaryOp {
+            op: crate::sql::ast::UnaryOperator::Minus,
+            expr: Box::new(Expr::Function {
+                name: "COUNT".into(),
+                args: vec![Expr::Wildcard],
+                distinct: false,
+            }),
+        };
+        assert!(contains_aggregate(&neg_count));
+    }
+
+    #[test]
+    fn contains_aggregate_detects_inside_cast() {
+        // CAST(COUNT(*) AS BIGINT)
+        let cast_count = Expr::Cast {
+            expr: Box::new(Expr::Function {
+                name: "SUM".into(),
+                args: vec![Expr::Column {
+                    table: None,
+                    name: "price".into(),
+                }],
+                distinct: false,
+            }),
+            data_type: crate::sql::ast::DataType::BigInt,
+        };
+        assert!(contains_aggregate(&cast_count));
+    }
+
+    #[test]
+    fn contains_aggregate_false_for_plain_column() {
+        let col = Expr::Column {
+            table: None,
+            name: "age".into(),
+        };
+        assert!(!contains_aggregate(&col));
     }
 }

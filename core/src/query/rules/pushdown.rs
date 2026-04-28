@@ -173,19 +173,33 @@ fn push_filter_through_join(
             join_type,
             condition,
         },
-        // Predicate spans both sides of the join — promote it to the join
-        // condition so the physical planner can use it for join strategy
-        // selection (e.g. HashJoin on equi-keys).
+        // Predicate spans both sides of the join.  For INNER joins we promote
+        // it to Join.condition to enable equi-key extraction.  For outer joins
+        // this rewrite changes semantics (can turn outer into inner), so we
+        // keep it as a Filter above the join.
         (true, true) => {
-            let merged_condition = match condition {
-                None => Some(predicate),
-                Some(existing) => Some(combine_predicates(existing, predicate)),
-            };
-            LogicalPlan::Join {
-                left: Box::new(push_predicate(left)),
-                right: Box::new(push_predicate(right)),
-                join_type,
-                condition: merged_condition,
+            use crate::sql::ast::JoinType;
+            if join_type == JoinType::Inner {
+                let merged_condition = match condition {
+                    None => Some(predicate),
+                    Some(existing) => Some(combine_predicates(existing, predicate)),
+                };
+                LogicalPlan::Join {
+                    left: Box::new(push_predicate(left)),
+                    right: Box::new(push_predicate(right)),
+                    join_type,
+                    condition: merged_condition,
+                }
+            } else {
+                LogicalPlan::Filter {
+                    input: Box::new(LogicalPlan::Join {
+                        left: Box::new(push_predicate(left)),
+                        right: Box::new(push_predicate(right)),
+                        join_type,
+                        condition,
+                    }),
+                    predicate,
+                }
             }
         }
         _ => LogicalPlan::Filter {
@@ -212,12 +226,77 @@ fn scan_table_name(plan: &LogicalPlan) -> Option<String> {
 fn references_table(expr: &Expr, table: &str) -> bool {
     match expr {
         Expr::Column { table: Some(t), .. } => t.eq_ignore_ascii_case(table),
-        Expr::Column { table: None, .. } => false,
+        Expr::Column { table: None, .. } | Expr::Literal(_) | Expr::Wildcard => false,
         Expr::BinaryOp { left, right, .. } => {
             references_table(left, table) || references_table(right, table)
         }
-        Expr::UnaryOp { expr, .. } => references_table(expr, table),
-        _ => false,
+        Expr::UnaryOp { expr, .. } | Expr::Cast { expr, .. } | Expr::IsNull { expr, .. } => {
+            references_table(expr, table)
+        }
+        Expr::Function { args, .. } => args.iter().any(|a| references_table(a, table)),
+        Expr::Between {
+            expr, low, high, ..
+        } => {
+            references_table(expr, table)
+                || references_table(low, table)
+                || references_table(high, table)
+        }
+        Expr::InList { expr, list, .. } => {
+            references_table(expr, table) || list.iter().any(|e| references_table(e, table))
+        }
+        Expr::Case {
+            operand,
+            conditions,
+            else_result,
+        } => {
+            operand.as_ref().is_some_and(|e| references_table(e, table))
+                || conditions
+                    .iter()
+                    .any(|(w, t_)| references_table(w, table) || references_table(t_, table))
+                || else_result
+                    .as_ref()
+                    .is_some_and(|e| references_table(e, table))
+        }
+        Expr::ArrayOp { expr, right, .. } => {
+            references_table(expr, table) || references_table(right, table)
+        }
+        Expr::Substring {
+            expr,
+            from_pos,
+            len,
+        } => {
+            references_table(expr, table)
+                || from_pos
+                    .as_ref()
+                    .is_some_and(|e| references_table(e, table))
+                || len.as_ref().is_some_and(|e| references_table(e, table))
+        }
+        Expr::Position { substr, in_expr } => {
+            references_table(substr, table) || references_table(in_expr, table)
+        }
+        Expr::Trim {
+            expr, trim_what, ..
+        } => {
+            references_table(expr, table)
+                || trim_what
+                    .as_ref()
+                    .is_some_and(|e| references_table(e, table))
+        }
+        Expr::Overlay {
+            expr,
+            overlay_what,
+            from_pos,
+            for_len,
+        } => {
+            references_table(expr, table)
+                || references_table(overlay_what, table)
+                || references_table(from_pos, table)
+                || for_len.as_ref().is_some_and(|e| references_table(e, table))
+        }
+        // Subqueries are treated conservatively — assume they reference both
+        // sides so we don't accidentally push a predicate into an input when
+        // the subquery could reference the other side.
+        Expr::InSubquery { .. } | Expr::Subquery(_) | Expr::MatchAgainst { .. } => true,
     }
 }
 
@@ -527,6 +606,30 @@ mod tests {
                 }
             ),
             "expected AND"
+        );
+    }
+
+    #[test]
+    fn cross_table_predicate_stays_above_outer_join() {
+        // For LEFT joins, a cross-table predicate must NOT be promoted into
+        // Join.condition — it must remain as a Filter above the join.
+        let pred = Expr::BinaryOp {
+            left: Box::new(col("u", "id")),
+            op: BinaryOperator::Eq,
+            right: Box::new(col("o", "user_id")),
+        };
+        let join = LogicalPlan::Join {
+            left: Box::new(scan("u")),
+            right: Box::new(scan("o")),
+            join_type: JoinType::Left,
+            condition: None,
+        };
+        let plan = filter_plan(join, pred);
+        let rule = PredicatePushdown;
+        let optimized = rule.apply(plan);
+        assert!(
+            matches!(optimized, LogicalPlan::Filter { .. }),
+            "expected Filter above outer join, got {optimized:?}"
         );
     }
 }

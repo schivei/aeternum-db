@@ -12,13 +12,24 @@ cost and row-count estimates.
 
 ```rust
 use aeternumdb_core::query::{PlannerContext, QueryPlanner};
+use aeternumdb_core::sql::ast::DataType;
 use aeternumdb_core::sql::parser::SqlParser;
+use aeternumdb_core::sql::validator::{Catalog, ColumnSchema, TableSchema};
 
-// Build your catalog and planner context (see query-optimization.md).
+// Build a minimal catalog for the query.
+let mut catalog = Catalog::new();
+catalog.add_table(TableSchema {
+    name: "users".into(),
+    columns: vec![
+        ColumnSchema { name: "id".into(),  data_type: DataType::Integer, nullable: false },
+        ColumnSchema { name: "age".into(), data_type: DataType::Integer, nullable: true  },
+    ],
+});
+
 let planner = QueryPlanner::new();
 let parser  = SqlParser::new();
 let stmt    = parser.parse_one("SELECT id FROM users WHERE age > 18").unwrap();
-let ctx     = PlannerContext::default();
+let ctx     = PlannerContext::new(&catalog);
 
 let physical = planner.plan(&stmt, &ctx).unwrap();
 println!("{}", planner.explain(&physical));

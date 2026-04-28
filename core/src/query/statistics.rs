@@ -60,7 +60,7 @@ impl Histogram {
         let matching: usize = self
             .buckets
             .iter()
-            .filter(|b| value_lte(&b.lower_bound, high) && value_lte(low, &b.upper_bound))
+            .filter(|b| value_lte(&b.lower_bound, high) && value_lt(low, &b.upper_bound))
             .map(|b| b.count)
             .sum();
         (matching as f64) / (total as f64)
@@ -76,6 +76,20 @@ fn value_lte(a: &Value, b: &Value) -> bool {
         (Value::Integer(x), Value::Integer(y)) => x <= y,
         (Value::Float(x), Value::Float(y)) => x <= y,
         (Value::String(x), Value::String(y)) => x <= y,
+        _ => true,
+    }
+}
+
+/// Returns `true` when `a < b` under a numeric/lexicographic ordering.
+///
+/// Used to check against the *exclusive* upper bound of histogram buckets.
+/// Only `Integer`, `Float`, and `String` variants are compared for now; all
+/// other pairs fall back to `true` (permissive).
+fn value_lt(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Integer(x), Value::Integer(y)) => x < y,
+        (Value::Float(x), Value::Float(y)) => x < y,
+        (Value::String(x), Value::String(y)) => x < y,
         _ => true,
     }
 }
@@ -205,6 +219,23 @@ mod tests {
             count: 50,
         }]);
         assert!((h.selectivity_range(&Value::Integer(0), &Value::Integer(100)) - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn histogram_selectivity_range_exclusive_upper_bound() {
+        // Bucket covers [0, 100).  A query with low == upper_bound (100) must
+        // NOT match the bucket because upper_bound is exclusive.
+        let h = Histogram::new(vec![HistogramBucket {
+            lower_bound: Value::Integer(0),
+            upper_bound: Value::Integer(100),
+            count: 50,
+        }]);
+        // Querying range [100, 200] should match 0 rows from this bucket.
+        let sel = h.selectivity_range(&Value::Integer(100), &Value::Integer(200));
+        assert!(
+            sel < 1e-9,
+            "expected 0 selectivity when low == exclusive upper_bound, got {sel}"
+        );
     }
 
     #[test]

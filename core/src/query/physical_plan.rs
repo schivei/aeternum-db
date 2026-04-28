@@ -663,16 +663,23 @@ fn reassemble_condition(
         "equi-key left/right vectors must have equal length"
     );
     if lk.is_empty() {
-        // No equi-keys were extracted; combine original condition with any
-        // residual (should normally be the same value, but guard anyway).
+        // No equi-keys were extracted. `split_join_condition` places the full
+        // predicate in `residual`, so `original` and `residual` can be the
+        // same expression.  De-duplicate to avoid `expr AND expr`.
         return match (original.cloned(), residual) {
             (None, r) => r,
             (o, None) => o,
-            (Some(o), Some(r)) => Some(Expr::BinaryOp {
-                left: Box::new(o),
-                op: BinaryOperator::And,
-                right: Box::new(r),
-            }),
+            (Some(o), Some(r)) => {
+                if o == r {
+                    Some(o)
+                } else {
+                    Some(Expr::BinaryOp {
+                        left: Box::new(o),
+                        op: BinaryOperator::And,
+                        right: Box::new(r),
+                    })
+                }
+            }
         };
     }
     let equi = lk.into_iter().zip(rk).fold(None::<Expr>, |acc, (l, r)| {

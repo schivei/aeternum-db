@@ -84,7 +84,11 @@ and aggregations.
 - If the scan already has a filter, the new predicate is combined with `AND`.
 - A `Filter` above a `Join` is pushed into the appropriate join child when the
   predicate references only columns from that side.
-- Predicates that span both sides of a join remain above the join node.
+- Predicates that reference columns from both sides of an INNER join are
+  promoted into `Join.condition` to enable equi-key extraction for hash join
+  selection.  This promotion is only safe for INNER joins; for outer joins
+  such predicates remain above the join node to avoid changing NULL-extension
+  semantics.
 
 **Example:**
 
@@ -179,8 +183,8 @@ Histograms are supported for range-predicate selectivity estimation
 |---------------|---------------|
 | `SeqScan` | No usable index predicate |
 | `IndexScan` | Equality or range predicate on a simple column reference |
-| `NestedLoopJoin` | Both inputs estimated ≤ 100 rows |
-| `HashJoin` | At least one input estimated > 100 rows |
+| `NestedLoopJoin` | Both inputs estimated ≤ 100 rows, or when equi-join keys cannot be extracted from the join predicate |
+| `HashJoin` | At least one input estimated > 100 rows **and** equi-join keys can be extracted from the join predicate |
 | `Sort(InMemory)` | Estimated rows ≤ 100 000 |
 | `Sort(External)` | Estimated rows > 100 000 |
 | `HashAggregate` | Always used for `GROUP BY` |
