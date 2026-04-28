@@ -627,49 +627,61 @@ impl<'a> Validator<'a> {
 
     // ── INSERT ────────────────────────────────────────────────────────────────
 
-    fn validate_insert(&self, ins: &InsertStatement) -> Result<(), ValidationError> {
-        let schema = self.get_required_table(&ins.table)?;
-
-        // Resolve the effective target columns for this INSERT.
-        // If no explicit column list is provided, SQL treats VALUES as mapping
-        // to all table columns in schema order.
-        let effective_columns = if ins.columns.is_empty() {
-            schema
-                .columns
-                .iter()
-                .map(|col| col.name.clone())
-                .collect::<Vec<_>>()
+    /// Resolve the effective target columns for an INSERT. When no explicit
+    /// column list is supplied, all schema columns are used in order.
+    fn resolve_insert_columns(
+        &self,
+        schema: &TableSchema,
+        ins: &InsertStatement,
+    ) -> Result<Vec<String>, ValidationError> {
+        if ins.columns.is_empty() {
+            Ok(schema.columns.iter().map(|c| c.name.clone()).collect())
         } else {
             for col in &ins.columns {
                 self.require_column(schema, col)?;
             }
-            ins.columns.clone()
-        };
+            Ok(ins.columns.clone())
+        }
+    }
+
+    /// Enforce NOT NULL constraints for one row of an INSERT VALUES list.
+    fn check_row_null_constraints(
+        &self,
+        table: &str,
+        row: &[Expr],
+        effective_columns: &[String],
+        schema: &TableSchema,
+    ) -> Result<(), ValidationError> {
+        for (i, col_name) in effective_columns.iter().enumerate() {
+            let Some(col_schema) = schema.get_column(col_name) else {
+                continue;
+            };
+            if col_schema.nullable {
+                continue;
+            }
+            let is_null = matches!(
+                row.get(i),
+                Some(Expr::Literal(crate::sql::ast::Value::Null)) | None
+            );
+            if is_null {
+                return Err(ValidationError::NullConstraintViolation {
+                    table: table.to_owned(),
+                    column: col_name.clone(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_insert(&self, ins: &InsertStatement) -> Result<(), ValidationError> {
+        let schema = self.get_required_table(&ins.table)?;
+        let effective_columns = self.resolve_insert_columns(schema, ins)?;
 
         for row in &ins.values {
-            // Validate expressions in VALUES
             for val in row {
                 self.validate_expr(val, Some(&ins.table))?;
             }
-
-            // Enforce NOT NULL constraints for all target columns. When the
-            // column list is implicit, a short row means trailing columns are
-            // omitted; that still violates NOT NULL for any required column.
-            for (i, col_name) in effective_columns.iter().enumerate() {
-                if let Some(col_schema) = schema.get_column(col_name) {
-                    if !col_schema.nullable {
-                        match row.get(i) {
-                            Some(Expr::Literal(crate::sql::ast::Value::Null)) | None => {
-                                return Err(ValidationError::NullConstraintViolation {
-                                    table: ins.table.clone(),
-                                    column: col_name.clone(),
-                                });
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-            }
+            self.check_row_null_constraints(&ins.table, row, &effective_columns, schema)?;
         }
         Ok(())
     }
@@ -840,113 +852,132 @@ impl<'a> Validator<'a> {
 
     // ── Expression validation ─────────────────────────────────────────────────
 
-    fn validate_expr(&self, expr: &Expr, table: Option<&str>) -> Result<(), ValidationError> {
+    /// Validate a `table.column` reference — looks up the column only when the
+    /// table is present in the catalog (subquery aliases are silently skipped).
+    fn validate_column_ref(
+        &self,
+        tbl: Option<&str>,
+        name: &str,
+        ctx_table: Option<&str>,
+    ) -> Result<(), ValidationError> {
+        let effective = tbl.or(ctx_table);
+        if let Some(tname) = effective {
+            if self.catalog.table_exists(tname) {
+                let schema = self.catalog.get_table(tname).unwrap();
+                self.require_column(schema, name)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Validate a `CASE` expression: optional operand, condition/result pairs,
+    /// and optional `ELSE` branch.
+    fn validate_case_expr(
+        &self,
+        operand: &Option<Box<Expr>>,
+        conditions: &[(Expr, Expr)],
+        else_result: &Option<Box<Expr>>,
+        table: Option<&str>,
+    ) -> Result<(), ValidationError> {
+        if let Some(op) = operand {
+            self.validate_expr(op, table)?;
+        }
+        for (cond, result) in conditions {
+            self.validate_expr(cond, table)?;
+            self.validate_expr(result, table)?;
+        }
+        if let Some(el) = else_result {
+            self.validate_expr(el, table)?;
+        }
+        Ok(())
+    }
+
+    /// Return all direct child expressions of `expr` so that the main
+    /// `validate_expr` dispatch can recursively validate them without repeating
+    /// the same pattern for every leaf/compound variant.
+    fn expr_children<'e>(&self, expr: &'e Expr) -> Vec<&'e Expr> {
         match expr {
-            Expr::Literal(_) | Expr::Wildcard => Ok(()),
-            Expr::Column { table: tbl, name } => {
-                let effective_table = tbl.as_deref().or(table);
-                if let Some(tname) = effective_table {
-                    if self.catalog.table_exists(tname) {
-                        let schema = self.catalog.get_table(tname).unwrap();
-                        self.require_column(schema, name)?;
-                    }
-                    // If the table doesn't exist in catalog (e.g. subquery alias),
-                    // we skip column validation.
-                }
-                Ok(())
+            Expr::BinaryOp { left, right, .. }
+            | Expr::ArrayOp {
+                expr: left, right, ..
+            } => {
+                vec![left, right]
             }
-            Expr::BinaryOp { left, right, .. } => {
-                self.validate_expr(left, table)?;
-                self.validate_expr(right, table)
-            }
-            Expr::UnaryOp { expr, .. } => self.validate_expr(expr, table),
-            Expr::Function { args, .. } => {
-                for a in args {
-                    self.validate_expr(a, table)?;
-                }
-                Ok(())
-            }
-            Expr::IsNull { expr, .. } => self.validate_expr(expr, table),
+            Expr::UnaryOp { expr: e, .. }
+            | Expr::IsNull { expr: e, .. }
+            | Expr::Cast { expr: e, .. }
+            | Expr::MatchAgainst { match_value: e, .. } => vec![e],
             Expr::Between {
-                expr, low, high, ..
-            } => {
-                self.validate_expr(expr, table)?;
-                self.validate_expr(low, table)?;
-                self.validate_expr(high, table)
+                expr: e, low, high, ..
+            } => vec![e, low, high],
+            Expr::Position { substr, in_expr } => vec![substr, in_expr],
+            Expr::InList { expr: e, list, .. } => {
+                let mut v: Vec<&Expr> = vec![e];
+                v.extend(list.iter());
+                v
             }
-            Expr::InList { expr, list, .. } => {
-                self.validate_expr(expr, table)?;
-                for e in list {
-                    self.validate_expr(e, table)?;
-                }
-                Ok(())
-            }
-            Expr::InSubquery { expr, subquery, .. } => {
-                self.validate_expr(expr, table)?;
-                self.validate_select(subquery)
-            }
-            Expr::Subquery(s) => self.validate_select(s),
-            Expr::Cast { expr, .. } => self.validate_expr(expr, table),
-            Expr::Case {
-                operand,
-                conditions,
-                else_result,
-            } => {
-                if let Some(op) = operand {
-                    self.validate_expr(op, table)?;
-                }
-                for (cond, result) in conditions {
-                    self.validate_expr(cond, table)?;
-                    self.validate_expr(result, table)?;
-                }
-                if let Some(el) = else_result {
-                    self.validate_expr(el, table)?;
-                }
-                Ok(())
-            }
-            Expr::ArrayOp { expr, right, .. } => {
-                self.validate_expr(expr, table)?;
-                self.validate_expr(right, table)
-            }
+            Expr::InSubquery { expr: e, .. } => vec![e],
+            Expr::Function { args, .. } => args.iter().collect(),
             Expr::Substring {
-                expr,
+                expr: e,
                 from_pos,
                 len,
             } => {
-                self.validate_expr(expr, table)?;
-                if let Some(e) = from_pos {
-                    self.validate_expr(e, table)?;
+                let mut v: Vec<&Expr> = vec![e];
+                if let Some(fp) = from_pos {
+                    v.push(fp);
                 }
-                if let Some(e) = len {
-                    self.validate_expr(e, table)?;
+                if let Some(ln) = len {
+                    v.push(ln);
                 }
-                Ok(())
-            }
-            Expr::Position { substr, in_expr } => {
-                self.validate_expr(substr, table)?;
-                self.validate_expr(in_expr, table)
+                v
             }
             Expr::Trim {
-                expr, trim_what, ..
+                expr: e, trim_what, ..
             } => {
-                self.validate_expr(expr, table)?;
-                if let Some(e) = trim_what {
-                    self.validate_expr(e, table)?;
+                let mut v: Vec<&Expr> = vec![e];
+                if let Some(tw) = trim_what {
+                    v.push(tw);
                 }
-                Ok(())
+                v
             }
-            Expr::MatchAgainst { match_value, .. } => self.validate_expr(match_value, table),
             Expr::Overlay {
-                expr,
+                expr: e,
                 overlay_what,
                 from_pos,
                 for_len,
             } => {
-                self.validate_expr(expr, table)?;
-                self.validate_expr(overlay_what, table)?;
-                self.validate_expr(from_pos, table)?;
-                if let Some(e) = for_len {
-                    self.validate_expr(e, table)?;
+                let mut v: Vec<&Expr> = vec![e, overlay_what, from_pos];
+                if let Some(fl) = for_len {
+                    v.push(fl);
+                }
+                v
+            }
+            _ => vec![],
+        }
+    }
+
+    fn validate_expr(&self, expr: &Expr, table: Option<&str>) -> Result<(), ValidationError> {
+        match expr {
+            Expr::Literal(_) | Expr::Wildcard => Ok(()),
+            Expr::Column { table: tbl, name } => {
+                self.validate_column_ref(tbl.as_deref(), name, table)
+            }
+            Expr::Case {
+                operand,
+                conditions,
+                else_result,
+            } => self.validate_case_expr(operand, conditions, else_result, table),
+            Expr::Subquery(s) => self.validate_select(s),
+            Expr::InSubquery {
+                expr: e, subquery, ..
+            } => {
+                self.validate_expr(e, table)?;
+                self.validate_select(subquery)
+            }
+            _ => {
+                for child in self.expr_children(expr) {
+                    self.validate_expr(child, table)?;
                 }
                 Ok(())
             }

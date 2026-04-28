@@ -7,9 +7,11 @@
 //! - Semantic validation against an in-memory catalog
 
 use aeternumdb_core::sql::ast::{
-    BeginTransactionStatement, BinaryOperator, CommitStatement, DataType, Expr, OnCommitBehavior,
-    ReferentialAction, ReleaseSavepointStatement, RollbackStatement, SavepointStatement,
-    SelectItem, Statement, TextSearchModifier, TrimWhereField, UnaryOperator, Value, ViewAsItem,
+    AlterTableOperation, AlterTableStatement, BeginTransactionStatement, BinaryOperator,
+    CommitScope, CommitStatement, CreateEnumStatement, DataType, DropEnumStatement, EnumVariant,
+    Expr, OnCommitBehavior, ReferentialAction, ReleaseSavepointStatement, RollbackScope,
+    RollbackStatement, SavepointStatement, SelectItem, Statement, TextSearchModifier,
+    TrimWhereField, UnaryOperator, Value, ViewAsItem,
 };
 use aeternumdb_core::sql::parser::{SqlError, SqlParser};
 use aeternumdb_core::sql::validator::{
@@ -2517,4 +2519,840 @@ fn test_enum_unquoted_identifier_comparison_parses() {
         }
         other => panic!("expected BinaryOp, got: {other:?}"),
     }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Coverage: validator paths
+// ══════════════════════════════════════════════════════════════════════════════
+
+use aeternumdb_core::sql::validator::{UserTypeKind, UserTypeSchema};
+
+fn catalog_with_type(type_name: &str) -> Catalog {
+    let mut c = Catalog::new();
+    c.add_type(UserTypeSchema {
+        name: type_name.to_string(),
+        kind: UserTypeKind::Enum {
+            flag: false,
+            variants: vec![EnumVariant {
+                name: "active".to_string(),
+                is_none: false,
+            }],
+            resolved_values: vec![1],
+        },
+    });
+    c
+}
+
+// ── ALTER TABLE ───────────────────────────────────────────────────────────────
+
+#[test]
+fn test_validate_alter_table_add_column_ok() {
+    let c = catalog_with_users();
+    let v = Validator::new(&c);
+    let stmt = Statement::AlterTable(AlterTableStatement {
+        table: "users".to_string(),
+        operations: vec![AlterTableOperation::AddColumn(Box::new(
+            aeternumdb_core::sql::ast::ColumnDef {
+                name: "new_col".to_string(),
+                data_type: DataType::Integer,
+                nullable: true,
+                primary_key: false,
+                unique: false,
+                default: None,
+                auto_increment: false,
+                min_length: None,
+                max_length: None,
+                uniques: false,
+                check: None,
+                text_directive: None,
+                terms_directives: vec![],
+                on_update: None,
+                on_delete: None,
+            },
+        ))],
+    });
+    assert!(v.validate(&stmt).is_ok());
+}
+
+#[test]
+fn test_validate_alter_table_add_duplicate_column_fails() {
+    let c = catalog_with_users();
+    let v = Validator::new(&c);
+    let stmt = Statement::AlterTable(AlterTableStatement {
+        table: "users".to_string(),
+        operations: vec![AlterTableOperation::AddColumn(Box::new(
+            aeternumdb_core::sql::ast::ColumnDef {
+                name: "id".to_string(), // already exists
+                data_type: DataType::Integer,
+                nullable: true,
+                primary_key: false,
+                unique: false,
+                default: None,
+                auto_increment: false,
+                min_length: None,
+                max_length: None,
+                uniques: false,
+                check: None,
+                text_directive: None,
+                terms_directives: vec![],
+                on_update: None,
+                on_delete: None,
+            },
+        ))],
+    });
+    assert!(matches!(
+        v.validate(&stmt).unwrap_err(),
+        ValidationError::ConstraintViolation(_)
+    ));
+}
+
+#[test]
+fn test_validate_alter_table_drop_column_ok() {
+    let c = catalog_with_users();
+    let v = Validator::new(&c);
+    let stmt = Statement::AlterTable(AlterTableStatement {
+        table: "users".to_string(),
+        operations: vec![AlterTableOperation::DropColumn {
+            name: "age".to_string(),
+            if_exists: false,
+        }],
+    });
+    assert!(v.validate(&stmt).is_ok());
+}
+
+#[test]
+fn test_validate_alter_table_drop_column_if_exists_missing() {
+    let c = catalog_with_users();
+    let v = Validator::new(&c);
+    let stmt = Statement::AlterTable(AlterTableStatement {
+        table: "users".to_string(),
+        operations: vec![AlterTableOperation::DropColumn {
+            name: "nonexistent".to_string(),
+            if_exists: true, // should not fail even if column missing
+        }],
+    });
+    assert!(v.validate(&stmt).is_ok());
+}
+
+#[test]
+fn test_validate_alter_table_drop_column_not_found_fails() {
+    let c = catalog_with_users();
+    let v = Validator::new(&c);
+    let stmt = Statement::AlterTable(AlterTableStatement {
+        table: "users".to_string(),
+        operations: vec![AlterTableOperation::DropColumn {
+            name: "nonexistent".to_string(),
+            if_exists: false,
+        }],
+    });
+    assert!(matches!(
+        v.validate(&stmt).unwrap_err(),
+        ValidationError::ColumnNotFound { .. }
+    ));
+}
+
+#[test]
+fn test_validate_alter_table_rename_column_ok() {
+    let c = catalog_with_users();
+    let v = Validator::new(&c);
+    let stmt = Statement::AlterTable(AlterTableStatement {
+        table: "users".to_string(),
+        operations: vec![AlterTableOperation::RenameColumn {
+            old_name: "name".to_string(),
+            new_name: "full_name".to_string(),
+        }],
+    });
+    assert!(v.validate(&stmt).is_ok());
+}
+
+#[test]
+fn test_validate_alter_table_rename_column_not_found_fails() {
+    let c = catalog_with_users();
+    let v = Validator::new(&c);
+    let stmt = Statement::AlterTable(AlterTableStatement {
+        table: "users".to_string(),
+        operations: vec![AlterTableOperation::RenameColumn {
+            old_name: "ghost".to_string(),
+            new_name: "phantom".to_string(),
+        }],
+    });
+    assert!(matches!(
+        v.validate(&stmt).unwrap_err(),
+        ValidationError::ColumnNotFound { .. }
+    ));
+}
+
+#[test]
+fn test_validate_alter_table_rename_table_ok() {
+    let c = catalog_with_users();
+    let v = Validator::new(&c);
+    let stmt = Statement::AlterTable(AlterTableStatement {
+        table: "users".to_string(),
+        operations: vec![AlterTableOperation::RenameTable {
+            new_name: "members".to_string(),
+        }],
+    });
+    assert!(v.validate(&stmt).is_ok());
+}
+
+#[test]
+fn test_validate_alter_table_unknown_table_fails() {
+    let c = Catalog::new();
+    let v = Validator::new(&c);
+    let stmt = Statement::AlterTable(AlterTableStatement {
+        table: "ghost".to_string(),
+        operations: vec![AlterTableOperation::RenameTable {
+            new_name: "phantom".to_string(),
+        }],
+    });
+    assert!(matches!(
+        v.validate(&stmt).unwrap_err(),
+        ValidationError::TableNotFound { .. }
+    ));
+}
+
+// ── CREATE ENUM / DROP ENUM ───────────────────────────────────────────────────
+
+#[test]
+fn test_validate_create_enum_ok() {
+    let c = Catalog::new();
+    let v = Validator::new(&c);
+    let stmt = Statement::CreateEnum(CreateEnumStatement {
+        name: "status".to_string(),
+        flag: false,
+        if_not_exists: false,
+        variants: vec![
+            EnumVariant {
+                name: "active".to_string(),
+                is_none: false,
+            },
+            EnumVariant {
+                name: "inactive".to_string(),
+                is_none: false,
+            },
+        ],
+    });
+    assert!(v.validate(&stmt).is_ok());
+}
+
+#[test]
+fn test_validate_create_enum_already_exists_fails() {
+    let c = catalog_with_type("status");
+    let v = Validator::new(&c);
+    let stmt = Statement::CreateEnum(CreateEnumStatement {
+        name: "status".to_string(),
+        flag: false,
+        if_not_exists: false,
+        variants: vec![EnumVariant {
+            name: "x".to_string(),
+            is_none: false,
+        }],
+    });
+    assert!(matches!(
+        v.validate(&stmt).unwrap_err(),
+        ValidationError::ConstraintViolation(_)
+    ));
+}
+
+#[test]
+fn test_validate_create_enum_if_not_exists_ok() {
+    let c = catalog_with_type("status");
+    let v = Validator::new(&c);
+    let stmt = Statement::CreateEnum(CreateEnumStatement {
+        name: "status".to_string(),
+        flag: false,
+        if_not_exists: true, // must not fail
+        variants: vec![EnumVariant {
+            name: "x".to_string(),
+            is_none: false,
+        }],
+    });
+    assert!(v.validate(&stmt).is_ok());
+}
+
+#[test]
+fn test_validate_create_enum_empty_variants_fails() {
+    let c = Catalog::new();
+    let v = Validator::new(&c);
+    let stmt = Statement::CreateEnum(CreateEnumStatement {
+        name: "empty".to_string(),
+        flag: false,
+        if_not_exists: false,
+        variants: vec![],
+    });
+    assert!(matches!(
+        v.validate(&stmt).unwrap_err(),
+        ValidationError::ConstraintViolation(_)
+    ));
+}
+
+#[test]
+fn test_validate_create_enum_duplicate_variant_fails() {
+    let c = Catalog::new();
+    let v = Validator::new(&c);
+    let stmt = Statement::CreateEnum(CreateEnumStatement {
+        name: "status".to_string(),
+        flag: false,
+        if_not_exists: false,
+        variants: vec![
+            EnumVariant {
+                name: "active".to_string(),
+                is_none: false,
+            },
+            EnumVariant {
+                name: "Active".to_string(),
+                is_none: false,
+            }, // duplicate
+        ],
+    });
+    assert!(matches!(
+        v.validate(&stmt).unwrap_err(),
+        ValidationError::ConstraintViolation(_)
+    ));
+}
+
+#[test]
+fn test_validate_create_enum_multiple_none_fails() {
+    let c = Catalog::new();
+    let v = Validator::new(&c);
+    let stmt = Statement::CreateEnum(CreateEnumStatement {
+        name: "flags".to_string(),
+        flag: true,
+        if_not_exists: false,
+        variants: vec![
+            EnumVariant {
+                name: "none1".to_string(),
+                is_none: true,
+            },
+            EnumVariant {
+                name: "none2".to_string(),
+                is_none: true,
+            },
+        ],
+    });
+    assert!(matches!(
+        v.validate(&stmt).unwrap_err(),
+        ValidationError::ConstraintViolation(_)
+    ));
+}
+
+#[test]
+fn test_validate_drop_enum_ok() {
+    let c = catalog_with_type("status");
+    let v = Validator::new(&c);
+    let stmt = Statement::DropEnum(DropEnumStatement {
+        name: "status".to_string(),
+        if_exists: false,
+    });
+    assert!(v.validate(&stmt).is_ok());
+}
+
+#[test]
+fn test_validate_drop_enum_not_found_fails() {
+    let c = Catalog::new();
+    let v = Validator::new(&c);
+    let stmt = Statement::DropEnum(DropEnumStatement {
+        name: "missing".to_string(),
+        if_exists: false,
+    });
+    assert!(matches!(
+        v.validate(&stmt).unwrap_err(),
+        ValidationError::TypeNotFound(_)
+    ));
+}
+
+#[test]
+fn test_validate_drop_enum_if_exists_missing_ok() {
+    let c = Catalog::new();
+    let v = Validator::new(&c);
+    let stmt = Statement::DropEnum(DropEnumStatement {
+        name: "missing".to_string(),
+        if_exists: true,
+    });
+    assert!(v.validate(&stmt).is_ok());
+}
+
+#[test]
+fn test_validate_drop_enum_in_use_fails() {
+    let mut c = catalog_with_type("status");
+    c.add_table(TableSchema {
+        name: "items".to_string(),
+        columns: vec![ColumnSchema {
+            name: "state".to_string(),
+            data_type: DataType::EnumRef("status".to_string()),
+            nullable: false,
+        }],
+    });
+    let v = Validator::new(&c);
+    let stmt = Statement::DropEnum(DropEnumStatement {
+        name: "status".to_string(),
+        if_exists: false,
+    });
+    assert!(matches!(
+        v.validate(&stmt).unwrap_err(),
+        ValidationError::TypeInUse(_)
+    ));
+}
+
+// ── CREATE TABLE with EnumRef ─────────────────────────────────────────────────
+
+#[test]
+fn test_validate_create_table_enum_ref_type_not_found_fails() {
+    let c = Catalog::new(); // no types registered
+    let v = Validator::new(&c);
+    let stmt = Statement::CreateTable(aeternumdb_core::sql::ast::CreateTableStatement {
+        database: None,
+        schema: None,
+        table: "items".to_string(),
+        columns: vec![aeternumdb_core::sql::ast::ColumnDef {
+            name: "state".to_string(),
+            data_type: DataType::EnumRef("status".to_string()),
+            nullable: false,
+            primary_key: false,
+            unique: false,
+            default: None,
+            auto_increment: false,
+            min_length: None,
+            max_length: None,
+            uniques: false,
+            check: None,
+            text_directive: None,
+            terms_directives: vec![],
+            on_update: None,
+            on_delete: None,
+        }],
+        if_not_exists: false,
+        temporary: false,
+        constraints: vec![],
+        inherits: vec![],
+        on_commit: None,
+        versioned: false,
+        flat: false,
+    });
+    assert!(matches!(
+        v.validate(&stmt).unwrap_err(),
+        ValidationError::TypeNotFound(_)
+    ));
+}
+
+// ── Expression paths covered via validate_expr ────────────────────────────────
+
+#[test]
+fn test_validate_expr_between_ok() {
+    let c = catalog_with_users();
+    let v = Validator::new(&c);
+    let stmt = parser()
+        .parse_one("SELECT * FROM users WHERE age BETWEEN 18 AND 65")
+        .unwrap();
+    assert!(v.validate(&stmt).is_ok());
+}
+
+#[test]
+fn test_validate_expr_in_list_ok() {
+    let c = catalog_with_users();
+    let v = Validator::new(&c);
+    let stmt = parser()
+        .parse_one("SELECT * FROM users WHERE age IN (20, 30, 40)")
+        .unwrap();
+    assert!(v.validate(&stmt).is_ok());
+}
+
+#[test]
+fn test_validate_expr_cast_ok() {
+    let c = catalog_with_users();
+    let v = Validator::new(&c);
+    let stmt = parser()
+        .parse_one("SELECT CAST(age AS BIGINT) FROM users")
+        .unwrap();
+    assert!(v.validate(&stmt).is_ok());
+}
+
+#[test]
+fn test_validate_expr_case_ok() {
+    let c = catalog_with_users();
+    let v = Validator::new(&c);
+    let stmt = parser()
+        .parse_one("SELECT CASE WHEN age > 18 THEN 1 ELSE 0 END FROM users")
+        .unwrap();
+    assert!(v.validate(&stmt).is_ok());
+}
+
+#[test]
+fn test_validate_expr_function_ok() {
+    let c = catalog_with_users();
+    let v = Validator::new(&c);
+    let stmt = parser().parse_one("SELECT UPPER(name) FROM users").unwrap();
+    assert!(v.validate(&stmt).is_ok());
+}
+
+#[test]
+fn test_validate_expr_is_null_ok() {
+    let c = catalog_with_users();
+    let v = Validator::new(&c);
+    let stmt = parser()
+        .parse_one("SELECT * FROM users WHERE email IS NULL")
+        .unwrap();
+    assert!(v.validate(&stmt).is_ok());
+}
+
+#[test]
+fn test_validate_expr_unary_ok() {
+    let c = catalog_with_users();
+    let v = Validator::new(&c);
+    let stmt = parser()
+        .parse_one("SELECT * FROM users WHERE NOT (age > 18)")
+        .unwrap();
+    assert!(v.validate(&stmt).is_ok());
+}
+
+#[test]
+fn test_validate_select_group_by_having_ok() {
+    let c = catalog_with_users();
+    let v = Validator::new(&c);
+    let stmt = parser()
+        .parse_one("SELECT age, COUNT(*) FROM users GROUP BY age HAVING COUNT(*) > 1")
+        .unwrap();
+    assert!(v.validate(&stmt).is_ok());
+}
+
+#[test]
+fn test_validate_select_order_by_ok() {
+    let c = catalog_with_users();
+    let v = Validator::new(&c);
+    let stmt = parser()
+        .parse_one("SELECT id, name FROM users ORDER BY name")
+        .unwrap();
+    assert!(v.validate(&stmt).is_ok());
+}
+
+#[test]
+fn test_validate_insert_implicit_columns_ok() {
+    let c = catalog_with_users();
+    let v = Validator::new(&c);
+    // INSERT without column list maps values to schema order
+    let stmt = parser()
+        .parse_one("INSERT INTO orders VALUES (1, 1, 99.99)")
+        .unwrap();
+    assert!(v.validate(&stmt).is_ok());
+}
+
+#[test]
+fn test_validate_insert_explicit_columns_ok() {
+    let c = catalog_with_users();
+    let v = Validator::new(&c);
+    let stmt = parser()
+        .parse_one("INSERT INTO users (id, name) VALUES (1, 'Alice')")
+        .unwrap();
+    assert!(v.validate(&stmt).is_ok());
+}
+
+#[test]
+fn test_validate_insert_explicit_unknown_column_fails() {
+    let c = catalog_with_users();
+    let v = Validator::new(&c);
+    let stmt = parser()
+        .parse_one("INSERT INTO users (id, ghost) VALUES (1, 2)")
+        .unwrap();
+    assert!(matches!(
+        v.validate(&stmt).unwrap_err(),
+        ValidationError::ColumnNotFound { .. }
+    ));
+}
+
+// ── Transaction sequence helpers ─────────────────────────────────────────────
+
+#[test]
+fn test_seq_commit_current_ok() {
+    let c = Catalog::new();
+    let v = Validator::new(&c);
+    let stmts = vec![
+        Statement::BeginTransaction(BeginTransactionStatement {
+            name: None,
+            isolation_level: None,
+            read_only: false,
+        }),
+        Statement::Commit(CommitStatement {
+            scope: CommitScope::Current,
+            chain: false,
+        }),
+    ];
+    assert!(v.validate_sequence(&stmts).is_ok());
+}
+
+#[test]
+fn test_seq_commit_current_no_transaction_fails() {
+    let c = Catalog::new();
+    let v = Validator::new(&c);
+    let stmts = vec![Statement::Commit(CommitStatement {
+        scope: CommitScope::Current,
+        chain: false,
+    })];
+    assert!(matches!(
+        v.validate_sequence(&stmts).unwrap_err(),
+        ValidationError::NoActiveTransaction
+    ));
+}
+
+#[test]
+fn test_seq_rollback_current_ok() {
+    let c = Catalog::new();
+    let v = Validator::new(&c);
+    let stmts = vec![
+        Statement::BeginTransaction(BeginTransactionStatement {
+            name: None,
+            isolation_level: None,
+            read_only: false,
+        }),
+        Statement::Rollback(RollbackStatement {
+            scope: RollbackScope::Current,
+            chain: false,
+        }),
+    ];
+    assert!(v.validate_sequence(&stmts).is_ok());
+}
+
+#[test]
+fn test_seq_rollback_current_no_transaction_fails() {
+    let c = Catalog::new();
+    let v = Validator::new(&c);
+    let stmts = vec![Statement::Rollback(RollbackStatement {
+        scope: RollbackScope::Current,
+        chain: false,
+    })];
+    assert!(matches!(
+        v.validate_sequence(&stmts).unwrap_err(),
+        ValidationError::NoActiveTransaction
+    ));
+}
+
+#[test]
+fn test_seq_rollback_to_savepoint_ok() {
+    let c = Catalog::new();
+    let v = Validator::new(&c);
+    let stmts = vec![
+        Statement::BeginTransaction(BeginTransactionStatement {
+            name: None,
+            isolation_level: None,
+            read_only: false,
+        }),
+        Statement::Rollback(RollbackStatement {
+            scope: RollbackScope::ToSavepoint("sp1".to_string()),
+            chain: false,
+        }),
+    ];
+    assert!(v.validate_sequence(&stmts).is_ok());
+}
+
+#[test]
+fn test_seq_rollback_to_savepoint_no_transaction_fails() {
+    let c = Catalog::new();
+    let v = Validator::new(&c);
+    let stmts = vec![Statement::Rollback(RollbackStatement {
+        scope: RollbackScope::ToSavepoint("sp1".to_string()),
+        chain: false,
+    })];
+    assert!(matches!(
+        v.validate_sequence(&stmts).unwrap_err(),
+        ValidationError::NoActiveTransaction
+    ));
+}
+
+#[test]
+fn test_seq_commit_all_ok() {
+    let c = Catalog::new();
+    let v = Validator::new(&c);
+    let stmts = vec![
+        Statement::BeginTransaction(BeginTransactionStatement {
+            name: Some("outer".to_string()),
+            isolation_level: None,
+            read_only: false,
+        }),
+        Statement::BeginTransaction(BeginTransactionStatement {
+            name: Some("inner".to_string()),
+            isolation_level: None,
+            read_only: false,
+        }),
+        Statement::Commit(CommitStatement {
+            scope: CommitScope::All,
+            chain: false,
+        }),
+    ];
+    assert!(v.validate_sequence(&stmts).is_ok());
+}
+
+#[test]
+fn test_seq_rollback_all_ok() {
+    let c = Catalog::new();
+    let v = Validator::new(&c);
+    let stmts = vec![
+        Statement::BeginTransaction(BeginTransactionStatement {
+            name: Some("tx".to_string()),
+            isolation_level: None,
+            read_only: false,
+        }),
+        Statement::Rollback(RollbackStatement {
+            scope: RollbackScope::All,
+            chain: false,
+        }),
+    ];
+    assert!(v.validate_sequence(&stmts).is_ok());
+}
+
+#[test]
+fn test_seq_savepoint_no_transaction_fails() {
+    let c = Catalog::new();
+    let v = Validator::new(&c);
+    let stmts = vec![Statement::Savepoint(SavepointStatement {
+        name: "sp".to_string(),
+    })];
+    assert!(matches!(
+        v.validate_sequence(&stmts).unwrap_err(),
+        ValidationError::NoActiveTransaction
+    ));
+}
+
+#[test]
+fn test_seq_release_savepoint_no_transaction_fails() {
+    let c = Catalog::new();
+    let v = Validator::new(&c);
+    let stmts = vec![Statement::ReleaseSavepoint(ReleaseSavepointStatement {
+        name: "sp".to_string(),
+    })];
+    assert!(matches!(
+        v.validate_sequence(&stmts).unwrap_err(),
+        ValidationError::NoActiveTransaction
+    ));
+}
+
+#[test]
+fn test_seq_name_conflict_fails() {
+    let c = Catalog::new();
+    let v = Validator::new(&c);
+    let stmts = vec![
+        Statement::BeginTransaction(BeginTransactionStatement {
+            name: Some("tx".to_string()),
+            isolation_level: None,
+            read_only: false,
+        }),
+        Statement::BeginTransaction(BeginTransactionStatement {
+            name: Some("tx".to_string()), // duplicate
+            isolation_level: None,
+            read_only: false,
+        }),
+    ];
+    assert!(matches!(
+        v.validate_sequence(&stmts).unwrap_err(),
+        ValidationError::TransactionNameConflict(_)
+    ));
+}
+
+// ── ValidationError::Display ─────────────────────────────────────────────────
+
+#[test]
+fn test_validation_error_display() {
+    assert!(ValidationError::TableNotFound { table: "t".into() }
+        .to_string()
+        .contains("t"));
+    assert!(ValidationError::ColumnNotFound {
+        table: "t".into(),
+        column: "c".into()
+    }
+    .to_string()
+    .contains("c"));
+    assert!(ValidationError::TypeMismatch {
+        expected: Box::new(DataType::Integer),
+        found: Box::new(DataType::Boolean),
+        context: "test".into()
+    }
+    .to_string()
+    .contains("test"));
+    assert!(
+        ValidationError::InvalidAggregateUsage("COUNT in WHERE".into())
+            .to_string()
+            .contains("COUNT")
+    );
+    assert!(ValidationError::NullConstraintViolation {
+        table: "t".into(),
+        column: "c".into()
+    }
+    .to_string()
+    .contains("NOT NULL"));
+    assert!(ValidationError::ConstraintViolation("dup".into())
+        .to_string()
+        .contains("dup"));
+    assert!(ValidationError::TypeNotFound("myenum".into())
+        .to_string()
+        .contains("myenum"));
+    assert!(ValidationError::TypeInUse("myenum".into())
+        .to_string()
+        .contains("myenum"));
+    assert!(ValidationError::InvalidEnumValue {
+        column: "c".into(),
+        value: "v".into()
+    }
+    .to_string()
+    .contains("v"));
+    assert!(ValidationError::NoActiveTransaction
+        .to_string()
+        .contains("no active"));
+    assert!(ValidationError::TransactionNameConflict("tx".into())
+        .to_string()
+        .contains("tx"));
+    assert!(ValidationError::TransactionNotFound("tx".into())
+        .to_string()
+        .contains("tx"));
+    assert!(ValidationError::TransactionNestingViolation {
+        target: "outer".into(),
+        blocking: "inner".into()
+    }
+    .to_string()
+    .contains("outer"));
+    assert!(ValidationError::ViewAsAggregateNotAllowed("SUM".into())
+        .to_string()
+        .contains("SUM"));
+    assert!(ValidationError::ViewAsSubqueryNotAllowed
+        .to_string()
+        .contains("VIEW AS"));
+}
+
+// ── Catalog helpers ───────────────────────────────────────────────────────────
+
+#[test]
+fn test_catalog_remove_table() {
+    let mut c = catalog_with_users();
+    assert!(c.table_exists("users"));
+    c.remove_table("users");
+    assert!(!c.table_exists("users"));
+}
+
+#[test]
+fn test_catalog_remove_type_ok() {
+    let mut c = catalog_with_type("status");
+    assert!(c.type_exists("status"));
+    assert!(c.remove_type("status").is_ok());
+    assert!(!c.type_exists("status"));
+}
+
+#[test]
+fn test_catalog_remove_type_in_use_fails() {
+    let mut c = catalog_with_type("status");
+    c.add_table(TableSchema {
+        name: "items".to_string(),
+        columns: vec![ColumnSchema {
+            name: "state".to_string(),
+            data_type: DataType::EnumRef("status".to_string()),
+            nullable: false,
+        }],
+    });
+    assert!(matches!(
+        c.remove_type("status").unwrap_err(),
+        ValidationError::TypeInUse(_)
+    ));
+}
+
+#[test]
+fn test_catalog_get_type() {
+    let c = catalog_with_type("status");
+    assert!(c.get_type("status").is_some());
+    assert!(c.get_type("MISSING").is_none());
 }
