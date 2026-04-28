@@ -184,6 +184,31 @@ semantic enforcement, and query execution will be implemented in later phases.
 | `MAX_LENGTH n`  | array references   | Maximum number of references allowed   |
 | `UNIQUES`       | array references   | All referenced rows must be distinct   |
 | `AUTO_INCREMENT`| integer / PK       | Auto-generate next integer value       |
+| `ON DELETE action` | reference cols  | Action when the referenced row is deleted |
+| `ON UPDATE action` | reference cols  | Action when the referenced row is updated |
+
+**Referential actions (`ON DELETE` / `ON UPDATE`):**
+
+| Action       | Description                                                    |
+|--------------|----------------------------------------------------------------|
+| `CASCADE`    | Propagate the change to all referencing rows.                  |
+| `SET NULL`   | Set the referencing column to `NULL`.                          |
+| `SET DEFAULT`| Set the referencing column to its declared default value.      |
+| `RESTRICT`   | Reject the change if any referencing row exists.               |
+| `NO ACTION`  | Like `RESTRICT` but checked at end of statement (SQL default). |
+
+> **Note:** Referential action enforcement is parsed and stored in the AST now (PR 1.3)
+> but is not yet executed — enforcement will be implemented in PR 1.5.
+
+**Example — referential actions on object references:**
+
+```sql
+CREATE TABLE orders (
+  id       INTEGER PRIMARY KEY AUTO_INCREMENT,
+  customer customers REFERENCES customers ON DELETE CASCADE ON UPDATE CASCADE,
+  items    products  REFERENCES products  ON DELETE SET NULL ON UPDATE RESTRICT
+);
+```
 
 **Example — bidirectional object references:**
 

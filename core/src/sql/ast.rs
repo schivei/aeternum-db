@@ -42,6 +42,26 @@ impl std::fmt::Display for AstError {
 
 impl std::error::Error for AstError {}
 
+// ── ReferentialAction ─────────────────────────────────────────────────────────
+
+/// The action to take when a referenced row is updated or deleted.
+///
+/// Used on reference-typed columns (`ON UPDATE` / `ON DELETE` clauses).
+/// Enforcement is deferred to the query executor (PR 1.5).
+#[derive(Debug, Clone, PartialEq)]
+pub enum ReferentialAction {
+    /// Propagate the change to all referencing rows.
+    Cascade,
+    /// Set the referencing column to `NULL`.
+    SetNull,
+    /// Set the referencing column to its default value.
+    SetDefault,
+    /// Reject the change if any referencing row exists.
+    Restrict,
+    /// Like `RESTRICT` but checked at statement end (default SQL behaviour).
+    NoAction,
+}
+
 // ── Value ─────────────────────────────────────────────────────────────────────
 
 /// A literal SQL value.
@@ -1073,6 +1093,12 @@ pub struct ColumnDef {
     pub text_directive: Option<TextDirective>,
     /// Named typed metadata directives attached to each value of this column.
     pub terms_directives: Vec<TermsDirective>,
+    /// Referential action to take when the referenced row is **updated**.
+    /// Only meaningful for reference-typed columns.  Enforcement is in PR 1.5.
+    pub on_update: Option<ReferentialAction>,
+    /// Referential action to take when the referenced row is **deleted**.
+    /// Only meaningful for reference-typed columns.  Enforcement is in PR 1.5.
+    pub on_delete: Option<ReferentialAction>,
 }
 
 /// Directive for multilingual/localized text columns.
@@ -2864,7 +2890,7 @@ fn convert_create_table(ct: sp::CreateTable) -> Result<Statement, AstError> {
 
 fn convert_column_def(col: sp::ColumnDef) -> Result<ColumnDef, AstError> {
     let name = ident_to_string(&col.name);
-    let data_type = convert_data_type(col.data_type)?;
+    let mut data_type = convert_data_type(col.data_type)?;
 
     let mut nullable = true;
     let mut primary_key = false;
@@ -2875,6 +2901,8 @@ fn convert_column_def(col: sp::ColumnDef) -> Result<ColumnDef, AstError> {
     let max_length = None;
     let uniques = false;
     let mut check = None;
+    let mut on_update = None;
+    let mut on_delete = None;
 
     for option in col.options {
         match option.option {
@@ -2892,6 +2920,11 @@ fn convert_column_def(col: sp::ColumnDef) -> Result<ColumnDef, AstError> {
             }
             sp::ColumnOption::Check(cc) => {
                 check = Some(convert_expr(*cc.expr)?);
+            }
+            sp::ColumnOption::ForeignKey(fk) => {
+                let (upd, del) = extract_fk_actions(fk, &mut data_type)?;
+                on_update = upd;
+                on_delete = del;
             }
             _ => {}
         }
@@ -2911,7 +2944,62 @@ fn convert_column_def(col: sp::ColumnDef) -> Result<ColumnDef, AstError> {
         check,
         text_directive: None,
         terms_directives: vec![],
+        on_update,
+        on_delete,
     })
+}
+
+/// Return `true` if `dt` is one of the reference-typed variants.
+fn is_reference_type(dt: &DataType) -> bool {
+    matches!(
+        dt,
+        DataType::Reference(_)
+            | DataType::ReferenceArray(_)
+            | DataType::VirtualReference { .. }
+            | DataType::VirtualReferenceArray { .. }
+    )
+}
+
+/// Map a sqlparser [`sp::ReferentialAction`] to our internal
+/// [`ReferentialAction`].
+fn convert_referential_action(action: sp::ReferentialAction) -> ReferentialAction {
+    match action {
+        sp::ReferentialAction::Cascade => ReferentialAction::Cascade,
+        sp::ReferentialAction::SetNull => ReferentialAction::SetNull,
+        sp::ReferentialAction::SetDefault => ReferentialAction::SetDefault,
+        sp::ReferentialAction::Restrict => ReferentialAction::Restrict,
+        sp::ReferentialAction::NoAction => ReferentialAction::NoAction,
+    }
+}
+
+/// Extract `(on_update, on_delete)` from a column-level `REFERENCES` clause.
+///
+/// When the data type is an [`DataType::EnumRef`] (i.e. a bare custom type
+/// name like `customers`), it is upgraded to [`DataType::Reference`] in-place,
+/// because the presence of a column-level `REFERENCES … ON DELETE / ON UPDATE`
+/// clause signals an object-reference relationship, not an enum lookup.
+///
+/// Returns an error when the column's data type is a concrete non-reference
+/// type (e.g. `INTEGER`, `VARCHAR`).
+fn extract_fk_actions(
+    fk: sp::ForeignKeyConstraint,
+    data_type: &mut DataType,
+) -> Result<(Option<ReferentialAction>, Option<ReferentialAction>), AstError> {
+    // Upgrade bare custom-type name to an explicit Reference.
+    if let DataType::EnumRef(table_name) = data_type {
+        *data_type = DataType::Reference(table_name.clone());
+    }
+    if !is_reference_type(data_type) {
+        return Err(AstError::Invalid(
+            "ON UPDATE / ON DELETE actions are only supported on reference-typed columns \
+             (e.g. `col_name table_name REFERENCES table_name ON DELETE CASCADE`); \
+             use a reference column type"
+                .to_string(),
+        ));
+    }
+    let on_update = fk.on_update.map(convert_referential_action);
+    let on_delete = fk.on_delete.map(convert_referential_action);
+    Ok((on_update, on_delete))
 }
 
 fn convert_table_constraint(c: sp::TableConstraint) -> Result<TableConstraint, AstError> {

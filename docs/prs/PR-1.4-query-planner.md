@@ -549,6 +549,21 @@ insta = "1.34"  # Snapshot testing for plans
 - Cost model learning from actual execution → Phase 5
 - Query hints and manual plan forcing → Phase 5
 
+### AeternumDB-Specific Planner Requirements
+
+The following AeternumDB extensions were deferred from PR 1.3 (parser) and must be
+handled at the query-planner level:
+
+| Requirement | Description |
+|-------------|-------------|
+| **Path / chain join resolution** | Navigate multi-hop reference chains like `table.ref_col.target_col` by resolving each reference-typed column hop into a logical join at plan time. |
+| **EXPAND operator resolution** | `EXPAND(ref_col)` expands all columns of the referenced table inline; the planner must rewrite it into the appropriate join + projection. |
+| **VIEW AS transformation** | `VIEW AS alias (col_list)` renames the current query's result set; the planner validates the alias list and injects a Rename/Project node. |
+| **FILTER BY clause** | Custom AeternumDB join filter syntax (distinct from SQL `WHERE`); the planner lowers it into a Filter node directly above the reference-join operator. |
+| **UNNEST / UNPIVOT for vector columns** | Array / vector columns require an `UNNEST` operator to explode rows; the planner must detect vector-typed columns in projections and inject UNNEST nodes. |
+| **FLAT table enforcement** | `CREATE FLAT TABLE` tables may not participate in joins or reference relationships; the planner must reject any plan that violates this constraint. |
+| **Cross-database join rejection** | All tables referenced in a single query must belong to the same database; the planner rejects cross-database plans with a clear error message. |
+
 ## 🏁 Definition of Done
 
 This PR is complete when:

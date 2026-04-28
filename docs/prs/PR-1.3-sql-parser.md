@@ -310,6 +310,8 @@ carry column-level permission lists.  Enforcement is a Phase 6 task.
 | Execution of all statement types | PR 1.5 |
 | Persistent catalog with multi-DB/schema, objid | PR 1.6 |
 | FLAG enum bitmask storage, bitwise operator evaluation | PR 1.9 |
+| `ON UPDATE` / `ON DELETE` referential action enforcement | PR 1.5 |
+| `ON UPDATE` / `ON DELETE` cascade execution | PR 1.5 |
 | `FILTER BY` keyword in SQL grammar | Phase 4 |
 | `CREATE FLAT TABLE` keyword in SQL grammar | Phase 4 |
 | `FOR SYSTEM_TIME AS OF` historical queries | Phase 5 |

@@ -8,7 +8,8 @@
 
 use aeternumdb_core::sql::ast::{
     BeginTransactionStatement, BinaryOperator, CommitStatement, DataType, Expr, OnCommitBehavior,
-    ReleaseSavepointStatement, RollbackStatement, SavepointStatement, SelectItem, Statement, Value,
+    ReferentialAction, ReleaseSavepointStatement, RollbackStatement, SavepointStatement,
+    SelectItem, Statement, Value,
 };
 use aeternumdb_core::sql::parser::{SqlError, SqlParser};
 use aeternumdb_core::sql::validator::{
@@ -1771,4 +1772,88 @@ fn test_cross_join_no_filter() {
             ..
         })
     ));
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ON UPDATE / ON DELETE referential actions on reference columns
+// ══════════════════════════════════════════════════════════════════════════════
+
+/// Helper: parse a CREATE TABLE and return the first column definition.
+fn first_column(sql: &str) -> aeternumdb_core::sql::ast::ColumnDef {
+    let stmt = parser().parse_one(sql).unwrap();
+    match stmt {
+        Statement::CreateTable(ct) => ct.columns.into_iter().next().unwrap(),
+        _ => panic!("expected CreateTable"),
+    }
+}
+
+#[test]
+fn test_reference_on_delete_cascade() {
+    // `customer customers REFERENCES customers ON DELETE CASCADE`
+    // sqlparser maps the data type to Custom("customers") + ForeignKey option;
+    // our converter upgrades it to Reference("customers") and records the action.
+    let col = first_column(
+        "CREATE TABLE orders (\
+          customer customers REFERENCES customers ON DELETE CASCADE\
+        )",
+    );
+    assert_eq!(col.data_type, DataType::Reference("customers".to_string()));
+    assert_eq!(col.on_delete, Some(ReferentialAction::Cascade));
+    assert_eq!(col.on_update, None);
+}
+
+#[test]
+fn test_reference_on_update_restrict() {
+    let col = first_column(
+        "CREATE TABLE orders (\
+          customer customers REFERENCES customers ON UPDATE RESTRICT\
+        )",
+    );
+    assert_eq!(col.data_type, DataType::Reference("customers".to_string()));
+    assert_eq!(col.on_update, Some(ReferentialAction::Restrict));
+    assert_eq!(col.on_delete, None);
+}
+
+#[test]
+fn test_reference_on_delete_set_null() {
+    let col = first_column(
+        "CREATE TABLE orders (\
+          customer customers REFERENCES customers ON DELETE SET NULL\
+        )",
+    );
+    assert_eq!(col.data_type, DataType::Reference("customers".to_string()));
+    assert_eq!(col.on_delete, Some(ReferentialAction::SetNull));
+    assert_eq!(col.on_update, None);
+}
+
+#[test]
+fn test_reference_on_delete_cascade_on_update_cascade() {
+    let col = first_column(
+        "CREATE TABLE orders (\
+          customer customers REFERENCES customers ON DELETE CASCADE ON UPDATE CASCADE\
+        )",
+    );
+    assert_eq!(col.data_type, DataType::Reference("customers".to_string()));
+    assert_eq!(col.on_delete, Some(ReferentialAction::Cascade));
+    assert_eq!(col.on_update, Some(ReferentialAction::Cascade));
+}
+
+#[test]
+fn test_on_delete_on_non_reference_column_errors() {
+    // INTEGER REFERENCES … ON DELETE CASCADE — data type is NOT a reference type.
+    // Our converter should reject this with an AstError::Invalid.
+    let result = parser().parse_one(
+        "CREATE TABLE orders (\
+          customer_id INTEGER REFERENCES customers ON DELETE CASCADE\
+        )",
+    );
+    assert!(
+        result.is_err(),
+        "expected an error when ON DELETE is used on a non-reference column"
+    );
+    let err_str = result.unwrap_err().to_string();
+    assert!(
+        err_str.contains("ON UPDATE / ON DELETE"),
+        "error message should mention ON UPDATE / ON DELETE, got: {err_str}"
+    );
 }
