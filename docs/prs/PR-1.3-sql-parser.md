@@ -354,7 +354,7 @@ clause.  Specifying referential actions on a non-reference column returns
 | `EnumRef` type resolution at runtime | PR 1.6 |
 | FLAG enum bitmask storage, bitwise operator evaluation | PR 1.9 |
 | `FOR SYSTEM_TIME AS OF` historical queries | PR 1.7 |
-| `FILTER BY` keyword in native SQL grammar | Phase 4 (post-1.x) |
-| `CREATE FLAT TABLE` keyword in native SQL grammar | Phase 4 (post-1.x) |
+| `FILTER BY` keyword in native SQL grammar | [PR 4.1](PR-4.1-sql-grammar-extensions.md) |
+| `CREATE FLAT TABLE` keyword in native SQL grammar | [PR 4.1](PR-4.1-sql-grammar-extensions.md) |
 | GRANT/REVOKE enforcement | PR 1.6 |
-| Cluster-wide objid generation | Phase 3 (Distribution) |
+| Cluster-wide objid generation | [PR 3.1](PR-3.1-distribution-cluster.md) |

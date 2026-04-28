@@ -447,11 +447,10 @@ impl<'a> Validator<'a> {
                 Statement::Rollback(RollbackStatement { scope, .. }) => {
                     seq_rollback(&mut stack, scope)?;
                 }
-                Statement::Savepoint(_) | Statement::ReleaseSavepoint(_) => {
-                    if stack.is_empty() {
-                        return Err(ValidationError::NoActiveTransaction);
-                    }
+                Statement::Savepoint(_) | Statement::ReleaseSavepoint(_) if stack.is_empty() => {
+                    return Err(ValidationError::NoActiveTransaction);
                 }
+                Statement::Savepoint(_) | Statement::ReleaseSavepoint(_) => {}
                 _ => {}
             }
         }

@@ -3358,3 +3358,440 @@ fn test_catalog_get_type() {
     assert!(c.get_type("status").is_some());
     assert!(c.get_type("MISSING").is_none());
 }
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Coverage gap: validate_update success path + WHERE clause
+// ══════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_validate_update_success_with_where() {
+    let catalog = catalog_with_users();
+    let stmt = parser()
+        .parse_one("UPDATE users SET name = 'Alice' WHERE id = 1")
+        .unwrap();
+    let v = Validator::new(&catalog);
+    assert!(v.validate(&stmt).is_ok());
+}
+
+#[test]
+fn test_validate_update_success_no_where() {
+    let catalog = catalog_with_users();
+    let stmt = parser().parse_one("UPDATE users SET age = 30").unwrap();
+    let v = Validator::new(&catalog);
+    assert!(v.validate(&stmt).is_ok());
+}
+
+#[test]
+fn test_validate_update_null_allowed_nullable_column() {
+    let catalog = catalog_with_users();
+    let stmt = parser()
+        .parse_one("UPDATE users SET name = NULL WHERE id = 1")
+        .unwrap();
+    let v = Validator::new(&catalog);
+    assert!(v.validate(&stmt).is_ok());
+}
+
+#[test]
+fn test_validate_update_unknown_column_fails() {
+    let catalog = catalog_with_users();
+    let stmt = parser().parse_one("UPDATE users SET ghost = 1").unwrap();
+    let v = Validator::new(&catalog);
+    assert!(matches!(
+        v.validate(&stmt).unwrap_err(),
+        ValidationError::ColumnNotFound { .. }
+    ));
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Coverage gap: validate_delete with WHERE clause
+// ══════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_validate_delete_with_where_ok() {
+    let catalog = catalog_with_users();
+    let stmt = parser()
+        .parse_one("DELETE FROM users WHERE id = 1")
+        .unwrap();
+    let v = Validator::new(&catalog);
+    assert!(v.validate(&stmt).is_ok());
+}
+
+#[test]
+fn test_validate_delete_no_where_ok() {
+    let catalog = catalog_with_users();
+    let stmt = parser().parse_one("DELETE FROM users").unwrap();
+    let v = Validator::new(&catalog);
+    assert!(v.validate(&stmt).is_ok());
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Coverage gap: named commit / rollback (CommitScope::Named, RollbackScope::Named)
+// and check_lifo_and_truncate
+// ══════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_seq_commit_named_ok() {
+    let c = Catalog::new();
+    let v = Validator::new(&c);
+    let stmts = vec![
+        Statement::BeginTransaction(BeginTransactionStatement {
+            name: Some("tx1".to_string()),
+            isolation_level: None,
+            read_only: false,
+        }),
+        Statement::Commit(CommitStatement {
+            scope: CommitScope::Named("tx1".to_string()),
+            chain: false,
+        }),
+    ];
+    assert!(v.validate_sequence(&stmts).is_ok());
+}
+
+#[test]
+fn test_seq_rollback_named_ok() {
+    let c = Catalog::new();
+    let v = Validator::new(&c);
+    let stmts = vec![
+        Statement::BeginTransaction(BeginTransactionStatement {
+            name: Some("tx1".to_string()),
+            isolation_level: None,
+            read_only: false,
+        }),
+        Statement::Rollback(RollbackStatement {
+            scope: RollbackScope::Named("tx1".to_string()),
+            chain: false,
+        }),
+    ];
+    assert!(v.validate_sequence(&stmts).is_ok());
+}
+
+#[test]
+fn test_seq_commit_named_not_found_fails() {
+    let c = Catalog::new();
+    let v = Validator::new(&c);
+    let stmts = vec![
+        Statement::BeginTransaction(BeginTransactionStatement {
+            name: Some("outer".to_string()),
+            isolation_level: None,
+            read_only: false,
+        }),
+        Statement::Commit(CommitStatement {
+            scope: CommitScope::Named("ghost".to_string()),
+            chain: false,
+        }),
+    ];
+    assert!(matches!(
+        v.validate_sequence(&stmts).unwrap_err(),
+        ValidationError::TransactionNotFound(_)
+    ));
+}
+
+#[test]
+fn test_seq_rollback_named_not_found_fails() {
+    let c = Catalog::new();
+    let v = Validator::new(&c);
+    let stmts = vec![
+        Statement::BeginTransaction(BeginTransactionStatement {
+            name: Some("outer".to_string()),
+            isolation_level: None,
+            read_only: false,
+        }),
+        Statement::Rollback(RollbackStatement {
+            scope: RollbackScope::Named("ghost".to_string()),
+            chain: false,
+        }),
+    ];
+    assert!(matches!(
+        v.validate_sequence(&stmts).unwrap_err(),
+        ValidationError::TransactionNotFound(_)
+    ));
+}
+
+#[test]
+fn test_seq_commit_named_nesting_violation_fails() {
+    let c = Catalog::new();
+    let v = Validator::new(&c);
+    // outer → inner open; committing outer should fail
+    let stmts = vec![
+        Statement::BeginTransaction(BeginTransactionStatement {
+            name: Some("outer".to_string()),
+            isolation_level: None,
+            read_only: false,
+        }),
+        Statement::BeginTransaction(BeginTransactionStatement {
+            name: Some("inner".to_string()),
+            isolation_level: None,
+            read_only: false,
+        }),
+        Statement::Commit(CommitStatement {
+            scope: CommitScope::Named("outer".to_string()),
+            chain: false,
+        }),
+    ];
+    assert!(matches!(
+        v.validate_sequence(&stmts).unwrap_err(),
+        ValidationError::TransactionNestingViolation { .. }
+    ));
+}
+
+#[test]
+fn test_seq_rollback_named_nesting_violation_fails() {
+    let c = Catalog::new();
+    let v = Validator::new(&c);
+    let stmts = vec![
+        Statement::BeginTransaction(BeginTransactionStatement {
+            name: Some("outer".to_string()),
+            isolation_level: None,
+            read_only: false,
+        }),
+        Statement::BeginTransaction(BeginTransactionStatement {
+            name: Some("inner".to_string()),
+            isolation_level: None,
+            read_only: false,
+        }),
+        Statement::Rollback(RollbackStatement {
+            scope: RollbackScope::Named("outer".to_string()),
+            chain: false,
+        }),
+    ];
+    assert!(matches!(
+        v.validate_sequence(&stmts).unwrap_err(),
+        ValidationError::TransactionNestingViolation { .. }
+    ));
+}
+
+#[test]
+fn test_seq_savepoint_inside_transaction_ok() {
+    let c = Catalog::new();
+    let v = Validator::new(&c);
+    let stmts = vec![
+        Statement::BeginTransaction(BeginTransactionStatement {
+            name: None,
+            isolation_level: None,
+            read_only: false,
+        }),
+        Statement::Savepoint(SavepointStatement {
+            name: "sp1".to_string(),
+        }),
+        Statement::ReleaseSavepoint(ReleaseSavepointStatement {
+            name: "sp1".to_string(),
+        }),
+    ];
+    assert!(v.validate_sequence(&stmts).is_ok());
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Coverage gap: VIEW AS with non-aggregate expressions (exercises view_as_children)
+// ══════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_view_as_clause_with_binary_op_ok() {
+    use aeternumdb_core::sql::ast::{SelectStatement, TableReference};
+
+    let mut catalog = Catalog::new();
+    catalog.add_table(TableSchema {
+        name: "users".into(),
+        columns: vec![
+            ColumnSchema {
+                name: "id".into(),
+                data_type: DataType::Integer,
+                nullable: false,
+            },
+            ColumnSchema {
+                name: "score".into(),
+                data_type: DataType::Float,
+                nullable: true,
+            },
+        ],
+    });
+
+    // VIEW AS with a simple arithmetic expression — should pass validation.
+    let stmt = Statement::Select(Box::new(SelectStatement {
+        with: vec![],
+        columns: vec![SelectItem::Wildcard],
+        from: Some(TableReference::Named {
+            database: None,
+            schema: None,
+            name: "users".into(),
+            alias: None,
+        }),
+        where_clause: None,
+        group_by: vec![],
+        having: None,
+        order_by: vec![],
+        limit: None,
+        offset: None,
+        distinct: false,
+        view_as: Some(vec![ViewAsItem {
+            expr: Expr::BinaryOp {
+                left: Box::new(Expr::Column {
+                    table: None,
+                    name: "score".into(),
+                }),
+                op: BinaryOperator::Multiply,
+                right: Box::new(Expr::Literal(Value::Integer(2))),
+            },
+            alias: "double_score".into(),
+        }]),
+    }));
+    assert!(Validator::new(&catalog).validate(&stmt).is_ok());
+}
+
+#[test]
+fn test_view_as_clause_subquery_rejected() {
+    use aeternumdb_core::sql::ast::{SelectStatement, TableReference};
+
+    let mut catalog = Catalog::new();
+    catalog.add_table(TableSchema {
+        name: "users".into(),
+        columns: vec![ColumnSchema {
+            name: "id".into(),
+            data_type: DataType::Integer,
+            nullable: false,
+        }],
+    });
+    catalog.add_table(TableSchema {
+        name: "orders".into(),
+        columns: vec![ColumnSchema {
+            name: "id".into(),
+            data_type: DataType::Integer,
+            nullable: false,
+        }],
+    });
+
+    let inner_select = Box::new(SelectStatement {
+        with: vec![],
+        columns: vec![SelectItem::Wildcard],
+        from: Some(TableReference::Named {
+            database: None,
+            schema: None,
+            name: "orders".into(),
+            alias: None,
+        }),
+        where_clause: None,
+        group_by: vec![],
+        having: None,
+        order_by: vec![],
+        limit: None,
+        offset: None,
+        distinct: false,
+        view_as: None,
+    });
+
+    let stmt = Statement::Select(Box::new(SelectStatement {
+        with: vec![],
+        columns: vec![SelectItem::Wildcard],
+        from: Some(TableReference::Named {
+            database: None,
+            schema: None,
+            name: "users".into(),
+            alias: None,
+        }),
+        where_clause: None,
+        group_by: vec![],
+        having: None,
+        order_by: vec![],
+        limit: None,
+        offset: None,
+        distinct: false,
+        view_as: Some(vec![ViewAsItem {
+            expr: Expr::Subquery(inner_select),
+            alias: "sub".into(),
+        }]),
+    }));
+    assert!(matches!(
+        Validator::new(&catalog).validate(&stmt).unwrap_err(),
+        ValidationError::ViewAsSubqueryNotAllowed
+    ));
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Coverage gap: parser.rs — SqlError::source, Default impl, EmptyInput display
+// ══════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_sql_error_source_none() {
+    use std::error::Error;
+    let e = SqlError::ParseError {
+        message: "test".to_string(),
+        line: None,
+        col: None,
+    };
+    // Non-AstError variants have no source
+    assert!(e.source().is_none());
+}
+
+#[test]
+fn test_sql_error_source_ast_error() {
+    use std::error::Error;
+    // Build an AstError to wrap
+    let ast_err = aeternumdb_core::sql::ast::AstError::Unsupported("test statement".to_string());
+    let sql_err = SqlError::AstError(ast_err);
+    assert!(sql_err.source().is_some());
+}
+
+#[test]
+fn test_sql_parser_default() {
+    // SqlParser::default() should be identical to SqlParser::new()
+    let p: SqlParser = Default::default();
+    assert!(p.parse("SELECT 1").is_ok());
+}
+
+#[test]
+fn test_parse_expr_empty_input() {
+    let err = parser().parse_expr("").unwrap_err();
+    assert!(matches!(err, SqlError::EmptyInput));
+}
+
+#[test]
+fn test_parse_empty_string() {
+    let err = parser().parse("").unwrap_err();
+    assert!(matches!(err, SqlError::EmptyInput));
+}
+
+#[test]
+fn test_sql_error_line_col_display() {
+    let e = SqlError::ParseError {
+        message: "unexpected token".to_string(),
+        line: Some(3),
+        col: Some(7),
+    };
+    let s = e.to_string();
+    assert!(s.contains("3"));
+    assert!(s.contains("7"));
+}
+
+#[test]
+fn test_sql_error_line_only_display() {
+    let e = SqlError::ParseError {
+        message: "unexpected token".to_string(),
+        line: Some(5),
+        col: None,
+    };
+    let s = e.to_string();
+    assert!(s.contains("5"));
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Coverage gap: validate_table_reference with alias and join
+// ══════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_validate_select_with_alias() {
+    let catalog = catalog_with_users();
+    let stmt = parser()
+        .parse_one("SELECT u.id FROM users u WHERE u.id = 1")
+        .unwrap();
+    let v = Validator::new(&catalog);
+    assert!(v.validate(&stmt).is_ok());
+}
+
+#[test]
+fn test_validate_select_subquery_in_from() {
+    let catalog = catalog_with_users();
+    let stmt = parser()
+        .parse_one("SELECT id FROM (SELECT id FROM users) sub WHERE id = 1")
+        .unwrap();
+    let v = Validator::new(&catalog);
+    assert!(v.validate(&stmt).is_ok());
+}
