@@ -2790,6 +2790,8 @@ fn test_validate_create_enum_empty_variants_fails() {
 fn test_validate_create_enum_duplicate_variant_fails() {
     let c = Catalog::new();
     let v = Validator::new(&c);
+    // Variant names are compared case-insensitively (validator lowercases before comparing),
+    // so "Active" is a duplicate of "active" and must be rejected.
     let stmt = Statement::CreateEnum(CreateEnumStatement {
         name: "status".to_string(),
         flag: false,
@@ -2800,9 +2802,9 @@ fn test_validate_create_enum_duplicate_variant_fails() {
                 is_none: false,
             },
             EnumVariant {
-                name: "Active".to_string(),
+                name: "Active".to_string(), // case-insensitive duplicate of "active"
                 is_none: false,
-            }, // duplicate
+            },
         ],
     });
     assert!(matches!(
