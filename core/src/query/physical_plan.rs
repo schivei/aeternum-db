@@ -427,7 +427,7 @@ impl<'a> PhysicalPlanner<'a> {
         if use_hash {
             let cpu = self.cost_model.estimate_hash_join_cost(lr, rr);
             let total = left_phys.cost().total + right_phys.cost().total + cpu;
-            let out_rows = CostModel::estimated_rows(lr * rr / 100, 1.0);
+            let out_rows = CostModel::estimated_rows(lr.saturating_mul(rr) / 100, 1.0);
             PhysicalPlan::HashJoin {
                 left: Box::new(left_phys),
                 right: Box::new(right_phys),
@@ -543,7 +543,7 @@ impl<'a> PhysicalPlanner<'a> {
 
     fn lower_limit(&self, input: &LogicalPlan, limit: usize, offset: usize) -> PhysicalPlan {
         let child = self.lower(input);
-        let rows = limit.min(child.cost().estimated_rows);
+        let rows = limit.min(child.cost().estimated_rows.saturating_sub(offset));
         let total = child.cost().total;
         PhysicalPlan::Limit {
             input: Box::new(child),
@@ -601,7 +601,11 @@ impl<'a> PhysicalPlanner<'a> {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /// Returns a synthetic index name if the predicate looks like an equality
-/// or range predicate on a simple column reference.
+/// or range predicate between a column reference and a literal constant.
+///
+/// Both `col OP literal` and `literal OP col` are recognized (commutative
+/// normalization).  Predicates where both sides are columns (e.g. `id =
+/// other_col`) are not treated as index-usable and return `None`.
 fn detect_index_predicate(
     pred: &Expr,
     _stats: &crate::query::statistics::TableStats,
@@ -616,9 +620,14 @@ fn detect_index_predicate(
                 | BinaryOperator::LtEq
                 | BinaryOperator::Gt
                 | BinaryOperator::GtEq,
-            right: _,
+            right,
         } => {
-            if let Expr::Column { name, .. } = left.as_ref() {
+            // col OP literal
+            if let (Expr::Column { name, .. }, Expr::Literal(_)) = (left.as_ref(), right.as_ref()) {
+                return Some(format!("{name}_idx"));
+            }
+            // literal OP col  (commutative normalization)
+            if let (Expr::Literal(_), Expr::Column { name, .. }) = (left.as_ref(), right.as_ref()) {
                 return Some(format!("{name}_idx"));
             }
             None

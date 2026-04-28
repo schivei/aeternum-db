@@ -95,7 +95,8 @@ pub enum PlannerError {
 
     /// A `FLAT` table was used in a join, which is not permitted.
     ///
-    /// FLAT tables may only be accessed via sequential scans.
+    /// FLAT tables cannot participate in joins; use a single-table query to
+    /// access a FLAT table.
     FlatTableJoin(String),
 
     /// An `EXPAND` expression could not be resolved.
@@ -121,11 +122,9 @@ impl std::fmt::Display for PlannerError {
                  tables from different databases in the same query: {}",
                 databases.join(", ")
             ),
-            PlannerError::FlatTableJoin(table) => write!(
-                f,
-                "FLAT table '{table}' cannot participate in a join; \
-                 FLAT tables may only be accessed via sequential scan"
-            ),
+            PlannerError::FlatTableJoin(table) => {
+                write!(f, "FLAT table '{table}' cannot participate in a join")
+            }
             PlannerError::InvalidExpand(msg) => write!(f, "invalid EXPAND expression: {msg}"),
             PlannerError::Other(msg) => write!(f, "planner error: {msg}"),
         }

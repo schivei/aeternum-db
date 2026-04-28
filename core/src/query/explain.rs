@@ -48,10 +48,10 @@ pub fn explain_physical(plan: &PhysicalPlan) -> String {
     out
 }
 
-/// Format a [`PhysicalPlan`] as a logical tree (pre-optimization view).
+/// Format a [`LogicalPlan`] as a human-readable tree (pre-optimization view).
 ///
-/// Uses the same renderer as [`explain_physical`] but without cost
-/// annotations.
+/// Uses the same tree renderer as [`explain_physical`] but operates on the
+/// logical plan without cost annotations.
 pub fn explain_logical(plan: &LogicalPlan) -> String {
     let mut out = String::from("Logical Plan:\n");
     format_logical_node(plan, &mut out, "", true);

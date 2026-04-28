@@ -154,8 +154,12 @@ fn select_with_equality_predicate_uses_index_scan() {
     let out = explain_physical(&phys);
     // Predicate pushed into scan; index scan when equality on column reference.
     assert!(out.contains("users"));
-    // The explain should contain either IndexScan or SeqScan.
-    assert!(out.contains("Scan"));
+    // The equality predicate on `id` (a column reference) against a literal
+    // should deterministically select IndexScan.
+    assert!(
+        out.contains("IndexScan"),
+        "expected IndexScan in explain output, got:\n{out}"
+    );
 }
 
 #[test]

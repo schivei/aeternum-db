@@ -397,14 +397,26 @@ fn push_projection_project(input: LogicalPlan, items: Vec<ProjectionItem>) -> Lo
             filter,
             ..
         } => {
-            let columns = if filter.is_some() {
+            // Build the column list as the union of:
+            //   1. columns needed by the projection items, and
+            //   2. columns referenced by the scan filter predicate.
+            // If either set implies "all columns" (wildcard or complex expr),
+            // fall back to None (read everything).
+            let proj_cols = extract_column_names(&items);
+            let columns = if proj_cols.is_empty() {
+                // Wildcard or non-column exprs in projection — read all.
                 None
             } else {
-                let columns = extract_column_names(&items);
-                if columns.is_empty() {
+                let mut all_cols = proj_cols;
+                if let Some(pred) = &filter {
+                    collect_filter_columns(pred, &mut all_cols);
+                }
+                all_cols.sort_unstable();
+                all_cols.dedup();
+                if all_cols.is_empty() {
                     None
                 } else {
-                    Some(columns)
+                    Some(all_cols)
                 }
             };
 
@@ -426,18 +438,63 @@ fn push_projection_project(input: LogicalPlan, items: Vec<ProjectionItem>) -> Lo
     }
 }
 
-/// Extract simple column names referenced by a projection item list.
-fn extract_column_names(items: &[ProjectionItem]) -> Vec<String> {
-    items
-        .iter()
-        .filter_map(|item| {
-            if let Expr::Column { name, .. } = &item.expr {
-                Some(name.clone())
-            } else {
-                None
+/// Collect bare column names referenced by a filter predicate expression.
+///
+/// Only `Expr::Column { name, .. }` nodes are collected; wildcards and other
+/// expression forms that imply "all columns" are silently skipped.
+fn collect_filter_columns(expr: &Expr, out: &mut Vec<String>) {
+    match expr {
+        Expr::Column { name, .. } => {
+            if name != "*" {
+                out.push(name.clone());
             }
-        })
-        .collect()
+        }
+        Expr::BinaryOp { left, right, .. } => {
+            collect_filter_columns(left, out);
+            collect_filter_columns(right, out);
+        }
+        Expr::UnaryOp { expr, .. } | Expr::Cast { expr, .. } | Expr::IsNull { expr, .. } => {
+            collect_filter_columns(expr, out);
+        }
+        Expr::Between {
+            expr, low, high, ..
+        } => {
+            collect_filter_columns(expr, out);
+            collect_filter_columns(low, out);
+            collect_filter_columns(high, out);
+        }
+        Expr::InList { expr, list, .. } => {
+            collect_filter_columns(expr, out);
+            for e in list {
+                collect_filter_columns(e, out);
+            }
+        }
+        Expr::Function { args, .. } => {
+            for a in args {
+                collect_filter_columns(a, out);
+            }
+        }
+        _ => {} // Literals, subqueries, wildcards — nothing to collect.
+    }
+}
+
+/// Extract simple column names referenced by a projection item list.
+///
+/// Returns `None`-equivalent (empty vec) when any item is a wildcard
+/// (`Expr::Column { name: "*", .. }`), because the scan must read all
+/// columns to satisfy the wildcard.
+fn extract_column_names(items: &[ProjectionItem]) -> Vec<String> {
+    let mut names = Vec::new();
+    for item in items {
+        if let Expr::Column { name, .. } = &item.expr {
+            // "*" represents a qualified wildcard (t.*) — treat as "all columns".
+            if name == "*" {
+                return vec![];
+            }
+            names.push(name.clone());
+        }
+    }
+    names
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

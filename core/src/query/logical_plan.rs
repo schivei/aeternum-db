@@ -349,18 +349,16 @@ impl<'a> LogicalPlanBuilder<'a> {
             PlannerError::CatalogError(format!("table not found in catalog: {}", name))
         })?;
         let is_flat = self.flat_tables.contains(&lower);
+        // If this is a FLAT table, record it for join-rejection later.
+        // The Scan node itself doesn't carry flat-ness; enforcement happens in
+        // reject_flat_in_join when a join is attempted.
+        let _ = is_flat;
 
         Ok(LogicalPlan::Scan {
             table: lower,
             alias: alias.map(str::to_string),
             columns: None,
-            filter: if is_flat {
-                // Record flat-ness by storing a marker; actual restriction is
-                // enforced when a join is attempted.
-                None
-            } else {
-                None
-            },
+            filter: None,
         })
     }
 
@@ -493,22 +491,17 @@ impl<'a> LogicalPlanBuilder<'a> {
             }
         };
 
-        // Look up the reference target in the catalog.
-        // For now we emit an Unnest marker so physical planning can inject the
-        // correct join when catalog resolution is available.
-        unnest_queue.push((
-            Expr::Column {
-                table: None,
-                name: col_name.clone(),
-            },
-            alias.map(str::to_string),
-        ));
+        // Preserve the original column expression (including any table qualifier)
+        // so downstream planning can correctly resolve the reference.
+        unnest_queue.push((expr.clone(), alias.map(str::to_string)));
 
         out.push(ProjectionItem {
             expr: expr.clone(),
-            alias: alias.map(|a| format!("{a}.*")),
+            // Store the alias as-is (namespace prefix); wildcard expansion is a
+            // separate concern handled by the executor.
+            alias: alias.map(str::to_string),
         });
-        let _ = self.catalog; // suppress unused warning
+        let _ = (col_name, self.catalog); // suppress unused warnings
 
         Ok(())
     }
