@@ -299,9 +299,9 @@ impl<'a> LogicalPlanBuilder<'a> {
         let filtered = self.apply_where(base, stmt.where_clause.as_ref());
         let projected = self.apply_projection(filtered, &stmt.columns)?;
         let grouped = self.apply_group_by(projected, stmt, self.needs_aggregate(stmt));
-        let limited = apply_limit(grouped, stmt.limit, stmt.offset);
-        let sorted = apply_sort(limited, &stmt.order_by);
-        let view_as = apply_view_as(sorted, stmt.view_as.as_deref())?;
+        let sorted = apply_sort(grouped, &stmt.order_by);
+        let limited = apply_limit(sorted, stmt.limit, stmt.offset);
+        let view_as = apply_view_as(limited, stmt.view_as.as_deref())?;
         Ok(view_as)
     }
 
