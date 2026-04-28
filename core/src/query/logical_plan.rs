@@ -383,7 +383,7 @@ impl<'a> LogicalPlanBuilder<'a> {
             left: Box::new(left_plan),
             right: Box::new(right_plan),
             join_type: join_type.clone(),
-            condition: filter_by.cloned(),
+            condition: None,
         };
 
         if let Some(pred) = filter_by {
