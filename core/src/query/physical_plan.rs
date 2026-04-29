@@ -351,6 +351,8 @@ impl<'a> PhysicalPlanner<'a> {
 
         // When a pushed-down filter is present on a SeqScan, apply a default
         // selectivity so that row and cost estimates reflect the reduced output.
+        // 10% is a conservative heuristic (same as lower_filter) used when no
+        // histogram or statistics-based selectivity is available.
         let (seq_rows, seq_cpu) = if filter.is_some() {
             const DEFAULT_SEL: f64 = 0.1;
             let rows = CostModel::estimated_rows(table_stats.num_rows, DEFAULT_SEL);
