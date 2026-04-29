@@ -225,9 +225,12 @@ fn rewrite_plan_exprs(plan: LogicalPlan, f: fn(Expr) -> Expr) -> LogicalPlan {
 
 /// Reorder inner joins by estimated cardinality (smallest first).
 ///
-/// Recursively processes every `Inner` join node in the plan tree,
-/// swapping left/right inputs when the right side has fewer estimated rows.
-/// Non-inner joins are left untouched to preserve outer-join semantics.
+/// Recursively descends into `Filter`, `Sort`, `Project`, `Aggregate`,
+/// and `Limit` wrappers to find `Inner` join nodes, swapping their
+/// left/right inputs when the right side has fewer estimated rows.
+/// Non-`Inner` join nodes (outer, cross, etc.) are left untouched to
+/// preserve their semantics; inner joins nested directly under an outer join
+/// will not be reordered by this pass.
 pub fn reorder_joins(plan: LogicalPlan, stats: &StatisticsRegistry) -> LogicalPlan {
     match plan {
         LogicalPlan::Join {

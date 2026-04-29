@@ -28,7 +28,9 @@
 //!   very top of the plan tree.
 //! - **FILTER BY** — the per-join predicate stored in
 //!   [`TableReference::Join::filter_by`](crate::sql::ast::TableReference)
-//!   is injected as a [`LogicalPlan::Filter`] above the join node.
+//!   is stored directly in [`LogicalPlan::Join`]'s `condition` field, rather
+//!   than being lowered into a separate [`LogicalPlan::Filter`] above the
+//!   join; this preserves join semantics such as outer-join NULL extension.
 //! - **FLAT table enforcement** — any join that involves a FLAT table is
 //!   rejected with [`PlannerError::FlatTableJoin`].
 //! - **Cross-database join rejection** — tables from different databases
@@ -568,12 +570,19 @@ fn apply_sort(input: LogicalPlan, order_by: &[OrderByExpr]) -> LogicalPlan {
 }
 
 fn apply_limit(input: LogicalPlan, limit: Option<u64>, offset: Option<u64>) -> LogicalPlan {
-    match limit {
-        None => input,
-        Some(lim) => LogicalPlan::Limit {
+    match (limit, offset) {
+        (None, None) => input,
+        (Some(lim), offset) => LogicalPlan::Limit {
             input: Box::new(input),
             limit: lim as usize,
             offset: offset.unwrap_or(0) as usize,
+        },
+        // OFFSET without LIMIT: skip the specified number of rows but allow
+        // all remaining rows through (represented as usize::MAX rows limit).
+        (None, Some(off)) => LogicalPlan::Limit {
+            input: Box::new(input),
+            limit: usize::MAX,
+            offset: off as usize,
         },
     }
 }
@@ -1009,5 +1018,42 @@ mod tests {
             matches!(err, PlannerError::CrossDatabaseJoin { .. }),
             "expected CrossDatabaseJoin, got: {err:?}"
         );
+    }
+
+    // ── Thread 7 (round 3): OFFSET-without-LIMIT produces Limit node ─────────
+
+    #[test]
+    fn offset_only_produces_limit_node() {
+        let catalog = make_catalog();
+        let stmt = parse_select("SELECT id FROM users OFFSET 5");
+        let plan = builder(&catalog).build_select(&stmt).unwrap();
+        // The plan must contain a Limit node even without an explicit LIMIT.
+        fn has_limit(p: &LogicalPlan) -> bool {
+            matches!(p, LogicalPlan::Limit { .. })
+                || match p {
+                    LogicalPlan::Project { input, .. }
+                    | LogicalPlan::Filter { input, .. }
+                    | LogicalPlan::Sort { input, .. }
+                    | LogicalPlan::Limit { input, .. } => has_limit(input),
+                    _ => false,
+                }
+        }
+        assert!(
+            has_limit(&plan),
+            "expected Limit node for OFFSET-only query, got: {plan:?}"
+        );
+        // The Limit node must have limit == usize::MAX (unbounded) and offset == 5.
+        fn find_limit(p: &LogicalPlan) -> Option<(usize, usize)> {
+            match p {
+                LogicalPlan::Limit { limit, offset, .. } => Some((*limit, *offset)),
+                LogicalPlan::Project { input, .. }
+                | LogicalPlan::Filter { input, .. }
+                | LogicalPlan::Sort { input, .. } => find_limit(input),
+                _ => None,
+            }
+        }
+        let (lim, off) = find_limit(&plan).expect("Limit node not found");
+        assert_eq!(lim, usize::MAX, "OFFSET-only limit should be usize::MAX");
+        assert_eq!(off, 5, "offset should be 5");
     }
 }

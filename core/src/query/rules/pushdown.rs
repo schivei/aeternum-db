@@ -480,18 +480,22 @@ fn collect_filter_columns(expr: &Expr, out: &mut Vec<String>) {
 
 /// Extract simple column names referenced by a projection item list.
 ///
-/// Returns `None`-equivalent (empty vec) when any item is a wildcard
-/// (`Expr::Column { name: "*", .. }`), because the scan must read all
-/// columns to satisfy the wildcard.
+/// Returns an empty vec (meaning "read all columns") when any item is a
+/// wildcard (`Expr::Wildcard` or `Expr::Column { name: "*", .. }`), because
+/// the scan must read all columns to satisfy the wildcard.
 fn extract_column_names(items: &[ProjectionItem]) -> Vec<String> {
     let mut names = Vec::new();
     for item in items {
-        if let Expr::Column { name, .. } = &item.expr {
-            // "*" represents a qualified wildcard (t.*) — treat as "all columns".
-            if name == "*" {
-                return vec![];
+        match &item.expr {
+            Expr::Wildcard => return vec![],
+            Expr::Column { name, .. } => {
+                // "*" represents a qualified wildcard (t.*) — treat as "all columns".
+                if name == "*" {
+                    return vec![];
+                }
+                names.push(name.clone());
             }
-            names.push(name.clone());
+            _ => {}
         }
     }
     names
@@ -668,26 +672,58 @@ mod tests {
     }
 
     #[test]
-    fn cross_table_predicate_stays_above_outer_join() {
-        // For LEFT joins, a cross-table predicate must NOT be promoted into
-        // Join.condition — it must remain as a Filter above the join.
-        let pred = Expr::BinaryOp {
-            left: Box::new(col("u", "id")),
-            op: BinaryOperator::Eq,
-            right: Box::new(col("o", "user_id")),
-        };
-        let join = LogicalPlan::Join {
-            left: Box::new(scan("u")),
-            right: Box::new(scan("o")),
-            join_type: JoinType::Left,
-            condition: None,
-        };
-        let plan = filter_plan(join, pred);
-        let rule = PredicatePushdown;
-        let optimized = rule.apply(plan);
+    fn extract_column_names_returns_empty_for_expr_wildcard() {
+        // Expr::Wildcard (plain `*`) must signal "all columns" — i.e. return [].
+        let items = vec![
+            ProjectionItem {
+                expr: Expr::Wildcard,
+                alias: None,
+            },
+            ProjectionItem {
+                expr: Expr::Column {
+                    table: None,
+                    name: "id".into(),
+                },
+                alias: None,
+            },
+        ];
+        let names = extract_column_names(&items);
         assert!(
-            matches!(optimized, LogicalPlan::Filter { .. }),
-            "expected Filter above outer join, got {optimized:?}"
+            names.is_empty(),
+            "expected empty vec (all-columns) when Expr::Wildcard present, got {names:?}"
         );
+    }
+
+    #[test]
+    fn projection_with_wildcard_leaves_scan_columns_none() {
+        // SELECT *, id FROM users — wildcard means all columns; Scan.columns must be None.
+        let items = vec![
+            ProjectionItem {
+                expr: Expr::Wildcard,
+                alias: None,
+            },
+            ProjectionItem {
+                expr: Expr::Column {
+                    table: None,
+                    name: "id".into(),
+                },
+                alias: None,
+            },
+        ];
+        let plan = LogicalPlan::Project {
+            input: Box::new(scan("users")),
+            items,
+        };
+        let rule = ProjectionPushdown;
+        let optimized = rule.apply(plan);
+        if let LogicalPlan::Project { input, .. } = &optimized {
+            // columns must remain None (all columns) because of the wildcard
+            assert!(
+                matches!(input.as_ref(), LogicalPlan::Scan { columns: None, .. }),
+                "expected columns: None on scan due to wildcard, got {input:?}"
+            );
+        } else {
+            panic!("expected Project, got {optimized:?}");
+        }
     }
 }

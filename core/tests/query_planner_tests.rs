@@ -394,7 +394,7 @@ fn explain_logical_header() {
 // ── Cost estimation tests ─────────────────────────────────────────────────────
 
 #[test]
-fn plan_with_statistics_has_lower_cost_than_without() {
+fn plan_with_statistics_has_higher_cost_reflecting_more_rows() {
     let cat = make_catalog();
 
     // Plan WITHOUT statistics
@@ -412,5 +412,50 @@ fn plan_with_statistics_has_lower_cost_than_without() {
         "expected higher cost with more rows: {} vs {}",
         phys_stats.cost().total,
         phys_empty.cost().total
+    );
+}
+
+#[test]
+fn scan_with_pushed_filter_has_reduced_row_estimate() {
+    // A scan (SeqScan or IndexScan) with a pushed-down filter should show
+    // a reduced estimated_rows rather than the full table row count.
+    let cat = make_catalog();
+    let mut ctx = PlannerContext::new(&cat);
+    ctx.statistics = make_stats(); // 10_000 rows
+    let phys = plan_sql("SELECT * FROM users WHERE age > 18", &ctx);
+    // Find the estimated_rows from the first scan node (SeqScan or IndexScan).
+    fn find_scan_rows(p: &PhysicalPlan) -> Option<usize> {
+        match p {
+            PhysicalPlan::SeqScan { cost, .. } | PhysicalPlan::IndexScan { cost, .. } => {
+                Some(cost.estimated_rows)
+            }
+            PhysicalPlan::Filter { input, .. }
+            | PhysicalPlan::Project { input, .. }
+            | PhysicalPlan::Limit { input, .. }
+            | PhysicalPlan::Sort { input, .. }
+            | PhysicalPlan::HashAggregate { input, .. } => find_scan_rows(input),
+            _ => None,
+        }
+    }
+    let rows = find_scan_rows(&phys).expect("no scan node found in plan");
+    assert!(
+        rows < 10_000,
+        "expected reduced row estimate for scan with filter, got {rows}"
+    );
+}
+
+#[test]
+fn offset_only_query_produces_limit_node() {
+    let cat = make_catalog();
+    let ctx = PlannerContext::new(&cat);
+    let phys = plan_sql("SELECT id FROM users OFFSET 10", &ctx);
+    let out = explain_physical(&phys);
+    assert!(
+        out.contains("Limit"),
+        "expected Limit node for OFFSET-only query; got:\n{out}"
+    );
+    assert!(
+        out.contains("offset: 10"),
+        "expected offset: 10 in EXPLAIN; got:\n{out}"
     );
 }

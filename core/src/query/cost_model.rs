@@ -92,7 +92,7 @@ impl CostModel {
     ///
     /// Complexity is O(left × right).
     pub fn estimate_nested_loop_cost(&self, left_rows: usize, right_rows: usize) -> f64 {
-        (left_rows * right_rows) as f64 * self.cpu_cost_factor
+        (left_rows as f64) * (right_rows as f64) * self.cpu_cost_factor
     }
 
     /// Estimate the cost of a hash join.

@@ -349,16 +349,32 @@ impl<'a> PhysicalPlanner<'a> {
             }
         }
 
+        // When a pushed-down filter is present on a SeqScan, apply a default
+        // selectivity so that row and cost estimates reflect the reduced output.
+        let (seq_rows, seq_cpu) = if filter.is_some() {
+            const DEFAULT_SEL: f64 = 0.1;
+            let rows = CostModel::estimated_rows(table_stats.num_rows, DEFAULT_SEL);
+            let cpu = self
+                .cost_model
+                .estimate_filter_cost(table_stats.num_rows, DEFAULT_SEL);
+            (rows, cpu)
+        } else {
+            (
+                table_stats.num_rows,
+                table_stats.num_rows as f64 * self.cost_model.cpu_cost_factor,
+            )
+        };
+
         PhysicalPlan::SeqScan {
             table: table.to_string(),
             alias: alias.map(str::to_string),
             columns: columns.map(|c| c.to_vec()),
             filter: filter.cloned(),
             cost: NodeCost {
-                total: scan_cost,
+                total: scan_cost + seq_cpu,
                 io: table_stats.num_pages as f64 * self.cost_model.io_cost_factor,
-                cpu: table_stats.num_rows as f64 * self.cost_model.cpu_cost_factor,
-                estimated_rows: table_stats.num_rows,
+                cpu: seq_cpu,
+                estimated_rows: seq_rows,
             },
         }
     }
@@ -467,7 +483,7 @@ impl<'a> PhysicalPlanner<'a> {
     ) -> PhysicalPlan {
         let cpu = self.cost_model.estimate_nested_loop_cost(lr, rr);
         let total = left.cost().total + right.cost().total + cpu;
-        let out_rows = CostModel::estimated_rows(lr * rr / 100, 1.0);
+        let out_rows = CostModel::estimated_rows(lr.saturating_mul(rr) / 100, 1.0);
         PhysicalPlan::NestedLoopJoin {
             left: Box::new(left),
             right: Box::new(right),
