@@ -947,4 +947,67 @@ mod tests {
         };
         assert!(!contains_aggregate(&col));
     }
+
+    // ── Thread 7: SELECT * mixed with explicit columns ────────────────────────
+
+    #[test]
+    fn mixed_wildcard_and_column_keeps_both_in_projection() {
+        // `SELECT *, id FROM users` — wildcard MUST survive into the Project.
+        let catalog = make_catalog();
+        let stmt = parse_select("SELECT *, id FROM users");
+        let plan = builder(&catalog).build_select(&stmt).unwrap();
+        // The plan must be a Project (not a bare Scan) because we have explicit items.
+        let LogicalPlan::Project { items, .. } = &plan else {
+            panic!("expected Project for mixed wildcard+column, got: {plan:?}");
+        };
+        let has_wildcard = items.iter().any(|i| matches!(i.expr, Expr::Wildcard));
+        assert!(
+            has_wildcard,
+            "Expr::Wildcard must appear in projection items; got: {items:?}"
+        );
+        let has_id = items
+            .iter()
+            .any(|i| matches!(&i.expr, Expr::Column { name, .. } if name == "id"));
+        assert!(
+            has_id,
+            "explicit `id` column must appear in projection items; got: {items:?}"
+        );
+    }
+
+    // ── Thread 8: unknown table → CatalogError ───────────────────────────────
+
+    #[test]
+    fn unknown_table_returns_catalog_error() {
+        let catalog = make_catalog();
+        let stmt = parse_select("SELECT * FROM nonexistent");
+        let err = builder(&catalog)
+            .build_select(&stmt)
+            .expect_err("expected CatalogError for unknown table");
+        assert!(
+            matches!(err, PlannerError::CatalogError(_)),
+            "expected CatalogError, got: {err:?}"
+        );
+    }
+
+    // ── Thread 9: collect_databases recurses into subqueries ─────────────────
+
+    #[test]
+    fn cross_database_via_subquery_is_rejected() {
+        // 3-part names (database.schema.table) are needed for the database
+        // field to be populated by parse_qualified_name.  The subquery reads
+        // from db1.public.users while the outer join references db2.public.orders;
+        // collect_databases must recurse into the subquery's FROM to catch db1.
+        let catalog = make_catalog();
+        let stmt = parse_select(
+            "SELECT * FROM (SELECT * FROM db1.public.users) sub \
+             JOIN db2.public.orders ON sub.id = orders.user_id",
+        );
+        let err = builder(&catalog)
+            .build_select(&stmt)
+            .expect_err("expected CrossDatabaseJoin error");
+        assert!(
+            matches!(err, PlannerError::CrossDatabaseJoin { .. }),
+            "expected CrossDatabaseJoin, got: {err:?}"
+        );
+    }
 }
