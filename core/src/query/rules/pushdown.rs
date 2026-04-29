@@ -444,10 +444,8 @@ fn push_projection_project(input: LogicalPlan, items: Vec<ProjectionItem>) -> Lo
 /// expression forms that imply "all columns" are silently skipped.
 fn collect_filter_columns(expr: &Expr, out: &mut Vec<String>) {
     match expr {
-        Expr::Column { name, .. } => {
-            if name != "*" {
-                out.push(name.clone());
-            }
+        Expr::Column { name, .. } if name != "*" => {
+            out.push(name.clone());
         }
         Expr::BinaryOp { left, right, .. } => {
             collect_filter_columns(left, out);
