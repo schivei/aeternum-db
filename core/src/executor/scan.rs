@@ -51,7 +51,7 @@ impl ExecutionPlan for SeqScanExec {
             let col_names: Vec<String> = if let Some(cols) = columns {
                 cols
             } else {
-                schema.iter().map(|(name, _)| name.clone()).collect()
+                schema.iter().map(|meta| meta.name.clone()).collect()
             };
 
             let mut batch = RecordBatch::new(col_names.clone());
@@ -150,7 +150,7 @@ impl ExecutionPlan for IndexScanExec {
             let col_names: Vec<String> = if let Some(cols) = columns {
                 cols
             } else {
-                schema.iter().map(|(name, _)| name.clone()).collect()
+                schema.iter().map(|meta| meta.name.clone()).collect()
             };
 
             let mut batch = RecordBatch::new(col_names.clone());

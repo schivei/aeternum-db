@@ -6,6 +6,51 @@ use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+/// Metadata for a single column, including its name, type, and optional
+/// inner element count for array and indexed columns.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ColumnMeta {
+    /// Column name (lowercased).
+    pub name: String,
+    /// SQL type name string (e.g. `"integer"`, `"varchar"`, `"array"`).
+    pub type_name: String,
+    /// For array-typed columns: the total count of inner elements across
+    /// all rows currently stored.  For indexed columns: the number of
+    /// indexed entries.  `None` when the column is neither an array nor
+    /// indexed.
+    pub inner_count: Option<usize>,
+}
+
+impl ColumnMeta {
+    /// Create a new `ColumnMeta` with no inner count.
+    pub fn new(name: impl Into<String>, type_name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            type_name: type_name.into(),
+            inner_count: None,
+        }
+    }
+
+    /// Create a new `ColumnMeta` with a known inner count.
+    pub fn with_inner_count(
+        name: impl Into<String>,
+        type_name: impl Into<String>,
+        inner_count: usize,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            type_name: type_name.into(),
+            inner_count: Some(inner_count),
+        }
+    }
+
+    /// Returns true if this column is array-typed (type_name contains "array" or "vector").
+    pub fn is_array(&self) -> bool {
+        let t = self.type_name.to_lowercase();
+        t.contains("array") || t.contains("vector")
+    }
+}
+
 /// Trait for providing table data to the executor.
 ///
 /// This abstraction allows tests to use an in-memory row store
@@ -15,8 +60,8 @@ pub trait TableProvider: Send + Sync {
     /// Scan a table and return all rows.
     async fn scan(&self, table: &str) -> Result<Vec<Row>>;
 
-    /// Get the schema for a table (column names and type names).
-    fn schema(&self, table: &str) -> Result<Vec<(String, String)>>;
+    /// Get the schema for a table as column metadata (name, type, and inner count).
+    fn schema(&self, table: &str) -> Result<Vec<ColumnMeta>>;
 
     /// Insert rows into a table. Returns the number of rows inserted.
     async fn insert(&self, table: &str, rows: Vec<Row>) -> Result<usize>;
@@ -32,7 +77,7 @@ pub trait TableProvider: Send + Sync {
 }
 
 /// Type alias for the in-memory table storage map.
-type TableStorage = Arc<Mutex<HashMap<String, (Vec<(String, String)>, Vec<Row>)>>>;
+type TableStorage = Arc<Mutex<HashMap<String, (Vec<ColumnMeta>, Vec<Row>)>>>;
 
 /// Simple in-memory table provider for testing.
 pub struct InMemoryTableProvider {
@@ -49,8 +94,28 @@ impl InMemoryTableProvider {
 
     /// Add a table with schema.
     pub fn add_table(&self, name: &str, schema: Vec<(String, String)>) {
+        let meta: Vec<ColumnMeta> = schema
+            .into_iter()
+            .map(|(n, t)| ColumnMeta::new(n, t))
+            .collect();
+        let mut tables = self.tables.lock().unwrap();
+        tables.insert(name.to_string(), (meta, Vec::new()));
+    }
+
+    /// Add a table with full column metadata including inner counts.
+    pub fn add_table_with_meta(&self, name: &str, schema: Vec<ColumnMeta>) {
         let mut tables = self.tables.lock().unwrap();
         tables.insert(name.to_string(), (schema, Vec::new()));
+    }
+
+    /// Set the inner count for a specific column (used after bulk loading).
+    pub fn set_column_inner_count(&self, table: &str, column: &str, count: usize) {
+        let mut tables = self.tables.lock().unwrap();
+        if let Some((schema, _)) = tables.get_mut(table) {
+            if let Some(meta) = schema.iter_mut().find(|m| m.name == column) {
+                meta.inner_count = Some(count);
+            }
+        }
     }
 
     /// Add rows to a table.
@@ -79,7 +144,7 @@ impl TableProvider for InMemoryTableProvider {
         }
     }
 
-    fn schema(&self, table: &str) -> Result<Vec<(String, String)>> {
+    fn schema(&self, table: &str) -> Result<Vec<ColumnMeta>> {
         let tables = self.tables.lock().unwrap();
         if let Some((schema, _)) = tables.get(table) {
             Ok(schema.clone())
@@ -90,8 +155,18 @@ impl TableProvider for InMemoryTableProvider {
 
     async fn insert(&self, table: &str, rows: Vec<Row>) -> Result<usize> {
         let mut tables = self.tables.lock().unwrap();
-        if let Some((_, table_rows)) = tables.get_mut(table) {
+        if let Some((schema, table_rows)) = tables.get_mut(table) {
             let count = rows.len();
+            // Update inner_count for array-typed columns.
+            for row in &rows {
+                for meta in schema.iter_mut() {
+                    if meta.is_array() {
+                        if let Some(Value::Array(arr)) = row.get(&meta.name) {
+                            meta.inner_count = Some(meta.inner_count.unwrap_or(0) + arr.len());
+                        }
+                    }
+                }
+            }
             table_rows.extend(rows);
             Ok(count)
         } else {
@@ -116,9 +191,15 @@ impl TableProvider for InMemoryTableProvider {
 
     async fn delete(&self, table: &str) -> Result<usize> {
         let mut tables = self.tables.lock().unwrap();
-        if let Some((_, rows)) = tables.get_mut(table) {
+        if let Some((schema, rows)) = tables.get_mut(table) {
             let count = rows.len();
             rows.clear();
+            // Reset inner_count for array columns since all rows are removed.
+            for meta in schema.iter_mut() {
+                if meta.is_array() {
+                    meta.inner_count = Some(0);
+                }
+            }
             Ok(count)
         } else {
             Err(ExecutorError::TableNotFound(table.to_string()))

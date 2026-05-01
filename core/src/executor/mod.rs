@@ -48,7 +48,8 @@ mod values;
 
 pub use aggregate::HashAggregateExec;
 pub use context::{
-    AtomicIdGenerator, ExecutionContext, InMemoryTableProvider, ObjIdGenerator, TableProvider, ACL,
+    AtomicIdGenerator, ColumnMeta, ExecutionContext, InMemoryTableProvider, ObjIdGenerator,
+    TableProvider, ACL,
 };
 pub use distinct::DistinctExec;
 pub use dml::{

@@ -155,8 +155,8 @@ fn test_in_memory_provider_schema() {
     );
     let schema = provider.schema("users").unwrap();
     assert_eq!(schema.len(), 2);
-    assert_eq!(schema[0].0, "id");
-    assert_eq!(schema[1].0, "name");
+    assert_eq!(schema[0].name, "id");
+    assert_eq!(schema[1].name, "name");
 }
 
 #[tokio::test]
@@ -4256,4 +4256,135 @@ async fn test_project_exec_no_items() {
     let rows = collect_rows(&exec, &ctx).await;
     assert_eq!(rows.len(), 1);
     assert!(rows[0].columns.is_empty());
+}
+
+// ── ColumnMeta / inner_count tests ───────────────────────────────────────────
+
+#[test]
+fn column_meta_new_no_inner_count() {
+    let m = ColumnMeta::new("age", "integer");
+    assert_eq!(m.name, "age");
+    assert_eq!(m.type_name, "integer");
+    assert!(m.inner_count.is_none());
+}
+
+#[test]
+fn column_meta_with_inner_count() {
+    let m = ColumnMeta::with_inner_count("tags", "array", 42);
+    assert_eq!(m.inner_count, Some(42));
+}
+
+#[test]
+fn column_meta_is_array_true() {
+    let m = ColumnMeta::new("vals", "array");
+    assert!(m.is_array());
+    let m2 = ColumnMeta::new("vec", "vector");
+    assert!(m2.is_array());
+}
+
+#[test]
+fn column_meta_is_array_false() {
+    let m = ColumnMeta::new("name", "varchar");
+    assert!(!m.is_array());
+}
+
+#[tokio::test]
+async fn inner_count_updated_on_array_insert() {
+    let provider = Arc::new(InMemoryTableProvider::new());
+    provider.add_table_with_meta(
+        "t",
+        vec![
+            ColumnMeta::new("id", "integer"),
+            ColumnMeta::new("tags", "array"),
+        ],
+    );
+
+    let rows = vec![
+        Row::from_pairs(vec![
+            ("id".to_string(), Value::Integer(1)),
+            (
+                "tags".to_string(),
+                Value::Array(vec![Value::String("a".into()), Value::String("b".into())]),
+            ),
+        ]),
+        Row::from_pairs(vec![
+            ("id".to_string(), Value::Integer(2)),
+            (
+                "tags".to_string(),
+                Value::Array(vec![Value::String("c".into())]),
+            ),
+        ]),
+    ];
+
+    provider.insert("t", rows).await.unwrap();
+
+    let schema = provider.schema("t").unwrap();
+    let tags_meta = schema.iter().find(|m| m.name == "tags").unwrap();
+    // 2 + 1 = 3 total array elements
+    assert_eq!(tags_meta.inner_count, Some(3));
+}
+
+#[tokio::test]
+async fn inner_count_reset_on_delete() {
+    let provider = Arc::new(InMemoryTableProvider::new());
+    provider.add_table_with_meta("t", vec![ColumnMeta::new("tags", "array")]);
+
+    let rows = vec![Row::from_pairs(vec![(
+        "tags".to_string(),
+        Value::Array(vec![Value::Integer(1), Value::Integer(2)]),
+    )])];
+    provider.insert("t", rows).await.unwrap();
+
+    provider.delete("t").await.unwrap();
+
+    let schema = provider.schema("t").unwrap();
+    let tags_meta = schema.iter().find(|m| m.name == "tags").unwrap();
+    assert_eq!(tags_meta.inner_count, Some(0));
+}
+
+#[test]
+fn set_column_inner_count_works() {
+    let provider = InMemoryTableProvider::new();
+    provider.add_table("t", vec![("id".to_string(), "integer".to_string())]);
+    provider.set_column_inner_count("t", "id", 999);
+    let schema = provider.schema("t").unwrap();
+    let id_meta = schema.iter().find(|m| m.name == "id").unwrap();
+    assert_eq!(id_meta.inner_count, Some(999));
+}
+
+#[tokio::test]
+async fn seq_scan_uses_column_meta_names() {
+    let provider = Arc::new(InMemoryTableProvider::new());
+    provider.add_table_with_meta(
+        "t",
+        vec![
+            ColumnMeta::with_inner_count("id", "integer", 5),
+            ColumnMeta::new("name", "varchar"),
+        ],
+    );
+    provider.add_rows(
+        "t",
+        vec![Row::from_pairs(vec![
+            ("id".to_string(), Value::Integer(1)),
+            ("name".to_string(), Value::String("Alice".into())),
+        ])],
+    );
+
+    let ctx = ExecutionContext::new(
+        provider,
+        Arc::new(Mutex::new(ACL::new())),
+        Arc::new(AtomicIdGenerator::default()),
+        "test_user".to_string(),
+    );
+    let plan = PhysicalPlan::SeqScan {
+        table: "t".to_string(),
+        alias: None,
+        columns: None,
+        filter: None,
+        cost: zero_cost(),
+    };
+    let exec = build_executor(&plan).unwrap();
+    let rows = collect_rows(exec.as_ref(), &ctx).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get("id"), Some(&Value::Integer(1)));
 }

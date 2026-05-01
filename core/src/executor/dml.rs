@@ -24,9 +24,9 @@ pub async fn execute_insert(
             }
         }
 
-        for (col_name, _col_type) in &schema {
-            if !row.columns.contains_key(col_name) {
-                row.insert(col_name.clone(), Value::Null);
+        for meta in &schema {
+            if !row.columns.contains_key(&meta.name) {
+                row.insert(meta.name.clone(), Value::Null);
             }
         }
 

@@ -111,6 +111,9 @@ pub struct ColumnStats {
     pub max_value: Option<Value>,
     /// Optional histogram for range-query selectivity.
     pub histogram: Option<Histogram>,
+    /// For array-typed and indexed columns: the total inner element count
+    /// tracked across all rows.  `None` for regular scalar columns.
+    pub inner_count: Option<usize>,
 }
 
 impl ColumnStats {
@@ -247,6 +250,7 @@ mod tests {
             min_value: None,
             max_value: None,
             histogram: None,
+            inner_count: None,
         };
         assert!((cs.selectivity_eq() - 0.1).abs() < 1e-9);
     }
@@ -260,6 +264,7 @@ mod tests {
             min_value: None,
             max_value: None,
             histogram: None,
+            inner_count: None,
         };
         assert!((cs.selectivity_eq() - 0.01).abs() < 1e-9);
     }
@@ -280,5 +285,33 @@ mod tests {
         reg.add(ts);
         assert_eq!(reg.get("users").num_rows, 5000);
         assert_eq!(reg.get("USERS").num_rows, 5000);
+    }
+
+    #[test]
+    fn column_stats_inner_count_none_for_scalars() {
+        let cs = ColumnStats {
+            column_name: "id".into(),
+            num_distinct: 10,
+            num_nulls: 0,
+            min_value: None,
+            max_value: None,
+            histogram: None,
+            inner_count: None,
+        };
+        assert!(cs.inner_count.is_none());
+    }
+
+    #[test]
+    fn column_stats_inner_count_some_for_arrays() {
+        let cs = ColumnStats {
+            column_name: "tags".into(),
+            num_distinct: 5,
+            num_nulls: 0,
+            min_value: None,
+            max_value: None,
+            histogram: None,
+            inner_count: Some(42),
+        };
+        assert_eq!(cs.inner_count, Some(42));
     }
 }
