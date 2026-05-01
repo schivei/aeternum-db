@@ -4388,3 +4388,1211 @@ async fn seq_scan_uses_column_meta_names() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].get("id"), Some(&Value::Integer(1)));
 }
+
+// ── Value helper methods ──────────────────────────────────────────────────────
+
+#[test]
+fn test_value_as_float_non_numeric_returns_none() {
+    assert_eq!(Value::Boolean(true).as_float(), None);
+    assert_eq!(Value::String("x".to_string()).as_float(), None);
+}
+
+#[test]
+fn test_value_as_string_non_string_returns_to_string() {
+    assert_eq!(Value::Integer(42).as_string(), Some("42".to_string()));
+    assert_eq!(Value::Float(3.5).as_string(), Some("3.5".to_string()));
+    assert_eq!(Value::Boolean(true).as_string(), Some("true".to_string()));
+}
+
+#[test]
+fn test_value_as_float_integer_and_float() {
+    assert_eq!(Value::Integer(10).as_float(), Some(10.0));
+    assert_eq!(Value::Float(2.5).as_float(), Some(2.5));
+    assert_eq!(Value::Null.as_float(), None);
+}
+
+#[test]
+fn test_value_as_string_null_and_string() {
+    assert_eq!(Value::Null.as_string(), None);
+    assert_eq!(
+        Value::String("hello".to_string()).as_string(),
+        Some("hello".to_string())
+    );
+}
+
+// ── Expression coverage ───────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_expr_string_concat_integers_uses_to_string() {
+    // Exercises Value::as_string() `_ => Some(self.to_string())` branch via || operator.
+    let exec = single_value_exec(Expr::BinaryOp {
+        left: Box::new(int_lit(5)),
+        op: BinaryOperator::StringConcat,
+        right: Box::new(int_lit(3)),
+    });
+    let ctx = default_ctx();
+    let rows = collect_rows(exec.as_ref(), &ctx).await;
+    assert_eq!(rows[0].get("v"), Some(&Value::String("53".to_string())));
+}
+
+#[tokio::test]
+async fn test_expr_simple_case_operand_match() {
+    // Exercises CASE val WHEN match THEN result END path.
+    let expr = Expr::Case {
+        operand: Some(Box::new(col("n"))),
+        conditions: vec![(int_lit(1), str_lit("one")), (int_lit(2), str_lit("two"))],
+        else_result: Some(Box::new(str_lit("other"))),
+    };
+    let (ctx, _) = make_ctx_with_table(
+        "case_t",
+        vec![("n", "integer")],
+        vec![make_row(&[("n", Value::Integer(2))])],
+    );
+    let scan = Arc::new(SeqScanExec::new("case_t".into(), None, None, None));
+    let project = ProjectExec::new(
+        scan,
+        vec![ProjectionItem {
+            expr,
+            alias: Some("result".to_string()),
+        }],
+    );
+    let rows = collect_rows(&project, &ctx).await;
+    assert_eq!(
+        rows[0].get("result"),
+        Some(&Value::String("two".to_string()))
+    );
+}
+
+#[tokio::test]
+async fn test_expr_simple_case_operand_no_match_uses_else() {
+    let (ctx, _) = make_ctx_with_table(
+        "case_t2",
+        vec![("n", "integer")],
+        vec![make_row(&[("n", Value::Integer(99))])],
+    );
+    let scan = Arc::new(SeqScanExec::new("case_t2".into(), None, None, None));
+    let project = ProjectExec::new(
+        scan,
+        vec![ProjectionItem {
+            expr: Expr::Case {
+                operand: Some(Box::new(col("n"))),
+                conditions: vec![(int_lit(1), str_lit("one"))],
+                else_result: Some(Box::new(str_lit("other"))),
+            },
+            alias: Some("result".to_string()),
+        }],
+    );
+    let rows = collect_rows(&project, &ctx).await;
+    assert_eq!(
+        rows[0].get("result"),
+        Some(&Value::String("other".to_string()))
+    );
+}
+
+#[tokio::test]
+async fn test_expr_simple_case_operand_no_match_no_else() {
+    let (ctx, _) = make_ctx_with_table(
+        "case_t3",
+        vec![("n", "integer")],
+        vec![make_row(&[("n", Value::Integer(99))])],
+    );
+    let scan = Arc::new(SeqScanExec::new("case_t3".into(), None, None, None));
+    let project = ProjectExec::new(
+        scan,
+        vec![ProjectionItem {
+            expr: Expr::Case {
+                operand: Some(Box::new(col("n"))),
+                conditions: vec![(int_lit(1), str_lit("one"))],
+                else_result: None,
+            },
+            alias: Some("result".to_string()),
+        }],
+    );
+    let rows = collect_rows(&project, &ctx).await;
+    assert_eq!(rows[0].get("result"), Some(&Value::Null));
+}
+
+#[tokio::test]
+async fn test_expr_like_backslash_escape() {
+    // Exercises the '\\' branch in like_to_regex.
+    let (ctx, _) = make_ctx_with_table(
+        "like_t",
+        vec![("s", "text")],
+        vec![
+            make_row(&[("s", Value::String("foo_bar".to_string()))]),
+            make_row(&[("s", Value::String("fooXbar".to_string()))]),
+        ],
+    );
+    let scan = Arc::new(SeqScanExec::new("like_t".into(), None, None, None));
+    // foo\_bar matches literally "foo_bar" (escaped underscore via backslash).
+    let filter = Expr::BinaryOp {
+        left: Box::new(col("s")),
+        op: BinaryOperator::Like,
+        right: Box::new(str_lit("foo\\_bar")),
+    };
+    let exec = FilterExec::new(scan, filter);
+    let rows = collect_rows(&exec, &ctx).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0].get("s"),
+        Some(&Value::String("foo_bar".to_string()))
+    );
+}
+
+#[tokio::test]
+async fn test_expr_cast_bool_to_bool_passthrough() {
+    // Exercises v @ Value::Boolean(_) => Ok(v) branch in eval_cast_to_bool.
+    let exec = single_value_exec(cast_expr(bool_lit(true), DataType::Boolean));
+    let ctx = default_ctx();
+    let rows = collect_rows(exec.as_ref(), &ctx).await;
+    assert_eq!(rows[0].get("v"), Some(&Value::Boolean(true)));
+}
+
+#[tokio::test]
+async fn test_expr_cast_float_to_bool_type_mismatch() {
+    // Exercises TypeMismatch error in eval_cast_to_bool.
+    let exec = single_value_exec(cast_expr(float_lit(1.5), DataType::Boolean));
+    let ctx = default_ctx();
+    let result = try_collect(exec.as_ref(), &ctx).await;
+    assert!(matches!(result, Err(ExecutorError::TypeMismatch { .. })));
+}
+
+#[tokio::test]
+async fn test_expr_cast_bool_to_integer_type_mismatch() {
+    // Exercises TypeMismatch in eval_cast_to_integer.
+    let exec = single_value_exec(cast_expr(bool_lit(true), DataType::Integer));
+    let ctx = default_ctx();
+    let result = try_collect(exec.as_ref(), &ctx).await;
+    assert!(matches!(result, Err(ExecutorError::TypeMismatch { .. })));
+}
+
+#[tokio::test]
+async fn test_expr_cast_bool_to_float_type_mismatch() {
+    // Exercises TypeMismatch in eval_cast_to_float.
+    let exec = single_value_exec(cast_expr(bool_lit(true), DataType::Float));
+    let ctx = default_ctx();
+    let result = try_collect(exec.as_ref(), &ctx).await;
+    assert!(matches!(result, Err(ExecutorError::TypeMismatch { .. })));
+}
+
+#[tokio::test]
+async fn test_expr_cast_to_decimal_unsupported() {
+    // Exercises unsupported CAST target branch.
+    let exec = single_value_exec(cast_expr(int_lit(5), DataType::Decimal(None, None)));
+    let ctx = default_ctx();
+    let result = try_collect(exec.as_ref(), &ctx).await;
+    assert!(matches!(result, Err(ExecutorError::EvalError(_))));
+}
+
+#[tokio::test]
+async fn test_expr_cast_string_to_integer_invalid() {
+    // Exercises parse error path in eval_cast_to_integer.
+    let exec = single_value_exec(cast_expr(str_lit("not_a_number"), DataType::Integer));
+    let ctx = default_ctx();
+    let result = try_collect(exec.as_ref(), &ctx).await;
+    assert!(matches!(result, Err(ExecutorError::EvalError(_))));
+}
+
+#[tokio::test]
+async fn test_expr_cast_string_to_float_invalid() {
+    // Exercises parse error path in eval_cast_to_float.
+    let exec = single_value_exec(cast_expr(str_lit("not_a_float"), DataType::Float));
+    let ctx = default_ctx();
+    let result = try_collect(exec.as_ref(), &ctx).await;
+    assert!(matches!(result, Err(ExecutorError::EvalError(_))));
+}
+
+#[tokio::test]
+async fn test_expr_compare_values_type_mismatch_returns_error() {
+    // Exercises TypeMismatch in compare_values (expressions.rs).
+    let exec = single_value_exec(Expr::BinaryOp {
+        left: Box::new(int_lit(5)),
+        op: BinaryOperator::Gt,
+        right: Box::new(bool_lit(true)),
+    });
+    let ctx = default_ctx();
+    let result = try_collect(exec.as_ref(), &ctx).await;
+    assert!(matches!(result, Err(ExecutorError::TypeMismatch { .. })));
+}
+
+#[tokio::test]
+async fn test_expr_between_negated_true() {
+    // Exercises negated=true branch in eval_between.
+    let exec = single_value_exec(Expr::Between {
+        expr: Box::new(int_lit(10)),
+        negated: true,
+        low: Box::new(int_lit(1)),
+        high: Box::new(int_lit(5)),
+    });
+    let ctx = default_ctx();
+    let rows = collect_rows(exec.as_ref(), &ctx).await;
+    assert_eq!(rows[0].get("v"), Some(&Value::Boolean(true)));
+}
+
+#[tokio::test]
+async fn test_expr_between_negated_false_inside() {
+    // Exercises negated=true when value is inside range.
+    let exec = single_value_exec(Expr::Between {
+        expr: Box::new(int_lit(3)),
+        negated: true,
+        low: Box::new(int_lit(1)),
+        high: Box::new(int_lit(5)),
+    });
+    let ctx = default_ctx();
+    let rows = collect_rows(exec.as_ref(), &ctx).await;
+    assert_eq!(rows[0].get("v"), Some(&Value::Boolean(false)));
+}
+
+#[tokio::test]
+async fn test_expr_in_list_negated_true_not_in() {
+    // Exercises negated=true when value is NOT in list → Boolean(true).
+    let exec = single_value_exec(Expr::InList {
+        expr: Box::new(int_lit(5)),
+        list: vec![int_lit(1), int_lit(2), int_lit(3)],
+        negated: true,
+    });
+    let ctx = default_ctx();
+    let rows = collect_rows(exec.as_ref(), &ctx).await;
+    assert_eq!(rows[0].get("v"), Some(&Value::Boolean(true)));
+}
+
+#[tokio::test]
+async fn test_expr_in_list_negated_true_in() {
+    // Exercises negated=true when value IS in list → Boolean(false).
+    let exec = single_value_exec(Expr::InList {
+        expr: Box::new(int_lit(2)),
+        list: vec![int_lit(1), int_lit(2), int_lit(3)],
+        negated: true,
+    });
+    let ctx = default_ctx();
+    let rows = collect_rows(exec.as_ref(), &ctx).await;
+    assert_eq!(rows[0].get("v"), Some(&Value::Boolean(false)));
+}
+
+#[tokio::test]
+async fn test_expr_in_list_null_value_returns_null() {
+    // Exercises val.is_null() → Null return in eval_in_list.
+    let exec = single_value_exec(Expr::InList {
+        expr: Box::new(null_lit()),
+        list: vec![int_lit(1)],
+        negated: false,
+    });
+    let ctx = default_ctx();
+    let rows = collect_rows(exec.as_ref(), &ctx).await;
+    assert_eq!(rows[0].get("v"), Some(&Value::Null));
+}
+
+#[tokio::test]
+async fn test_expr_round_with_precision() {
+    // Exercises ROUND(f, decimals) 2-arg path.
+    let exec = single_value_exec(func_expr("round", vec![float_lit(3.456_f64), int_lit(2)]));
+    let ctx = default_ctx();
+    let rows = collect_rows(exec.as_ref(), &ctx).await;
+    if let Some(Value::Float(v)) = rows[0].get("v") {
+        assert!((v - 3.46).abs() < 0.001);
+    } else {
+        panic!("expected Float result");
+    }
+}
+
+#[tokio::test]
+async fn test_expr_ceil_float() {
+    let exec = single_value_exec(func_expr("ceil", vec![float_lit(3.2_f64)]));
+    let ctx = default_ctx();
+    let rows = collect_rows(exec.as_ref(), &ctx).await;
+    assert_eq!(rows[0].get("v"), Some(&Value::Integer(4)));
+}
+
+#[tokio::test]
+async fn test_expr_ceiling_alias() {
+    let exec = single_value_exec(func_expr("ceiling", vec![float_lit(2.1_f64)]));
+    let ctx = default_ctx();
+    let rows = collect_rows(exec.as_ref(), &ctx).await;
+    assert_eq!(rows[0].get("v"), Some(&Value::Integer(3)));
+}
+
+#[tokio::test]
+async fn test_expr_floor_integer_passthrough() {
+    // Exercises Value::Integer passthrough in eval_floor.
+    let exec = single_value_exec(func_expr("floor", vec![int_lit(7)]));
+    let ctx = default_ctx();
+    let rows = collect_rows(exec.as_ref(), &ctx).await;
+    assert_eq!(rows[0].get("v"), Some(&Value::Integer(7)));
+}
+
+#[tokio::test]
+async fn test_expr_ceil_integer_passthrough() {
+    let exec = single_value_exec(func_expr("ceil", vec![int_lit(5)]));
+    let ctx = default_ctx();
+    let rows = collect_rows(exec.as_ref(), &ctx).await;
+    assert_eq!(rows[0].get("v"), Some(&Value::Integer(5)));
+}
+
+#[tokio::test]
+async fn test_expr_round_integer_passthrough() {
+    let exec = single_value_exec(func_expr("round", vec![int_lit(4)]));
+    let ctx = default_ctx();
+    let rows = collect_rows(exec.as_ref(), &ctx).await;
+    assert_eq!(rows[0].get("v"), Some(&Value::Integer(4)));
+}
+
+#[tokio::test]
+async fn test_expr_floor_type_mismatch() {
+    // Exercises TypeMismatch in eval_floor for non-numeric.
+    let exec = single_value_exec(func_expr("floor", vec![str_lit("bad")]));
+    let ctx = default_ctx();
+    let result = try_collect(exec.as_ref(), &ctx).await;
+    assert!(matches!(result, Err(ExecutorError::TypeMismatch { .. })));
+}
+
+#[tokio::test]
+async fn test_expr_ceil_type_mismatch() {
+    let exec = single_value_exec(func_expr("ceil", vec![str_lit("bad")]));
+    let ctx = default_ctx();
+    let result = try_collect(exec.as_ref(), &ctx).await;
+    assert!(matches!(result, Err(ExecutorError::TypeMismatch { .. })));
+}
+
+#[tokio::test]
+async fn test_expr_sqrt_type_mismatch() {
+    // Exercises TypeMismatch in eval_sqrt.
+    let exec = single_value_exec(func_expr("sqrt", vec![str_lit("bad")]));
+    let ctx = default_ctx();
+    let result = try_collect(exec.as_ref(), &ctx).await;
+    assert!(matches!(result, Err(ExecutorError::TypeMismatch { .. })));
+}
+
+#[tokio::test]
+async fn test_expr_abs_type_mismatch() {
+    // Exercises TypeMismatch in eval_abs for non-numeric.
+    let exec = single_value_exec(func_expr("abs", vec![str_lit("bad")]));
+    let ctx = default_ctx();
+    let result = try_collect(exec.as_ref(), &ctx).await;
+    assert!(matches!(result, Err(ExecutorError::TypeMismatch { .. })));
+}
+
+#[tokio::test]
+async fn test_expr_lower_type_mismatch() {
+    // Exercises TypeMismatch in check_one_string_arg.
+    let exec = single_value_exec(func_expr("lower", vec![int_lit(5)]));
+    let ctx = default_ctx();
+    let result = try_collect(exec.as_ref(), &ctx).await;
+    assert!(matches!(result, Err(ExecutorError::TypeMismatch { .. })));
+}
+
+#[tokio::test]
+async fn test_expr_unknown_function_error() {
+    // Exercises _ => Err(EvalError("Unknown function")) in eval_function.
+    let exec = single_value_exec(func_expr("nonexistent_fn", vec![int_lit(1)]));
+    let ctx = default_ctx();
+    let result = try_collect(exec.as_ref(), &ctx).await;
+    assert!(matches!(result, Err(ExecutorError::EvalError(_))));
+}
+
+#[tokio::test]
+async fn test_expr_round_no_args_error() {
+    // Exercises ROUND() with wrong arg count error.
+    let exec = single_value_exec(func_expr("round", vec![]));
+    let ctx = default_ctx();
+    let result = try_collect(exec.as_ref(), &ctx).await;
+    assert!(matches!(result, Err(ExecutorError::EvalError(_))));
+}
+
+#[tokio::test]
+async fn test_expr_round_type_mismatch() {
+    // Exercises TypeMismatch in eval_round for non-numeric.
+    let exec = single_value_exec(func_expr("round", vec![str_lit("bad")]));
+    let ctx = default_ctx();
+    let result = try_collect(exec.as_ref(), &ctx).await;
+    assert!(matches!(result, Err(ExecutorError::TypeMismatch { .. })));
+}
+
+// ── Aggregate accumulator coverage ───────────────────────────────────────────
+
+fn make_agg_exec(
+    table: &str,
+    group_by: Vec<Expr>,
+    agg_func: &str,
+    agg_col: &str,
+    alias: &str,
+) -> HashAggregateExec {
+    let scan = Arc::new(SeqScanExec::new(table.to_string(), None, None, None));
+    HashAggregateExec::new(
+        scan,
+        group_by,
+        vec![AggregateExpr {
+            func: func_expr(agg_func, vec![col(agg_col)]),
+            alias: Some(alias.to_string()),
+        }],
+        None,
+    )
+}
+
+#[tokio::test]
+async fn test_sum_aggregate_integers() {
+    let (ctx, _) = make_ctx_with_table(
+        "sum_int",
+        vec![("val", "integer")],
+        vec![
+            make_row(&[("val", Value::Integer(10))]),
+            make_row(&[("val", Value::Integer(20))]),
+            make_row(&[("val", Value::Integer(30))]),
+        ],
+    );
+    let exec = make_agg_exec("sum_int", vec![], "sum", "val", "total");
+    let rows = collect_rows(&exec, &ctx).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get("total"), Some(&Value::Float(60.0)));
+}
+
+#[tokio::test]
+async fn test_sum_aggregate_floats() {
+    let (ctx, _) = make_ctx_with_table(
+        "sum_flt",
+        vec![("val", "float")],
+        vec![
+            make_row(&[("val", Value::Float(1.5))]),
+            make_row(&[("val", Value::Float(2.5))]),
+        ],
+    );
+    let exec = make_agg_exec("sum_flt", vec![], "sum", "val", "total");
+    let rows = collect_rows(&exec, &ctx).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get("total"), Some(&Value::Float(4.0)));
+}
+
+#[tokio::test]
+async fn test_sum_aggregate_with_nulls() {
+    let (ctx, _) = make_ctx_with_table(
+        "sum_null",
+        vec![("val", "integer")],
+        vec![
+            make_row(&[("val", Value::Integer(5))]),
+            make_row(&[("val", Value::Null)]),
+            make_row(&[("val", Value::Integer(10))]),
+        ],
+    );
+    let exec = make_agg_exec("sum_null", vec![], "sum", "val", "total");
+    let rows = collect_rows(&exec, &ctx).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get("total"), Some(&Value::Float(15.0)));
+}
+
+#[tokio::test]
+async fn test_sum_aggregate_all_nulls_returns_null() {
+    // Exercises SumAccumulator finalize() when sum is None.
+    let (ctx, _) = make_ctx_with_table(
+        "sum_all_null",
+        vec![("val", "integer")],
+        vec![
+            make_row(&[("val", Value::Null)]),
+            make_row(&[("val", Value::Null)]),
+        ],
+    );
+    let exec = make_agg_exec("sum_all_null", vec![], "sum", "val", "total");
+    let rows = collect_rows(&exec, &ctx).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get("total"), Some(&Value::Null));
+}
+
+#[tokio::test]
+async fn test_avg_aggregate_integers() {
+    let (ctx, _) = make_ctx_with_table(
+        "avg_int",
+        vec![("val", "integer")],
+        vec![
+            make_row(&[("val", Value::Integer(10))]),
+            make_row(&[("val", Value::Integer(20))]),
+            make_row(&[("val", Value::Integer(30))]),
+        ],
+    );
+    let exec = make_agg_exec("avg_int", vec![], "avg", "val", "avg_val");
+    let rows = collect_rows(&exec, &ctx).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get("avg_val"), Some(&Value::Float(20.0)));
+}
+
+#[tokio::test]
+async fn test_avg_aggregate_with_nulls() {
+    // Nulls are skipped; avg of [10, null, 30] = 20.
+    let (ctx, _) = make_ctx_with_table(
+        "avg_null",
+        vec![("val", "integer")],
+        vec![
+            make_row(&[("val", Value::Integer(10))]),
+            make_row(&[("val", Value::Null)]),
+            make_row(&[("val", Value::Integer(30))]),
+        ],
+    );
+    let exec = make_agg_exec("avg_null", vec![], "avg", "val", "avg_val");
+    let rows = collect_rows(&exec, &ctx).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get("avg_val"), Some(&Value::Float(20.0)));
+}
+
+#[tokio::test]
+async fn test_avg_aggregate_all_nulls_returns_null() {
+    // Exercises AvgAccumulator finalize() when count == 0.
+    let (ctx, _) = make_ctx_with_table(
+        "avg_all_null",
+        vec![("val", "integer")],
+        vec![make_row(&[("val", Value::Null)])],
+    );
+    let exec = make_agg_exec("avg_all_null", vec![], "avg", "val", "avg_val");
+    let rows = collect_rows(&exec, &ctx).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get("avg_val"), Some(&Value::Null));
+}
+
+#[tokio::test]
+async fn test_min_aggregate_integers() {
+    // Exercises MinAccumulator: None path then compare_values(new<current)=true path.
+    let (ctx, _) = make_ctx_with_table(
+        "min_int",
+        vec![("val", "integer")],
+        vec![
+            make_row(&[("val", Value::Integer(3))]),
+            make_row(&[("val", Value::Integer(1))]),
+            make_row(&[("val", Value::Integer(2))]),
+        ],
+    );
+    let exec = make_agg_exec("min_int", vec![], "min", "val", "min_val");
+    let rows = collect_rows(&exec, &ctx).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get("min_val"), Some(&Value::Integer(1)));
+}
+
+#[tokio::test]
+async fn test_min_aggregate_keeps_current_when_larger() {
+    // Exercises MinAccumulator compare_values returning false (keep current).
+    let (ctx, _) = make_ctx_with_table(
+        "min_keep",
+        vec![("val", "integer")],
+        vec![
+            make_row(&[("val", Value::Integer(1))]),
+            make_row(&[("val", Value::Integer(5))]),
+        ],
+    );
+    let exec = make_agg_exec("min_keep", vec![], "min", "val", "min_val");
+    let rows = collect_rows(&exec, &ctx).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get("min_val"), Some(&Value::Integer(1)));
+}
+
+#[tokio::test]
+async fn test_min_aggregate_floats() {
+    // Exercises Float/Float comparison in aggregate compare_values.
+    let (ctx, _) = make_ctx_with_table(
+        "min_flt",
+        vec![("val", "float")],
+        vec![
+            make_row(&[("val", Value::Float(3.0))]),
+            make_row(&[("val", Value::Float(1.0))]),
+            make_row(&[("val", Value::Float(2.0))]),
+        ],
+    );
+    let exec = make_agg_exec("min_flt", vec![], "min", "val", "min_val");
+    let rows = collect_rows(&exec, &ctx).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get("min_val"), Some(&Value::Float(1.0)));
+}
+
+#[tokio::test]
+async fn test_min_aggregate_strings() {
+    // Exercises String/String comparison in aggregate compare_values.
+    let (ctx, _) = make_ctx_with_table(
+        "min_str",
+        vec![("val", "text")],
+        vec![
+            make_row(&[("val", Value::String("charlie".to_string()))]),
+            make_row(&[("val", Value::String("alice".to_string()))]),
+            make_row(&[("val", Value::String("bob".to_string()))]),
+        ],
+    );
+    let exec = make_agg_exec("min_str", vec![], "min", "val", "min_val");
+    let rows = collect_rows(&exec, &ctx).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0].get("min_val"),
+        Some(&Value::String("alice".to_string()))
+    );
+}
+
+#[tokio::test]
+async fn test_min_aggregate_int_float_mixed() {
+    // Exercises Integer/Float and Float/Integer paths in aggregate compare_values.
+    let (ctx, _) = make_ctx_with_table(
+        "min_mixed",
+        vec![("val", "float")],
+        vec![
+            make_row(&[("val", Value::Integer(5))]),
+            make_row(&[("val", Value::Float(2.0))]),
+            make_row(&[("val", Value::Float(8.0))]),
+        ],
+    );
+    let exec = make_agg_exec("min_mixed", vec![], "min", "val", "min_val");
+    let rows = collect_rows(&exec, &ctx).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get("min_val"), Some(&Value::Float(2.0)));
+}
+
+#[tokio::test]
+async fn test_min_aggregate_all_nulls_returns_null() {
+    let (ctx, _) = make_ctx_with_table(
+        "min_all_null",
+        vec![("val", "integer")],
+        vec![make_row(&[("val", Value::Null)])],
+    );
+    let exec = make_agg_exec("min_all_null", vec![], "min", "val", "min_val");
+    let rows = collect_rows(&exec, &ctx).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get("min_val"), Some(&Value::Null));
+}
+
+#[tokio::test]
+async fn test_max_aggregate_integers() {
+    // Exercises MaxAccumulator: None path then compare_values(current<new)=true.
+    let (ctx, _) = make_ctx_with_table(
+        "max_int",
+        vec![("val", "integer")],
+        vec![
+            make_row(&[("val", Value::Integer(1))]),
+            make_row(&[("val", Value::Integer(3))]),
+            make_row(&[("val", Value::Integer(2))]),
+        ],
+    );
+    let exec = make_agg_exec("max_int", vec![], "max", "val", "max_val");
+    let rows = collect_rows(&exec, &ctx).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get("max_val"), Some(&Value::Integer(3)));
+}
+
+#[tokio::test]
+async fn test_max_aggregate_floats() {
+    let (ctx, _) = make_ctx_with_table(
+        "max_flt",
+        vec![("val", "float")],
+        vec![
+            make_row(&[("val", Value::Float(1.0))]),
+            make_row(&[("val", Value::Float(5.0))]),
+            make_row(&[("val", Value::Float(3.0))]),
+        ],
+    );
+    let exec = make_agg_exec("max_flt", vec![], "max", "val", "max_val");
+    let rows = collect_rows(&exec, &ctx).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get("max_val"), Some(&Value::Float(5.0)));
+}
+
+#[tokio::test]
+async fn test_max_aggregate_strings() {
+    let (ctx, _) = make_ctx_with_table(
+        "max_str",
+        vec![("val", "text")],
+        vec![
+            make_row(&[("val", Value::String("alpha".to_string()))]),
+            make_row(&[("val", Value::String("gamma".to_string()))]),
+            make_row(&[("val", Value::String("beta".to_string()))]),
+        ],
+    );
+    let exec = make_agg_exec("max_str", vec![], "max", "val", "max_val");
+    let rows = collect_rows(&exec, &ctx).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0].get("max_val"),
+        Some(&Value::String("gamma".to_string()))
+    );
+}
+
+#[tokio::test]
+async fn test_max_aggregate_all_nulls_returns_null() {
+    let (ctx, _) = make_ctx_with_table(
+        "max_all_null",
+        vec![("val", "integer")],
+        vec![make_row(&[("val", Value::Null)])],
+    );
+    let exec = make_agg_exec("max_all_null", vec![], "max", "val", "max_val");
+    let rows = collect_rows(&exec, &ctx).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get("max_val"), Some(&Value::Null));
+}
+
+#[tokio::test]
+async fn test_min_aggregate_compare_values_catchall() {
+    // Exercises aggregate compare_values `_ => false` branch (e.g. Boolean values).
+    let (ctx, _) = make_ctx_with_table(
+        "min_bool",
+        vec![("val", "boolean")],
+        vec![
+            make_row(&[("val", Value::Boolean(true))]),
+            make_row(&[("val", Value::Boolean(false))]),
+        ],
+    );
+    let exec = make_agg_exec("min_bool", vec![], "min", "val", "min_val");
+    let rows = collect_rows(&exec, &ctx).await;
+    assert_eq!(rows.len(), 1);
+    // compare_values(Boolean, Boolean) → false → keeps first seen value
+    assert_eq!(rows[0].get("min_val"), Some(&Value::Boolean(true)));
+}
+
+#[tokio::test]
+async fn test_count_distinct_aggregate() {
+    // Exercises CountDistinctAccumulator.
+    let (ctx, _) = make_ctx_with_table(
+        "cnt_dist",
+        vec![("val", "integer")],
+        vec![
+            make_row(&[("val", Value::Integer(1))]),
+            make_row(&[("val", Value::Integer(2))]),
+            make_row(&[("val", Value::Integer(1))]),
+            make_row(&[("val", Value::Integer(3))]),
+            make_row(&[("val", Value::Integer(2))]),
+        ],
+    );
+    let exec = make_agg_exec("cnt_dist", vec![], "count_distinct", "val", "uniq");
+    let rows = collect_rows(&exec, &ctx).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get("uniq"), Some(&Value::Integer(3)));
+}
+
+#[tokio::test]
+async fn test_count_distinct_with_nulls_skipped() {
+    // Nulls are skipped in CountDistinctAccumulator.
+    let (ctx, _) = make_ctx_with_table(
+        "cnt_dist_null",
+        vec![("val", "integer")],
+        vec![
+            make_row(&[("val", Value::Integer(1))]),
+            make_row(&[("val", Value::Null)]),
+            make_row(&[("val", Value::Integer(1))]),
+        ],
+    );
+    let exec = make_agg_exec("cnt_dist_null", vec![], "count_distinct", "val", "uniq");
+    let rows = collect_rows(&exec, &ctx).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get("uniq"), Some(&Value::Integer(1)));
+}
+
+#[tokio::test]
+async fn test_count_star_aggregate() {
+    // Exercises COUNT(*) via Expr::Wildcard path.
+    let (ctx, _) = make_ctx_with_table(
+        "cnt_star",
+        vec![("x", "integer")],
+        vec![
+            make_row(&[("x", Value::Integer(1))]),
+            make_row(&[("x", Value::Integer(2))]),
+            make_row(&[("x", Value::Integer(3))]),
+        ],
+    );
+    let scan = Arc::new(SeqScanExec::new("cnt_star".into(), None, None, None));
+    let exec = HashAggregateExec::new(
+        scan,
+        vec![],
+        vec![AggregateExpr {
+            func: Expr::Wildcard,
+            alias: Some("cnt".to_string()),
+        }],
+        None,
+    );
+    let rows = collect_rows(&exec, &ctx).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get("cnt"), Some(&Value::Integer(3)));
+}
+
+#[tokio::test]
+async fn test_count_col_skips_nulls() {
+    // Exercises CountAccumulator: Null is not counted.
+    let (ctx, _) = make_ctx_with_table(
+        "cnt_col",
+        vec![("x", "integer")],
+        vec![
+            make_row(&[("x", Value::Integer(1))]),
+            make_row(&[("x", Value::Null)]),
+            make_row(&[("x", Value::Integer(3))]),
+        ],
+    );
+    let exec = make_agg_exec("cnt_col", vec![], "count", "x", "cnt");
+    let rows = collect_rows(&exec, &ctx).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get("cnt"), Some(&Value::Integer(2)));
+}
+
+#[tokio::test]
+async fn test_sum_aggregate_grouped() {
+    // Exercises SUM with GROUP BY to cover multi-group accumulator paths.
+    let (ctx, _) = make_ctx_with_table(
+        "sum_grp",
+        vec![("g", "text"), ("v", "integer")],
+        vec![
+            make_row(&[
+                ("g", Value::String("a".to_string())),
+                ("v", Value::Integer(10)),
+            ]),
+            make_row(&[
+                ("g", Value::String("a".to_string())),
+                ("v", Value::Integer(20)),
+            ]),
+            make_row(&[
+                ("g", Value::String("b".to_string())),
+                ("v", Value::Integer(5)),
+            ]),
+        ],
+    );
+    let scan = Arc::new(SeqScanExec::new("sum_grp".into(), None, None, None));
+    let exec = HashAggregateExec::new(
+        scan,
+        vec![col("g")],
+        vec![AggregateExpr {
+            func: func_expr("sum", vec![col("v")]),
+            alias: Some("total".to_string()),
+        }],
+        None,
+    );
+    let rows = collect_rows(&exec, &ctx).await;
+    assert_eq!(rows.len(), 2);
+}
+
+#[tokio::test]
+async fn test_avg_aggregate_floats() {
+    let (ctx, _) = make_ctx_with_table(
+        "avg_flt",
+        vec![("val", "float")],
+        vec![
+            make_row(&[("val", Value::Float(1.0))]),
+            make_row(&[("val", Value::Float(3.0))]),
+        ],
+    );
+    let exec = make_agg_exec("avg_flt", vec![], "avg", "val", "avg_val");
+    let rows = collect_rows(&exec, &ctx).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get("avg_val"), Some(&Value::Float(2.0)));
+}
+
+// ── Sort accumulator coverage ─────────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_sort_by_boolean_ascending() {
+    // Exercises Boolean/Boolean branch in compare_sort_values.
+    let (ctx, _) = make_ctx_with_table(
+        "sort_bool",
+        vec![("b", "boolean")],
+        vec![
+            make_row(&[("b", Value::Boolean(true))]),
+            make_row(&[("b", Value::Boolean(false))]),
+            make_row(&[("b", Value::Boolean(true))]),
+        ],
+    );
+    let scan = Arc::new(SeqScanExec::new("sort_bool".into(), None, None, None));
+    let exec = SortExec::new(
+        scan,
+        vec![SortExpr {
+            expr: col("b"),
+            ascending: true,
+        }],
+    );
+    let rows = collect_rows(&exec, &ctx).await;
+    assert_eq!(rows[0].get("b"), Some(&Value::Boolean(false)));
+    assert_eq!(rows[1].get("b"), Some(&Value::Boolean(true)));
+}
+
+#[tokio::test]
+async fn test_sort_by_float_ascending() {
+    // Exercises Float/Float branch in compare_sort_values.
+    let (ctx, _) = make_ctx_with_table(
+        "sort_flt",
+        vec![("x", "float")],
+        vec![
+            make_row(&[("x", Value::Float(3.5))]),
+            make_row(&[("x", Value::Float(1.1))]),
+            make_row(&[("x", Value::Float(2.2))]),
+        ],
+    );
+    let scan = Arc::new(SeqScanExec::new("sort_flt".into(), None, None, None));
+    let exec = SortExec::new(
+        scan,
+        vec![SortExpr {
+            expr: col("x"),
+            ascending: true,
+        }],
+    );
+    let rows = collect_rows(&exec, &ctx).await;
+    assert_eq!(rows[0].get("x"), Some(&Value::Float(1.1)));
+    assert_eq!(rows[2].get("x"), Some(&Value::Float(3.5)));
+}
+
+#[tokio::test]
+async fn test_sort_by_string_ascending() {
+    // Exercises String/String branch in compare_sort_values.
+    let (ctx, _) = make_ctx_with_table(
+        "sort_str",
+        vec![("s", "text")],
+        vec![
+            make_row(&[("s", Value::String("zebra".to_string()))]),
+            make_row(&[("s", Value::String("apple".to_string()))]),
+            make_row(&[("s", Value::String("mango".to_string()))]),
+        ],
+    );
+    let scan = Arc::new(SeqScanExec::new("sort_str".into(), None, None, None));
+    let exec = SortExec::new(
+        scan,
+        vec![SortExpr {
+            expr: col("s"),
+            ascending: true,
+        }],
+    );
+    let rows = collect_rows(&exec, &ctx).await;
+    assert_eq!(rows[0].get("s"), Some(&Value::String("apple".to_string())));
+    assert_eq!(rows[2].get("s"), Some(&Value::String("zebra".to_string())));
+}
+
+#[tokio::test]
+async fn test_sort_nulls_sort_first_ascending() {
+    // Exercises Null/_, _/Null, and Null/Null branches in compare_sort_values.
+    let (ctx, _) = make_ctx_with_table(
+        "sort_null",
+        vec![("x", "integer")],
+        vec![
+            make_row(&[("x", Value::Integer(3))]),
+            make_row(&[("x", Value::Null)]),
+            make_row(&[("x", Value::Integer(1))]),
+        ],
+    );
+    let scan = Arc::new(SeqScanExec::new("sort_null".into(), None, None, None));
+    let exec = SortExec::new(
+        scan,
+        vec![SortExpr {
+            expr: col("x"),
+            ascending: true,
+        }],
+    );
+    let rows = collect_rows(&exec, &ctx).await;
+    assert_eq!(rows[0].get("x"), Some(&Value::Null));
+    assert_eq!(rows[1].get("x"), Some(&Value::Integer(1)));
+    assert_eq!(rows[2].get("x"), Some(&Value::Integer(3)));
+}
+
+#[tokio::test]
+async fn test_sort_integer_float_mixed() {
+    // Exercises Integer/Float and Float/Integer branches in compare_sort_values.
+    let (ctx, _) = make_ctx_with_table(
+        "sort_mix",
+        vec![("x", "float")],
+        vec![
+            make_row(&[("x", Value::Integer(5))]),
+            make_row(&[("x", Value::Float(1.5))]),
+            make_row(&[("x", Value::Integer(3))]),
+        ],
+    );
+    let scan = Arc::new(SeqScanExec::new("sort_mix".into(), None, None, None));
+    let exec = SortExec::new(
+        scan,
+        vec![SortExpr {
+            expr: col("x"),
+            ascending: true,
+        }],
+    );
+    let rows = collect_rows(&exec, &ctx).await;
+    assert_eq!(rows[0].get("x"), Some(&Value::Float(1.5)));
+}
+
+#[tokio::test]
+async fn test_sort_mixed_types_catchall_equal() {
+    // Exercises _ => Ordering::Equal in compare_sort_values (incompatible types).
+    let (ctx, _) = make_ctx_with_table(
+        "sort_catch",
+        vec![("x", "any")],
+        vec![
+            make_row(&[("x", Value::Boolean(true))]),
+            make_row(&[("x", Value::String("hello".to_string()))]),
+        ],
+    );
+    let scan = Arc::new(SeqScanExec::new("sort_catch".into(), None, None, None));
+    let exec = SortExec::new(
+        scan,
+        vec![SortExpr {
+            expr: col("x"),
+            ascending: true,
+        }],
+    );
+    let rows = collect_rows(&exec, &ctx).await;
+    // Mixed types compare as Equal, so order is stable (2 rows returned).
+    assert_eq!(rows.len(), 2);
+}
+
+// ── Scan edge-case coverage ───────────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_seq_scan_missing_column_defaults_to_null() {
+    // Row is missing a projected column → unwrap_or(Null) branch.
+    let (ctx, provider) = make_ctx_with_table(
+        "missing_col",
+        vec![("id", "integer"), ("name", "text")],
+        vec![make_row(&[("id", Value::Integer(1))])],
+    );
+    drop(provider);
+    let exec = SeqScanExec::new(
+        "missing_col".into(),
+        None,
+        Some(vec!["id".to_string(), "name".to_string()]),
+        None,
+    );
+    let rows = collect_rows(&exec, &ctx).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get("name"), Some(&Value::Null));
+}
+
+#[tokio::test]
+async fn test_index_scan_missing_column_defaults_to_null() {
+    // IndexScan row missing a column → unwrap_or(Null) branch.
+    let (ctx, _) = make_ctx_with_table(
+        "idx_missing",
+        vec![("id", "integer"), ("v", "text")],
+        vec![make_row(&[("id", Value::Integer(1))])],
+    );
+    let key_pred = Expr::BinaryOp {
+        left: Box::new(col("id")),
+        op: BinaryOperator::Eq,
+        right: Box::new(int_lit(1)),
+    };
+    let exec = IndexScanExec::new(
+        "idx_missing".into(),
+        None,
+        "idx".into(),
+        Some(vec!["id".to_string(), "v".to_string()]),
+        key_pred,
+        None,
+    );
+    let rows = collect_rows(&exec, &ctx).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get("v"), Some(&Value::Null));
+}
+
+#[tokio::test]
+async fn test_seq_scan_filter_null_comparison_skips_row() {
+    // Exercises `else if result.is_null()` path in SeqScanExec.
+    // col > null_lit → left=Integer, right=Null → eval returns Null → is_null() → skip.
+    let (ctx, _) = make_ctx_with_table(
+        "scan_null_cmp",
+        vec![("x", "integer")],
+        vec![
+            make_row(&[("x", Value::Integer(1))]),
+            make_row(&[("x", Value::Integer(2))]),
+        ],
+    );
+    let filter = Expr::BinaryOp {
+        left: Box::new(col("x")),
+        op: BinaryOperator::Gt,
+        right: Box::new(null_lit()),
+    };
+    let exec = SeqScanExec::new("scan_null_cmp".into(), None, None, Some(filter));
+    let rows = collect_rows(&exec, &ctx).await;
+    assert!(rows.is_empty());
+}
+
+// ── ProjectExec with no alias coverage ───────────────────────────────────────
+
+#[tokio::test]
+async fn test_project_no_alias_uses_col_n() {
+    // Exercises format!("col_{}", i) path when alias is None.
+    let (ctx, _) = make_ctx_with_table(
+        "proj_noalias",
+        vec![("x", "integer")],
+        vec![make_row(&[("x", Value::Integer(7))])],
+    );
+    let scan = Arc::new(SeqScanExec::new("proj_noalias".into(), None, None, None));
+    let exec = ProjectExec::new(
+        scan,
+        vec![ProjectionItem {
+            expr: col("x"),
+            alias: None,
+        }],
+    );
+    let rows = collect_rows(&exec, &ctx).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get("col_0"), Some(&Value::Integer(7)));
+}
+
+#[test]
+fn test_project_schema_no_alias() {
+    // Exercises format!("col_{}", i) path in schema().
+    let scan = Arc::new(ValuesExec::new(vec![], vec![]));
+    let exec = ProjectExec::new(
+        scan,
+        vec![ProjectionItem {
+            expr: int_lit(1),
+            alias: None,
+        }],
+    );
+    let schema = exec.schema();
+    assert_eq!(schema.len(), 1);
+    assert_eq!(schema[0].0, "col_0");
+}
+
+// ── ValuesExec extra-column coverage ─────────────────────────────────────────
+
+#[tokio::test]
+async fn test_values_exec_more_cols_than_schema() {
+    // Exercises format!("col_{}", i) fallback for extra values beyond named schema.
+    let exec = ValuesExec::new(
+        vec![vec![int_lit(1), int_lit(2), int_lit(3)]],
+        vec!["a".to_string(), "b".to_string()],
+    );
+    let ctx = default_ctx();
+    let rows = collect_rows(&exec, &ctx).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get("a"), Some(&Value::Integer(1)));
+    assert_eq!(rows[0].get("b"), Some(&Value::Integer(2)));
+    assert_eq!(rows[0].get("col_2"), Some(&Value::Integer(3)));
+}
+
+#[test]
+fn test_values_exec_schema_extra_columns() {
+    // Exercises schema() loop that extends beyond named schema columns.
+    let exec = ValuesExec::new(
+        vec![vec![int_lit(1), int_lit(2), int_lit(3)]],
+        vec!["a".to_string()],
+    );
+    let schema = exec.schema();
+    assert_eq!(schema.len(), 3);
+    assert_eq!(schema[0].0, "a");
+    assert_eq!(schema[1].0, "col_1");
+    assert_eq!(schema[2].0, "col_2");
+}
+
+// ── DistinctExec all-unique coverage ─────────────────────────────────────────
+
+#[tokio::test]
+async fn test_distinct_exec_all_unique_coverage() {
+    // Exercises distinct_batch non-empty path when all rows are unique.
+    let (ctx, _) = make_ctx_with_table(
+        "dist_uniq2",
+        vec![("x", "integer")],
+        vec![
+            make_row(&[("x", Value::Integer(10))]),
+            make_row(&[("x", Value::Integer(20))]),
+            make_row(&[("x", Value::Integer(30))]),
+        ],
+    );
+    let scan = Arc::new(SeqScanExec::new("dist_uniq2".into(), None, None, None));
+    let exec = DistinctExec::new(scan);
+    let rows = collect_rows(&exec, &ctx).await;
+    assert_eq!(rows.len(), 3);
+}
+
+#[tokio::test]
+async fn test_distinct_exec_all_duplicates_yields_one() {
+    let (ctx, _) = make_ctx_with_table(
+        "dist_dups",
+        vec![("x", "integer")],
+        vec![
+            make_row(&[("x", Value::Integer(5))]),
+            make_row(&[("x", Value::Integer(5))]),
+            make_row(&[("x", Value::Integer(5))]),
+        ],
+    );
+    let scan = Arc::new(SeqScanExec::new("dist_dups".into(), None, None, None));
+    let exec = DistinctExec::new(scan);
+    let rows = collect_rows(&exec, &ctx).await;
+    assert_eq!(rows.len(), 1);
+}

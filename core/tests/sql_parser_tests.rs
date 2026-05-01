@@ -3885,17 +3885,31 @@ fn test_data_type_display_all_variants() {
     assert_eq!(DataType::Boolean.to_string(), "BOOLEAN");
     assert_eq!(DataType::Date.to_string(), "DATE");
     assert_eq!(DataType::Timestamp.to_string(), "TIMESTAMP");
-    assert_eq!(DataType::Decimal(Some(10), Some(2)).to_string(), "DECIMAL(10,2)");
+    assert_eq!(
+        DataType::Decimal(Some(10), Some(2)).to_string(),
+        "DECIMAL(10,2)"
+    );
     assert_eq!(DataType::Decimal(Some(10), None).to_string(), "DECIMAL(10)");
     assert_eq!(DataType::Decimal(None, None).to_string(), "DECIMAL");
     assert_eq!(DataType::Reference("orders".into()).to_string(), "orders");
-    assert_eq!(DataType::ReferenceArray("items".into()).to_string(), "[items]");
     assert_eq!(
-        DataType::VirtualReference { table: "orders".into(), column: "id".into() }.to_string(),
+        DataType::ReferenceArray("items".into()).to_string(),
+        "[items]"
+    );
+    assert_eq!(
+        DataType::VirtualReference {
+            table: "orders".into(),
+            column: "id".into()
+        }
+        .to_string(),
         "~orders(id)"
     );
     assert_eq!(
-        DataType::VirtualReferenceArray { table: "orders".into(), column: "id".into() }.to_string(),
+        DataType::VirtualReferenceArray {
+            table: "orders".into(),
+            column: "id".into()
+        }
+        .to_string(),
         "~[orders](id)"
     );
     assert_eq!(DataType::TinyInt.to_string(), "TINYINT");
@@ -3903,7 +3917,10 @@ fn test_data_type_display_all_variants() {
     assert_eq!(DataType::SmallInt.to_string(), "SMALLINT");
     assert_eq!(DataType::UnsignedSmallInt.to_string(), "SMALLINT UNSIGNED");
     assert_eq!(DataType::MediumInt.to_string(), "MEDIUMINT");
-    assert_eq!(DataType::UnsignedMediumInt.to_string(), "MEDIUMINT UNSIGNED");
+    assert_eq!(
+        DataType::UnsignedMediumInt.to_string(),
+        "MEDIUMINT UNSIGNED"
+    );
     assert_eq!(DataType::BigInt.to_string(), "BIGINT");
     assert_eq!(DataType::UnsignedBigInt.to_string(), "BIGINT UNSIGNED");
     assert_eq!(DataType::Char(Some(10)).to_string(), "CHAR(10)");
@@ -3914,8 +3931,14 @@ fn test_data_type_display_all_variants() {
     assert_eq!(DataType::Time.to_string(), "TIME");
     assert_eq!(DataType::TimeTz.to_string(), "TIME WITH TIME ZONE");
     assert_eq!(DataType::DateTime.to_string(), "DATETIME");
-    assert_eq!(DataType::TimestampTz.to_string(), "TIMESTAMP WITH TIME ZONE");
-    assert_eq!(DataType::EnumRef("my_status".into()).to_string(), "my_status");
+    assert_eq!(
+        DataType::TimestampTz.to_string(),
+        "TIMESTAMP WITH TIME ZONE"
+    );
+    assert_eq!(
+        DataType::EnumRef("my_status".into()).to_string(),
+        "my_status"
+    );
     assert_eq!(DataType::Uuid.to_string(), "UUID");
     assert_eq!(DataType::Binary(Some(16)).to_string(), "BINARY(16)");
     assert_eq!(DataType::Binary(None).to_string(), "BINARY");
@@ -3973,7 +3996,10 @@ fn test_binary_operator_display_all_variants() {
     assert_eq!(BinaryOperator::RevRegexp.to_string(), "REVREGEXP");
     assert_eq!(BinaryOperator::NotRevRegexp.to_string(), "NOT REVREGEXP");
     assert_eq!(BinaryOperator::RevRegexpIMatch.to_string(), "REVREGEXP*");
-    assert_eq!(BinaryOperator::NotRevRegexpIMatch.to_string(), "NOT REVREGEXP*");
+    assert_eq!(
+        BinaryOperator::NotRevRegexpIMatch.to_string(),
+        "NOT REVREGEXP*"
+    );
 }
 
 #[test]
@@ -3995,10 +4021,15 @@ fn test_value_display() {
 
 #[test]
 fn test_validation_error_display_all_variants() {
-    let err = ValidationError::TableNotFound { table: "users".into() };
+    let err = ValidationError::TableNotFound {
+        table: "users".into(),
+    };
     assert!(err.to_string().contains("users"));
 
-    let err = ValidationError::ColumnNotFound { table: "users".into(), column: "foo".into() };
+    let err = ValidationError::ColumnNotFound {
+        table: "users".into(),
+        column: "foo".into(),
+    };
     assert!(err.to_string().contains("foo"));
 
     let err = ValidationError::TypeMismatch {
@@ -4011,7 +4042,10 @@ fn test_validation_error_display_all_variants() {
     let err = ValidationError::InvalidAggregateUsage("COUNT in WHERE".into());
     assert!(err.to_string().contains("invalid aggregate"));
 
-    let err = ValidationError::NullConstraintViolation { table: "t".into(), column: "id".into() };
+    let err = ValidationError::NullConstraintViolation {
+        table: "t".into(),
+        column: "id".into(),
+    };
     assert!(err.to_string().contains("null constraint"));
 
     let err = ValidationError::ConstraintViolation("custom msg".into());
@@ -4023,7 +4057,10 @@ fn test_validation_error_display_all_variants() {
     let err = ValidationError::TypeInUse("status_type".into());
     assert!(err.to_string().contains("status_type"));
 
-    let err = ValidationError::InvalidEnumValue { column: "status".into(), value: "bad".into() };
+    let err = ValidationError::InvalidEnumValue {
+        column: "status".into(),
+        value: "bad".into(),
+    };
     assert!(err.to_string().contains("bad"));
 
     let err = ValidationError::NoActiveTransaction;
@@ -4196,7 +4233,10 @@ fn test_validate_sequence_nesting_violation() {
         }),
     ];
     let err = v.validate_sequence(&stmts).unwrap_err();
-    assert!(matches!(err, ValidationError::TransactionNestingViolation { .. }));
+    assert!(matches!(
+        err,
+        ValidationError::TransactionNestingViolation { .. }
+    ));
 }
 
 #[test]
@@ -4280,52 +4320,73 @@ fn test_validate_ddl_always_ok() {
     assert!(v.validate(&stmt).is_ok());
 
     // Transaction control always passes
-    assert!(v.validate(&Statement::BeginTransaction(BeginTransactionStatement {
-        name: None,
-        isolation_level: None,
-        read_only: false,
-    })).is_ok());
-    assert!(v.validate(&Statement::Commit(CommitStatement {
-        scope: CommitScope::Current,
-        chain: false,
-    })).is_ok());
-    assert!(v.validate(&Statement::Rollback(RollbackStatement {
-        scope: RollbackScope::Current,
-        chain: false,
-    })).is_ok());
-    assert!(v.validate(&Statement::Savepoint(SavepointStatement {
-        name: "sp".into(),
-    })).is_ok());
-    assert!(v.validate(&Statement::ReleaseSavepoint(ReleaseSavepointStatement {
-        name: "sp".into(),
-    })).is_ok());
+    assert!(v
+        .validate(&Statement::BeginTransaction(BeginTransactionStatement {
+            name: None,
+            isolation_level: None,
+            read_only: false,
+        }))
+        .is_ok());
+    assert!(v
+        .validate(&Statement::Commit(CommitStatement {
+            scope: CommitScope::Current,
+            chain: false,
+        }))
+        .is_ok());
+    assert!(v
+        .validate(&Statement::Rollback(RollbackStatement {
+            scope: RollbackScope::Current,
+            chain: false,
+        }))
+        .is_ok());
+    assert!(v
+        .validate(&Statement::Savepoint(SavepointStatement {
+            name: "sp".into(),
+        }))
+        .is_ok());
+    assert!(v
+        .validate(&Statement::ReleaseSavepoint(ReleaseSavepointStatement {
+            name: "sp".into(),
+        }))
+        .is_ok());
 
     // New DDL scaffolding always passes
     use aeternumdb_core::sql::ast::{
-        CreateIndexStatement, DropIndexStatement, CreateUserStatement, DropUserStatement,
+        CreateIndexStatement, CreateUserStatement, DropIndexStatement, DropUserStatement,
         IndexColumn, IndexType,
     };
-    assert!(v.validate(&Statement::CreateIndex(CreateIndexStatement {
-        name: Some("idx1".into()),
-        table: "t".into(),
-        columns: vec![IndexColumn { name: "id".into(), ascending: None }],
-        unique: false,
-        if_not_exists: false,
-        index_type: IndexType::BTree,
-    })).is_ok());
-    assert!(v.validate(&Statement::DropIndex(DropIndexStatement {
-        names: vec!["idx1".into()],
-        if_exists: false,
-    })).is_ok());
-    assert!(v.validate(&Statement::CreateUser(CreateUserStatement {
-        name: "alice".into(),
-        password: None,
-        roles: vec![],
-    })).is_ok());
-    assert!(v.validate(&Statement::DropUser(DropUserStatement {
-        names: vec!["alice".into()],
-        if_exists: false,
-    })).is_ok());
+    assert!(v
+        .validate(&Statement::CreateIndex(CreateIndexStatement {
+            name: Some("idx1".into()),
+            table: "t".into(),
+            columns: vec![IndexColumn {
+                name: "id".into(),
+                ascending: None
+            }],
+            unique: false,
+            if_not_exists: false,
+            index_type: IndexType::BTree,
+        }))
+        .is_ok());
+    assert!(v
+        .validate(&Statement::DropIndex(DropIndexStatement {
+            names: vec!["idx1".into()],
+            if_exists: false,
+        }))
+        .is_ok());
+    assert!(v
+        .validate(&Statement::CreateUser(CreateUserStatement {
+            name: "alice".into(),
+            password: None,
+            roles: vec![],
+        }))
+        .is_ok());
+    assert!(v
+        .validate(&Statement::DropUser(DropUserStatement {
+            names: vec!["alice".into()],
+            if_exists: false,
+        }))
+        .is_ok());
 }
 
 // ── validate_view_as_item ─────────────────────────────────────────────────────
@@ -4335,9 +4396,8 @@ fn test_validate_view_as_aggregate_rejected() {
     let catalog = catalog_with_users();
     let v = Validator::new(&catalog);
     // Parse a SELECT with VIEW AS that uses an aggregate function
-    let result = parser().parse_one(
-        "SELECT id FROM users VIEW AS (id AS user_id, COUNT(id) AS cnt)"
-    );
+    let result =
+        parser().parse_one("SELECT id FROM users VIEW AS (id AS user_id, COUNT(id) AS cnt)");
     if let Ok(stmt) = result {
         let err = v.validate(&stmt).unwrap_err();
         assert!(matches!(err, ValidationError::ViewAsAggregateNotAllowed(_)));
@@ -4359,7 +4419,10 @@ fn test_catalog_type_management() {
         name: "status".into(),
         kind: UserTypeKind::Enum {
             flag: false,
-            variants: vec![EnumVariant { name: "active".into(), is_none: false }],
+            variants: vec![EnumVariant {
+                name: "active".into(),
+                is_none: false,
+            }],
             resolved_values: vec![1],
         },
     });
