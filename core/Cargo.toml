@@ -19,11 +19,18 @@ sqlparser = "0.61"
 clap = { version = "4.5", features = ["derive"] }
 crc32fast = "1.3"
 parking_lot = "0.12"
+async-stream = "0.3"
+futures = "0.3"
+hashbrown = "0.14"
+async-trait = "0.1"
+regex = "1.10"
+chrono = "0.4"
 
 [dev-dependencies]
 tokio-test = "0.4"
 criterion = { version = "0.8", features = ["async_tokio"] }
 tempfile = "3.8"
+proptest = "1.4"
 
 [build-dependencies]
 tonic-build = "0.14"
@@ -46,4 +53,8 @@ harness = false
 
 [[bench]]
 name = "query_bench"
+harness = false
+
+[[bench]]
+name = "executor_bench"
 harness = false

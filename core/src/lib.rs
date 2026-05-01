@@ -3,6 +3,7 @@
 //! This crate exposes the storage engine and other core subsystems so that
 //! integration tests and future crates can depend on them.
 
+pub mod executor;
 pub mod index;
 pub mod query;
 pub mod sql;
