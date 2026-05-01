@@ -46,6 +46,7 @@ mod sort;
 mod unnest;
 mod values;
 
+pub use aggregate::HashAggregateExec;
 pub use context::{
     AtomicIdGenerator, ExecutionContext, InMemoryTableProvider, ObjIdGenerator, TableProvider, ACL,
 };
@@ -58,9 +59,12 @@ pub use filter::FilterExec;
 pub use join::{HashJoinExec, NestedLoopJoinExec, SortMergeJoinExec};
 pub use limit::LimitExec;
 pub use physical_plan::{build_distinct_executor, build_executor, build_sort_merge_join};
+pub use project::ProjectExec;
 pub use record_batch::{RecordBatch, Row, Value};
 pub use scan::{IndexScanExec, SeqScanExec};
 pub use sort::SortExec;
+pub use unnest::UnnestExec;
+pub use values::ValuesExec;
 
 use async_trait::async_trait;
 use futures::stream::BoxStream;

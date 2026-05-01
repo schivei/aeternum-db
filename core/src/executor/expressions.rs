@@ -198,43 +198,39 @@ fn eval_or(left: &Expr, right: &Expr, row: &Row) -> Result<Value> {
     }
 }
 
-fn eval_add(left: &Value, right: &Value) -> Result<Value> {
+/// Apply a numeric binary operation, promoting integers to floats when mixed.
+fn apply_numeric_op<FInt, FFloat>(
+    left: &Value,
+    right: &Value,
+    f_int: FInt,
+    f_float: FFloat,
+) -> Result<Value>
+where
+    FInt: Fn(i64, i64) -> i64,
+    FFloat: Fn(f64, f64) -> f64,
+{
     match (left, right) {
-        (Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(a + b)),
-        (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a + b)),
-        (Value::Integer(a), Value::Float(b)) => Ok(Value::Float(*a as f64 + b)),
-        (Value::Float(a), Value::Integer(b)) => Ok(Value::Float(a + *b as f64)),
+        (Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(f_int(*a, *b))),
+        (Value::Float(a), Value::Float(b)) => Ok(Value::Float(f_float(*a, *b))),
+        (Value::Integer(a), Value::Float(b)) => Ok(Value::Float(f_float(*a as f64, *b))),
+        (Value::Float(a), Value::Integer(b)) => Ok(Value::Float(f_float(*a, *b as f64))),
         _ => Err(ExecutorError::TypeMismatch {
             expected: "numeric".to_string(),
             got: format!("{:?}, {:?}", left, right),
         }),
     }
+}
+
+fn eval_add(left: &Value, right: &Value) -> Result<Value> {
+    apply_numeric_op(left, right, |a, b| a + b, |a, b| a + b)
 }
 
 fn eval_sub(left: &Value, right: &Value) -> Result<Value> {
-    match (left, right) {
-        (Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(a - b)),
-        (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a - b)),
-        (Value::Integer(a), Value::Float(b)) => Ok(Value::Float(*a as f64 - b)),
-        (Value::Float(a), Value::Integer(b)) => Ok(Value::Float(a - *b as f64)),
-        _ => Err(ExecutorError::TypeMismatch {
-            expected: "numeric".to_string(),
-            got: format!("{:?}, {:?}", left, right),
-        }),
-    }
+    apply_numeric_op(left, right, |a, b| a - b, |a, b| a - b)
 }
 
 fn eval_mul(left: &Value, right: &Value) -> Result<Value> {
-    match (left, right) {
-        (Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(a * b)),
-        (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a * b)),
-        (Value::Integer(a), Value::Float(b)) => Ok(Value::Float(*a as f64 * b)),
-        (Value::Float(a), Value::Integer(b)) => Ok(Value::Float(a * *b as f64)),
-        _ => Err(ExecutorError::TypeMismatch {
-            expected: "numeric".to_string(),
-            got: format!("{:?}, {:?}", left, right),
-        }),
-    }
+    apply_numeric_op(left, right, |a, b| a * b, |a, b| a * b)
 }
 
 fn eval_div(left: &Value, right: &Value) -> Result<Value> {
@@ -373,94 +369,69 @@ fn eval_coalesce(args: &[Value]) -> Result<Value> {
     Ok(Value::Null)
 }
 
-fn eval_abs(args: &[Value]) -> Result<Value> {
+/// Validate that `args` has exactly one element and return it, or `None` for NULL.
+fn require_one_arg<'a>(fn_name: &str, args: &'a [Value]) -> Result<Option<&'a Value>> {
     if args.len() != 1 {
-        return Err(ExecutorError::EvalError(
-            "ABS requires 1 argument".to_string(),
-        ));
+        return Err(ExecutorError::EvalError(format!(
+            "{} requires 1 argument",
+            fn_name
+        )));
     }
     if args[0].is_null() {
-        return Ok(Value::Null);
+        return Ok(None);
     }
-    match &args[0] {
-        Value::Integer(i) => Ok(Value::Integer(i.abs())),
-        Value::Float(f) => Ok(Value::Float(f.abs())),
-        _ => Err(ExecutorError::TypeMismatch {
+    Ok(Some(&args[0]))
+}
+
+/// Validate that `args` has exactly one string element and return it, or `None` for NULL.
+fn check_one_string_arg<'a>(fn_name: &str, args: &'a [Value]) -> Result<Option<&'a str>> {
+    match require_one_arg(fn_name, args)? {
+        None => Ok(None),
+        Some(Value::String(s)) => Ok(Some(s.as_str())),
+        Some(v) => Err(ExecutorError::TypeMismatch {
+            expected: "string".to_string(),
+            got: format!("{:?}", v),
+        }),
+    }
+}
+
+fn eval_abs(args: &[Value]) -> Result<Value> {
+    match require_one_arg("ABS", args)? {
+        None => Ok(Value::Null),
+        Some(Value::Integer(i)) => Ok(Value::Integer(i.abs())),
+        Some(Value::Float(f)) => Ok(Value::Float(f.abs())),
+        Some(v) => Err(ExecutorError::TypeMismatch {
             expected: "numeric".to_string(),
-            got: format!("{:?}", args[0]),
+            got: format!("{:?}", v),
         }),
     }
 }
 
 fn eval_lower(args: &[Value]) -> Result<Value> {
-    if args.len() != 1 {
-        return Err(ExecutorError::EvalError(
-            "LOWER requires 1 argument".to_string(),
-        ));
-    }
-    if args[0].is_null() {
-        return Ok(Value::Null);
-    }
-    match &args[0] {
-        Value::String(s) => Ok(Value::String(s.to_lowercase())),
-        _ => Err(ExecutorError::TypeMismatch {
-            expected: "string".to_string(),
-            got: format!("{:?}", args[0]),
-        }),
+    match check_one_string_arg("LOWER", args)? {
+        None => Ok(Value::Null),
+        Some(s) => Ok(Value::String(s.to_lowercase())),
     }
 }
 
 fn eval_upper(args: &[Value]) -> Result<Value> {
-    if args.len() != 1 {
-        return Err(ExecutorError::EvalError(
-            "UPPER requires 1 argument".to_string(),
-        ));
-    }
-    if args[0].is_null() {
-        return Ok(Value::Null);
-    }
-    match &args[0] {
-        Value::String(s) => Ok(Value::String(s.to_uppercase())),
-        _ => Err(ExecutorError::TypeMismatch {
-            expected: "string".to_string(),
-            got: format!("{:?}", args[0]),
-        }),
+    match check_one_string_arg("UPPER", args)? {
+        None => Ok(Value::Null),
+        Some(s) => Ok(Value::String(s.to_uppercase())),
     }
 }
 
 fn eval_length(args: &[Value]) -> Result<Value> {
-    if args.len() != 1 {
-        return Err(ExecutorError::EvalError(
-            "LENGTH requires 1 argument".to_string(),
-        ));
-    }
-    if args[0].is_null() {
-        return Ok(Value::Null);
-    }
-    match &args[0] {
-        Value::String(s) => Ok(Value::Integer(s.len() as i64)),
-        _ => Err(ExecutorError::TypeMismatch {
-            expected: "string".to_string(),
-            got: format!("{:?}", args[0]),
-        }),
+    match check_one_string_arg("LENGTH", args)? {
+        None => Ok(Value::Null),
+        Some(s) => Ok(Value::Integer(s.len() as i64)),
     }
 }
 
 fn eval_trim(args: &[Value]) -> Result<Value> {
-    if args.len() != 1 {
-        return Err(ExecutorError::EvalError(
-            "TRIM requires 1 argument".to_string(),
-        ));
-    }
-    if args[0].is_null() {
-        return Ok(Value::Null);
-    }
-    match &args[0] {
-        Value::String(s) => Ok(Value::String(s.trim().to_string())),
-        _ => Err(ExecutorError::TypeMismatch {
-            expected: "string".to_string(),
-            got: format!("{:?}", args[0]),
-        }),
+    match check_one_string_arg("TRIM", args)? {
+        None => Ok(Value::Null),
+        Some(s) => Ok(Value::String(s.trim().to_string())),
     }
 }
 
@@ -492,58 +463,37 @@ fn eval_round(args: &[Value]) -> Result<Value> {
 }
 
 fn eval_floor(args: &[Value]) -> Result<Value> {
-    if args.len() != 1 {
-        return Err(ExecutorError::EvalError(
-            "FLOOR requires 1 argument".to_string(),
-        ));
-    }
-    if args[0].is_null() {
-        return Ok(Value::Null);
-    }
-    match &args[0] {
-        Value::Float(f) => Ok(Value::Integer(f.floor() as i64)),
-        Value::Integer(i) => Ok(Value::Integer(*i)),
-        _ => Err(ExecutorError::TypeMismatch {
+    match require_one_arg("FLOOR", args)? {
+        None => Ok(Value::Null),
+        Some(Value::Float(f)) => Ok(Value::Integer(f.floor() as i64)),
+        Some(Value::Integer(i)) => Ok(Value::Integer(*i)),
+        Some(v) => Err(ExecutorError::TypeMismatch {
             expected: "numeric".to_string(),
-            got: format!("{:?}", args[0]),
+            got: format!("{:?}", v),
         }),
     }
 }
 
 fn eval_ceil(args: &[Value]) -> Result<Value> {
-    if args.len() != 1 {
-        return Err(ExecutorError::EvalError(
-            "CEIL requires 1 argument".to_string(),
-        ));
-    }
-    if args[0].is_null() {
-        return Ok(Value::Null);
-    }
-    match &args[0] {
-        Value::Float(f) => Ok(Value::Integer(f.ceil() as i64)),
-        Value::Integer(i) => Ok(Value::Integer(*i)),
-        _ => Err(ExecutorError::TypeMismatch {
+    match require_one_arg("CEIL", args)? {
+        None => Ok(Value::Null),
+        Some(Value::Float(f)) => Ok(Value::Integer(f.ceil() as i64)),
+        Some(Value::Integer(i)) => Ok(Value::Integer(*i)),
+        Some(v) => Err(ExecutorError::TypeMismatch {
             expected: "numeric".to_string(),
-            got: format!("{:?}", args[0]),
+            got: format!("{:?}", v),
         }),
     }
 }
 
 fn eval_sqrt(args: &[Value]) -> Result<Value> {
-    if args.len() != 1 {
-        return Err(ExecutorError::EvalError(
-            "SQRT requires 1 argument".to_string(),
-        ));
-    }
-    if args[0].is_null() {
-        return Ok(Value::Null);
-    }
-    match &args[0] {
-        Value::Float(f) => Ok(Value::Float(f.sqrt())),
-        Value::Integer(i) => Ok(Value::Float((*i as f64).sqrt())),
-        _ => Err(ExecutorError::TypeMismatch {
+    match require_one_arg("SQRT", args)? {
+        None => Ok(Value::Null),
+        Some(Value::Float(f)) => Ok(Value::Float(f.sqrt())),
+        Some(Value::Integer(i)) => Ok(Value::Float((*i as f64).sqrt())),
+        Some(v) => Err(ExecutorError::TypeMismatch {
             expected: "numeric".to_string(),
-            got: format!("{:?}", args[0]),
+            got: format!("{:?}", v),
         }),
     }
 }
@@ -581,6 +531,53 @@ fn eval_case(
     }
 }
 
+fn eval_cast_to_bool(val: Value) -> Result<Value> {
+    match val {
+        v @ Value::Boolean(_) => Ok(v),
+        Value::Integer(i) => Ok(Value::Boolean(i != 0)),
+        Value::String(s) => {
+            let lower = s.to_lowercase();
+            Ok(Value::Boolean(
+                lower == "true" || lower == "t" || lower == "1",
+            ))
+        }
+        v => Err(ExecutorError::TypeMismatch {
+            expected: "boolean".to_string(),
+            got: format!("{:?}", v),
+        }),
+    }
+}
+
+fn eval_cast_to_integer(val: Value) -> Result<Value> {
+    match val {
+        v @ Value::Integer(_) => Ok(v),
+        Value::Float(f) => Ok(Value::Integer(f as i64)),
+        Value::String(s) => s
+            .parse::<i64>()
+            .map(Value::Integer)
+            .map_err(|_| ExecutorError::EvalError(format!("Cannot cast '{}' to integer", s))),
+        v => Err(ExecutorError::TypeMismatch {
+            expected: "integer".to_string(),
+            got: format!("{:?}", v),
+        }),
+    }
+}
+
+fn eval_cast_to_float(val: Value) -> Result<Value> {
+    match val {
+        v @ Value::Float(_) => Ok(v),
+        Value::Integer(i) => Ok(Value::Float(i as f64)),
+        Value::String(s) => s
+            .parse::<f64>()
+            .map(Value::Float)
+            .map_err(|_| ExecutorError::EvalError(format!("Cannot cast '{}' to float", s))),
+        v => Err(ExecutorError::TypeMismatch {
+            expected: "float".to_string(),
+            got: format!("{:?}", v),
+        }),
+    }
+}
+
 fn eval_cast(expr: &Expr, data_type: &crate::sql::ast::DataType, row: &Row) -> Result<Value> {
     let val = eval_expr(expr, row)?;
     if val.is_null() {
@@ -589,44 +586,9 @@ fn eval_cast(expr: &Expr, data_type: &crate::sql::ast::DataType, row: &Row) -> R
 
     use crate::sql::ast::DataType;
     match data_type {
-        DataType::Boolean => match val {
-            Value::Boolean(_) => Ok(val),
-            Value::Integer(i) => Ok(Value::Boolean(i != 0)),
-            Value::String(s) => {
-                let lower = s.to_lowercase();
-                Ok(Value::Boolean(
-                    lower == "true" || lower == "t" || lower == "1",
-                ))
-            }
-            _ => Err(ExecutorError::TypeMismatch {
-                expected: "boolean".to_string(),
-                got: format!("{:?}", val),
-            }),
-        },
-        DataType::Integer | DataType::BigInt | DataType::SmallInt => match val {
-            Value::Integer(_) => Ok(val),
-            Value::Float(f) => Ok(Value::Integer(f as i64)),
-            Value::String(s) => s
-                .parse::<i64>()
-                .map(Value::Integer)
-                .map_err(|_| ExecutorError::EvalError(format!("Cannot cast '{}' to integer", s))),
-            _ => Err(ExecutorError::TypeMismatch {
-                expected: "integer".to_string(),
-                got: format!("{:?}", val),
-            }),
-        },
-        DataType::Float | DataType::Double => match val {
-            Value::Float(_) => Ok(val),
-            Value::Integer(i) => Ok(Value::Float(i as f64)),
-            Value::String(s) => s
-                .parse::<f64>()
-                .map(Value::Float)
-                .map_err(|_| ExecutorError::EvalError(format!("Cannot cast '{}' to float", s))),
-            _ => Err(ExecutorError::TypeMismatch {
-                expected: "float".to_string(),
-                got: format!("{:?}", val),
-            }),
-        },
+        DataType::Boolean => eval_cast_to_bool(val),
+        DataType::Integer | DataType::BigInt | DataType::SmallInt => eval_cast_to_integer(val),
+        DataType::Float | DataType::Double => eval_cast_to_float(val),
         DataType::Varchar(_) | DataType::Char(_) => Ok(Value::String(val.to_string())),
         _ => Err(ExecutorError::EvalError(format!(
             "Unsupported CAST target: {:?}",

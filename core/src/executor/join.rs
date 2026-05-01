@@ -9,6 +9,22 @@ use futures::stream::{BoxStream, StreamExt};
 use hashbrown::HashMap;
 use std::sync::Arc;
 
+/// Drain a batch stream into a flat row list, capturing the schema from the first batch.
+async fn collect_stream_rows(
+    stream: &mut BoxStream<'_, Result<RecordBatch>>,
+) -> Result<(Vec<Row>, Vec<String>)> {
+    let mut rows = Vec::new();
+    let mut schema = Vec::new();
+    while let Some(batch_result) = stream.next().await {
+        let batch = batch_result?;
+        if schema.is_empty() {
+            schema = batch.schema.clone();
+        }
+        rows.extend(batch.rows);
+    }
+    Ok((rows, schema))
+}
+
 /// Nested-loop join executor.
 pub struct NestedLoopJoinExec {
     /// Left (outer) input.
@@ -49,29 +65,10 @@ impl ExecutionPlan for NestedLoopJoinExec {
         let join_type = self.join_type.clone();
         let condition = self.condition.clone();
 
+        let (left_rows, left_schema) = collect_stream_rows(&mut left_stream).await?;
+        let (right_rows, right_schema) = collect_stream_rows(&mut right_stream).await?;
+
         let stream = stream! {
-            let mut left_rows = Vec::new();
-            let mut left_schema = Vec::new();
-
-            while let Some(batch_result) = left_stream.next().await {
-                let batch = batch_result?;
-                if left_schema.is_empty() {
-                    left_schema = batch.schema.clone();
-                }
-                left_rows.extend(batch.rows);
-            }
-
-            let mut right_rows = Vec::new();
-            let mut right_schema = Vec::new();
-
-            while let Some(batch_result) = right_stream.next().await {
-                let batch = batch_result?;
-                if right_schema.is_empty() {
-                    right_schema = batch.schema.clone();
-                }
-                right_rows.extend(batch.rows);
-            }
-
             let mut output_schema = left_schema.clone();
             output_schema.extend(right_schema);
             let mut output_batch = RecordBatch::new(output_schema);
@@ -188,41 +185,24 @@ impl ExecutionPlan for HashJoinExec {
     ) -> Result<BoxStream<'static, Result<RecordBatch>>> {
         let mut left_stream = self.left.execute(ctx).await?;
         let mut right_stream = self.right.execute(ctx).await?;
-        let _join_type = self.join_type.clone();
         let left_keys = self.left_keys.clone();
         let right_keys = self.right_keys.clone();
         let residual = self.residual.clone();
 
+        let (left_rows, left_schema) = collect_stream_rows(&mut left_stream).await?;
+        let (right_rows, right_schema) = collect_stream_rows(&mut right_stream).await?;
+
         let stream = stream! {
             let mut hash_table: HashMap<String, Vec<Row>> = HashMap::new();
-            let mut left_schema = Vec::new();
 
-            while let Some(batch_result) = left_stream.next().await {
-                let batch = batch_result?;
-                if left_schema.is_empty() {
-                    left_schema = batch.schema.clone();
+            for row in left_rows {
+                let mut key_str = String::new();
+                for key_expr in &left_keys {
+                    let val = super::expressions::eval_expr(key_expr, &row)?;
+                    key_str.push_str(&format!("{:?}", val));
+                    key_str.push('|');
                 }
-
-                for row in batch.rows {
-                    let mut key_str = String::new();
-                    for key_expr in &left_keys {
-                        let val = super::expressions::eval_expr(key_expr, &row)?;
-                        key_str.push_str(&format!("{:?}", val));
-                        key_str.push('|');
-                    }
-                    hash_table.entry(key_str).or_default().push(row);
-                }
-            }
-
-            let mut right_rows = Vec::new();
-            let mut right_schema = Vec::new();
-
-            while let Some(batch_result) = right_stream.next().await {
-                let batch = batch_result?;
-                if right_schema.is_empty() {
-                    right_schema = batch.schema.clone();
-                }
-                right_rows.extend(batch.rows);
+                hash_table.entry(key_str).or_default().push(row);
             }
 
             let mut output_schema = left_schema.clone();
@@ -315,29 +295,10 @@ impl ExecutionPlan for SortMergeJoinExec {
         let left_keys = self.left_keys.clone();
         let right_keys = self.right_keys.clone();
 
+        let (left_rows, left_schema) = collect_stream_rows(&mut left_stream).await?;
+        let (right_rows, right_schema) = collect_stream_rows(&mut right_stream).await?;
+
         let stream = stream! {
-            let mut left_rows = Vec::new();
-            let mut left_schema = Vec::new();
-
-            while let Some(batch_result) = left_stream.next().await {
-                let batch = batch_result?;
-                if left_schema.is_empty() {
-                    left_schema = batch.schema.clone();
-                }
-                left_rows.extend(batch.rows);
-            }
-
-            let mut right_rows = Vec::new();
-            let mut right_schema = Vec::new();
-
-            while let Some(batch_result) = right_stream.next().await {
-                let batch = batch_result?;
-                if right_schema.is_empty() {
-                    right_schema = batch.schema.clone();
-                }
-                right_rows.extend(batch.rows);
-            }
-
             let mut output_schema = left_schema.clone();
             output_schema.extend(right_schema);
             let mut output_batch = RecordBatch::new(output_schema);
