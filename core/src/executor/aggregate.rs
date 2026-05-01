@@ -47,6 +47,17 @@ fn extract_agg_func_name(expr: &Expr) -> String {
     }
 }
 
+fn eval_agg_arg(expr: &Expr, row: &Row) -> Result<Value> {
+    if let Expr::Function { ref args, .. } = expr {
+        args.first()
+            .map(|a| super::expressions::eval_expr(a, row))
+            .transpose()
+            .map(|v| v.unwrap_or(Value::Null))
+    } else {
+        super::expressions::eval_expr(expr, row)
+    }
+}
+
 #[async_trait]
 impl ExecutionPlan for HashAggregateExec {
     async fn execute(
@@ -85,30 +96,10 @@ impl ExecutionPlan for HashAggregateExec {
 
                     for (agg_expr, acc) in aggregates.iter().zip(entry.1.iter_mut()) {
                         let func_name = extract_agg_func_name(&agg_expr.func);
-                        if func_name == "COUNT" {
-                            if matches!(agg_expr.func, Expr::Wildcard) {
-                                acc.accumulate(Value::Integer(1));
-                            } else {
-                                let val = if let Expr::Function { ref args, .. } = agg_expr.func {
-                                    args.first()
-                                        .map(|a| super::expressions::eval_expr(a, &row))
-                                        .transpose()?
-                                        .unwrap_or(Value::Null)
-                                } else {
-                                    super::expressions::eval_expr(&agg_expr.func, &row)?
-                                };
-                                acc.accumulate(val);
-                            }
+                        if func_name == "COUNT" && matches!(agg_expr.func, Expr::Wildcard) {
+                            acc.accumulate(Value::Integer(1));
                         } else {
-                            let val = if let Expr::Function { ref args, .. } = agg_expr.func {
-                                args.first()
-                                    .map(|a| super::expressions::eval_expr(a, &row))
-                                    .transpose()?
-                                    .unwrap_or(Value::Null)
-                            } else {
-                                super::expressions::eval_expr(&agg_expr.func, &row)?
-                            };
-                            acc.accumulate(val);
+                            acc.accumulate(eval_agg_arg(&agg_expr.func, &row)?);
                         }
                     }
                 }
