@@ -35,15 +35,15 @@ impl ExecutionPlan for ProjectExec {
         let stream = stream! {
             while let Some(batch_result) = input_stream.next().await {
                 let batch = batch_result?;
-                let output_schema: Vec<String> = items.iter()
-                    .map(|item| item.alias.as_ref().unwrap_or(&"col".to_string()).clone())
+                let output_schema: Vec<String> = items.iter().enumerate()
+                    .map(|(i, item)| item.alias.clone().unwrap_or_else(|| format!("col_{}", i)))
                     .collect();
                 let mut projected_batch = RecordBatch::new(output_schema.clone());
 
                 for row in batch.rows {
                     let mut projected_row = Row::new();
-                    for item in &items {
-                        let col_name = item.alias.as_ref().unwrap_or(&"col".to_string()).clone();
+                    for (i, item) in items.iter().enumerate() {
+                        let col_name = item.alias.clone().unwrap_or_else(|| format!("col_{}", i));
                         let val = super::expressions::eval_expr(&item.expr, &row)?;
                         projected_row.insert(col_name, val);
                     }
@@ -60,8 +60,9 @@ impl ExecutionPlan for ProjectExec {
     fn schema(&self) -> Vec<(String, String)> {
         self.items
             .iter()
-            .map(|item| {
-                let name = item.alias.as_ref().unwrap_or(&"col".to_string()).clone();
+            .enumerate()
+            .map(|(i, item)| {
+                let name = item.alias.clone().unwrap_or_else(|| format!("col_{}", i));
                 (name, "unknown".to_string())
             })
             .collect()

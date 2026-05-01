@@ -56,9 +56,15 @@ impl ExecutionPlan for ValuesExec {
     }
 
     fn schema(&self) -> Vec<(String, String)> {
-        self.schema
+        let max_width = self.rows.iter().map(|r| r.len()).max().unwrap_or(0);
+        let mut schema: Vec<(String, String)> = self
+            .schema
             .iter()
             .map(|name| (name.clone(), "unknown".to_string()))
-            .collect()
+            .collect();
+        for i in schema.len()..max_width {
+            schema.push((format!("col_{}", i), "unknown".to_string()));
+        }
+        schema
     }
 }

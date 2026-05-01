@@ -39,6 +39,14 @@ impl HashAggregateExec {
     }
 }
 
+fn extract_agg_func_name(expr: &Expr) -> String {
+    match expr {
+        Expr::Function { name, .. } => name.to_uppercase(),
+        Expr::Wildcard => "COUNT".to_string(),
+        _ => "COUNT".to_string(),
+    }
+}
+
 #[async_trait]
 impl ExecutionPlan for HashAggregateExec {
     async fn execute(
@@ -70,14 +78,38 @@ impl ExecutionPlan for HashAggregateExec {
                     let entry = groups.entry(group_key).or_insert_with(|| {
                         let accs: Vec<Box<dyn Accumulator>> = aggregates
                             .iter()
-                            .map(|_agg| create_accumulator("COUNT"))
+                            .map(|agg| create_accumulator(&extract_agg_func_name(&agg.func)))
                             .collect();
                         (group_vals.clone(), accs)
                     });
 
                     for (agg_expr, acc) in aggregates.iter().zip(entry.1.iter_mut()) {
-                        let val = super::expressions::eval_expr(&agg_expr.func, &row)?;
-                        acc.accumulate(val);
+                        let func_name = extract_agg_func_name(&agg_expr.func);
+                        if func_name == "COUNT" {
+                            if matches!(agg_expr.func, Expr::Wildcard) {
+                                acc.accumulate(Value::Integer(1));
+                            } else {
+                                let val = if let Expr::Function { ref args, .. } = agg_expr.func {
+                                    args.first()
+                                        .map(|a| super::expressions::eval_expr(a, &row))
+                                        .transpose()?
+                                        .unwrap_or(Value::Null)
+                                } else {
+                                    super::expressions::eval_expr(&agg_expr.func, &row)?
+                                };
+                                acc.accumulate(val);
+                            }
+                        } else {
+                            let val = if let Expr::Function { ref args, .. } = agg_expr.func {
+                                args.first()
+                                    .map(|a| super::expressions::eval_expr(a, &row))
+                                    .transpose()?
+                                    .unwrap_or(Value::Null)
+                            } else {
+                                super::expressions::eval_expr(&agg_expr.func, &row)?
+                            };
+                            acc.accumulate(val);
+                        }
                     }
                 }
             }

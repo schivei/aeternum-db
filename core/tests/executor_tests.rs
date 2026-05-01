@@ -3739,9 +3739,11 @@ async fn test_check_referential_integrity_table_not_found() {
 async fn test_apply_referential_action_set_default_ok() {
     let provider = Arc::new(InMemoryTableProvider::new());
     provider.add_table("sd_t", vec![("fk".to_string(), "integer".to_string())]);
+    let mut acl = ACL::new();
+    acl.grant("u", "sd_t", "UPDATE");
     let ctx = ExecutionContext::new(
         provider,
-        Arc::new(Mutex::new(ACL::new())),
+        Arc::new(Mutex::new(acl)),
         Arc::new(AtomicIdGenerator::default()),
         "u".to_string(),
     );

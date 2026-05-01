@@ -89,7 +89,7 @@ pub async fn check_referential_integrity(
 
     for row in rows {
         if let Some(val) = row.get(parent_column) {
-            if format!("{:?}", val) == format!("{:?}", child_value) {
+            if val == child_value {
                 return Ok(true);
             }
         }
@@ -111,6 +111,12 @@ pub async fn apply_referential_action(
             Ok(())
         }
         "SET NULL" => {
+            let mut updates = HashMap::new();
+            updates.insert(column.to_string(), Value::Null);
+            execute_update(ctx, table, updates).await?;
+            Ok(())
+        }
+        "SET DEFAULT" => {
             let mut updates = HashMap::new();
             updates.insert(column.to_string(), Value::Null);
             execute_update(ctx, table, updates).await?;

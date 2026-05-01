@@ -60,12 +60,22 @@ impl ExecutionPlan for SeqScanExec {
                 if let Some(ref f) = filter {
                     let result = super::expressions::eval_expr(f, &row)?;
                     if let Some(true) = result.as_bool() {
-                        batch.add_row(row);
+                        let mut projected_row = super::record_batch::Row::new();
+                        for col in &col_names {
+                            let val = row.get(col).cloned().unwrap_or(super::record_batch::Value::Null);
+                            projected_row.insert(col.clone(), val);
+                        }
+                        batch.add_row(projected_row);
                     } else if result.is_null() {
                         continue;
                     }
                 } else {
-                    batch.add_row(row);
+                    let mut projected_row = super::record_batch::Row::new();
+                    for col in &col_names {
+                        let val = row.get(col).cloned().unwrap_or(super::record_batch::Value::Null);
+                        projected_row.insert(col.clone(), val);
+                    }
+                    batch.add_row(projected_row);
                 }
             }
 
@@ -76,7 +86,14 @@ impl ExecutionPlan for SeqScanExec {
     }
 
     fn schema(&self) -> Vec<(String, String)> {
-        vec![]
+        self.columns
+            .as_ref()
+            .map(|cols| {
+                cols.iter()
+                    .map(|c| (c.clone(), "unknown".to_string()))
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 }
 
@@ -144,10 +161,20 @@ impl ExecutionPlan for IndexScanExec {
                     if let Some(ref f) = filter {
                         let result = super::expressions::eval_expr(f, &row)?;
                         if let Some(true) = result.as_bool() {
-                            batch.add_row(row);
+                            let mut projected_row = super::record_batch::Row::new();
+                            for col in &col_names {
+                                let val = row.get(col).cloned().unwrap_or(super::record_batch::Value::Null);
+                                projected_row.insert(col.clone(), val);
+                            }
+                            batch.add_row(projected_row);
                         }
                     } else {
-                        batch.add_row(row);
+                        let mut projected_row = super::record_batch::Row::new();
+                        for col in &col_names {
+                            let val = row.get(col).cloned().unwrap_or(super::record_batch::Value::Null);
+                            projected_row.insert(col.clone(), val);
+                        }
+                        batch.add_row(projected_row);
                     }
                 }
             }
@@ -159,6 +186,13 @@ impl ExecutionPlan for IndexScanExec {
     }
 
     fn schema(&self) -> Vec<(String, String)> {
-        vec![]
+        self.columns
+            .as_ref()
+            .map(|cols| {
+                cols.iter()
+                    .map(|c| (c.clone(), "unknown".to_string()))
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 }

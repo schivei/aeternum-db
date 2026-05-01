@@ -70,7 +70,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
 
         let stream = stream! {
             let mut output_schema = left_schema.clone();
-            output_schema.extend(right_schema);
+            output_schema.extend(right_schema.clone());
             let mut output_batch = RecordBatch::new(output_schema);
 
             for left_row in &left_rows {
@@ -80,10 +80,8 @@ impl ExecutionPlan for NestedLoopJoinExec {
                     joined_row.merge(right_row);
 
                     let passes = if let Some(ref cond) = condition {
-                        match super::expressions::eval_expr(cond, &joined_row) {
-                            Ok(val) => val.as_bool().unwrap_or(false),
-                            Err(_) => false,
-                        }
+                        let val = super::expressions::eval_expr(cond, &joined_row)?;
+                        val.as_bool().unwrap_or(false)
                     } else {
                         true
                     };
@@ -95,7 +93,11 @@ impl ExecutionPlan for NestedLoopJoinExec {
                 }
 
                 if !matched && matches!(join_type, JoinType::Left | JoinType::Full) {
-                    output_batch.add_row(left_row.clone());
+                    let mut out_row = left_row.clone();
+                    for col in &right_schema {
+                        out_row.insert(col.clone(), super::record_batch::Value::Null);
+                    }
+                    output_batch.add_row(out_row);
                 }
             }
 
@@ -107,10 +109,8 @@ impl ExecutionPlan for NestedLoopJoinExec {
                         joined_row.merge(right_row);
 
                         let passes = if let Some(ref cond) = condition {
-                            match super::expressions::eval_expr(cond, &joined_row) {
-                                Ok(val) => val.as_bool().unwrap_or(false),
-                                Err(_) => false,
-                            }
+                            let val = super::expressions::eval_expr(cond, &joined_row)?;
+                            val.as_bool().unwrap_or(false)
                         } else {
                             true
                         };
@@ -122,7 +122,12 @@ impl ExecutionPlan for NestedLoopJoinExec {
                     }
 
                     if !matched {
-                        output_batch.add_row(right_row.clone());
+                        let mut out_row = Row::new();
+                        for col in &left_schema {
+                            out_row.insert(col.clone(), super::record_batch::Value::Null);
+                        }
+                        out_row.merge(right_row);
+                        output_batch.add_row(out_row);
                     }
                 }
             }
@@ -223,10 +228,8 @@ impl ExecutionPlan for HashJoinExec {
                         joined_row.merge(right_row);
 
                         let passes = if let Some(ref res) = residual {
-                            match super::expressions::eval_expr(res, &joined_row) {
-                                Ok(val) => val.as_bool().unwrap_or(false),
-                                Err(_) => false,
-                            }
+                            let val = super::expressions::eval_expr(res, &joined_row)?;
+                            val.as_bool().unwrap_or(false)
                         } else {
                             true
                         };
@@ -309,7 +312,7 @@ impl ExecutionPlan for SortMergeJoinExec {
                     for (left_key, right_key) in left_keys.iter().zip(right_keys.iter()) {
                         let left_val = super::expressions::eval_expr(left_key, left_row)?;
                         let right_val = super::expressions::eval_expr(right_key, right_row)?;
-                        if format!("{:?}", left_val) != format!("{:?}", right_val) {
+                        if left_val != right_val {
                             match_all = false;
                             break;
                         }

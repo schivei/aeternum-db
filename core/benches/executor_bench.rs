@@ -9,9 +9,9 @@ use futures::stream::StreamExt;
 use std::sync::{Arc, Mutex};
 
 fn bench_values_executor(c: &mut Criterion) {
+    let rt = tokio::runtime::Runtime::new().unwrap();
     c.bench_function("values_executor_100_rows", |b| {
         b.iter(|| {
-            let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(async {
                 let ctx = ExecutionContext::default_test();
 
@@ -45,9 +45,9 @@ fn bench_values_executor(c: &mut Criterion) {
 }
 
 fn bench_seq_scan(c: &mut Criterion) {
+    let rt = tokio::runtime::Runtime::new().unwrap();
     c.bench_function("seq_scan_1000_rows", |b| {
         b.iter(|| {
-            let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(async {
                 let provider = Arc::new(InMemoryTableProvider::new());
                 provider.add_table(

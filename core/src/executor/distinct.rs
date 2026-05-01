@@ -37,7 +37,10 @@ impl ExecutionPlan for DistinctExec {
                 let mut distinct_batch = RecordBatch::new(batch.schema.clone());
 
                 for row in batch.rows {
-                    let key = format!("{:?}", row);
+                    let mut pairs: Vec<(&String, &super::record_batch::Value)> =
+                        row.columns.iter().collect();
+                    pairs.sort_by_key(|(k, _)| k.as_str());
+                    let key = format!("{:?}", pairs);
                     if seen.insert(key) {
                         distinct_batch.add_row(row);
                     }
