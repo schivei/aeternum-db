@@ -56,7 +56,7 @@ fn bench_seq_scan(c: &mut Criterion) {
                 );
 
                 let rows: Vec<Row> = (0..1000)
-                    .map(|i| Row::from_iter(vec![("id".to_string(), Value::Integer(i))]))
+                    .map(|i| Row::from_pairs(vec![("id".to_string(), Value::Integer(i))]))
                     .collect();
                 provider.add_rows("test_table", rows);
 

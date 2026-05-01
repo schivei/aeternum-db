@@ -31,9 +31,12 @@ pub trait TableProvider: Send + Sync {
     fn table_exists(&self, table: &str) -> bool;
 }
 
+/// Type alias for the in-memory table storage map.
+type TableStorage = Arc<Mutex<HashMap<String, (Vec<(String, String)>, Vec<Row>)>>>;
+
 /// Simple in-memory table provider for testing.
 pub struct InMemoryTableProvider {
-    tables: Arc<Mutex<HashMap<String, (Vec<(String, String)>, Vec<Row>)>>>,
+    tables: TableStorage,
 }
 
 impl InMemoryTableProvider {
@@ -147,7 +150,7 @@ impl ACL {
         let key = (user.to_string(), object.to_string());
         self.grants
             .entry(key)
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(privilege.to_string());
     }
 

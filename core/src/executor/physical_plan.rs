@@ -157,7 +157,7 @@ pub fn build_executor(plan: &PhysicalPlan) -> Result<Arc<dyn ExecutionPlan>> {
         }
 
         PhysicalPlan::Values { rows, .. } => {
-            let schema: Vec<String> = (0..rows.get(0).map(|r| r.len()).unwrap_or(0))
+            let schema: Vec<String> = (0..rows.first().map(|r| r.len()).unwrap_or(0))
                 .map(|i| format!("col_{}", i))
                 .collect();
             Ok(Arc::new(ValuesExec::new(rows.clone(), schema)))

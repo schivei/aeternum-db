@@ -46,9 +46,21 @@ mod sort;
 mod unnest;
 mod values;
 
-pub use context::{ExecutionContext, ObjIdGenerator, TableProvider, ACL};
-pub use physical_plan::build_executor;
+pub use context::{
+    AtomicIdGenerator, ExecutionContext, InMemoryTableProvider, ObjIdGenerator, TableProvider, ACL,
+};
+pub use distinct::DistinctExec;
+pub use dml::{
+    apply_referential_action, check_referential_integrity, execute_delete, execute_grant,
+    execute_insert, execute_revoke, execute_update,
+};
+pub use filter::FilterExec;
+pub use join::{HashJoinExec, NestedLoopJoinExec, SortMergeJoinExec};
+pub use limit::LimitExec;
+pub use physical_plan::{build_distinct_executor, build_executor, build_sort_merge_join};
 pub use record_batch::{RecordBatch, Row, Value};
+pub use scan::{IndexScanExec, SeqScanExec};
+pub use sort::SortExec;
 
 use async_trait::async_trait;
 use futures::stream::BoxStream;

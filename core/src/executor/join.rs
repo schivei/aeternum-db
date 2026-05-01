@@ -188,7 +188,7 @@ impl ExecutionPlan for HashJoinExec {
     ) -> Result<BoxStream<'static, Result<RecordBatch>>> {
         let mut left_stream = self.left.execute(ctx).await?;
         let mut right_stream = self.right.execute(ctx).await?;
-        let join_type = self.join_type.clone();
+        let _join_type = self.join_type.clone();
         let left_keys = self.left_keys.clone();
         let right_keys = self.right_keys.clone();
         let residual = self.residual.clone();
@@ -210,7 +210,7 @@ impl ExecutionPlan for HashJoinExec {
                         key_str.push_str(&format!("{:?}", val));
                         key_str.push('|');
                     }
-                    hash_table.entry(key_str).or_insert_with(Vec::new).push(row);
+                    hash_table.entry(key_str).or_default().push(row);
                 }
             }
 

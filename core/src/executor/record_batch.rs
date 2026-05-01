@@ -121,7 +121,7 @@ impl Row {
     }
 
     /// Create a row from a column name-value pairs iterator.
-    pub fn from_iter<I>(iter: I) -> Self
+    pub fn from_pairs<I>(iter: I) -> Self
     where
         I: IntoIterator<Item = (String, Value)>,
     {

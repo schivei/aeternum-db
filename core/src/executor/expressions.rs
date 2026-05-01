@@ -335,7 +335,7 @@ fn eval_unary_op(op: &UnaryOperator, expr: &Expr, row: &Row) -> Result<Value> {
                 got: format!("{:?}", val),
             }),
         },
-        Plus => Ok(val),
+        _op => Ok(val),
     }
 }
 
@@ -558,10 +558,11 @@ fn eval_case(
         let op_val = eval_expr(op, row)?;
         for (cond, result) in conditions {
             let cond_val = eval_expr(cond, row)?;
-            if !op_val.is_null() && !cond_val.is_null() {
-                if compare_values(&op_val, &cond_val)? == std::cmp::Ordering::Equal {
-                    return eval_expr(result, row);
-                }
+            if !op_val.is_null()
+                && !cond_val.is_null()
+                && compare_values(&op_val, &cond_val)? == std::cmp::Ordering::Equal
+            {
+                return eval_expr(result, row);
             }
         }
     } else {
@@ -669,10 +670,8 @@ fn eval_in_list(expr: &Expr, list: &[Expr], negated: bool, row: &Row) -> Result<
 
     for item_expr in list {
         let item_val = eval_expr(item_expr, row)?;
-        if !item_val.is_null() {
-            if compare_values(&val, &item_val)? == std::cmp::Ordering::Equal {
-                return Ok(Value::Boolean(!negated));
-            }
+        if !item_val.is_null() && compare_values(&val, &item_val)? == std::cmp::Ordering::Equal {
+            return Ok(Value::Boolean(!negated));
         }
     }
 

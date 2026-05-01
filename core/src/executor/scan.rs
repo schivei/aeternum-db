@@ -46,7 +46,6 @@ impl ExecutionPlan for SeqScanExec {
         let schema = ctx.table_provider.schema(&self.table)?;
         let filter = self.filter.clone();
         let columns = self.columns.clone();
-        let table_name = self.table.clone();
 
         let stream = stream! {
             let col_names: Vec<String> = if let Some(cols) = columns {
