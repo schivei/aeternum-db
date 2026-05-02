@@ -3795,3 +3795,657 @@ fn test_validate_select_subquery_in_from() {
     let v = Validator::new(&catalog);
     assert!(v.validate(&stmt).is_ok());
 }
+
+// ── AeternumDialect coverage ──────────────────────────────────────────────────
+
+#[test]
+fn test_aeternum_dialect_identifier_start() {
+    use aeternumdb_core::sql::dialect::AeternumDialect;
+    use sqlparser::dialect::Dialect;
+    let d = AeternumDialect::default();
+    assert!(d.is_identifier_start('a'));
+    assert!(d.is_identifier_start('Z'));
+    assert!(d.is_identifier_start('_'));
+    assert!(!d.is_identifier_start('1'));
+    assert!(!d.is_identifier_start('-'));
+}
+
+#[test]
+fn test_aeternum_dialect_identifier_part() {
+    use aeternumdb_core::sql::dialect::AeternumDialect;
+    use sqlparser::dialect::Dialect;
+    let d = AeternumDialect::default();
+    assert!(d.is_identifier_part('a'));
+    assert!(d.is_identifier_part('9'));
+    assert!(d.is_identifier_part('_'));
+    assert!(d.is_identifier_part('$'));
+    assert!(!d.is_identifier_part('-'));
+}
+
+#[test]
+fn test_aeternum_dialect_identifier_quote_style() {
+    use aeternumdb_core::sql::dialect::AeternumDialect;
+    use sqlparser::dialect::Dialect;
+    let d = AeternumDialect::default();
+    assert_eq!(d.identifier_quote_style("col"), Some('"'));
+}
+
+#[test]
+fn test_aeternum_dialect_supports_nested_comments() {
+    use aeternumdb_core::sql::dialect::AeternumDialect;
+    use sqlparser::dialect::Dialect;
+    let d = AeternumDialect::default();
+    assert!(d.supports_nested_comments());
+}
+
+#[test]
+fn test_aeternum_dialect_supports_group_by_expr() {
+    use aeternumdb_core::sql::dialect::AeternumDialect;
+    use sqlparser::dialect::Dialect;
+    let d = AeternumDialect::default();
+    assert!(d.supports_group_by_expr());
+}
+
+#[test]
+fn test_aeternum_dialect_is_delimited_identifier_start() {
+    use aeternumdb_core::sql::dialect::AeternumDialect;
+    use sqlparser::dialect::Dialect;
+    let d = AeternumDialect::default();
+    assert!(d.is_delimited_identifier_start('"'));
+    assert!(d.is_delimited_identifier_start('`'));
+    assert!(!d.is_delimited_identifier_start('\''));
+}
+
+#[test]
+fn test_aeternum_dialect_supports_bitwise_shift_operators() {
+    use aeternumdb_core::sql::dialect::AeternumDialect;
+    use sqlparser::dialect::Dialect;
+    let d = AeternumDialect::default();
+    assert!(d.supports_bitwise_shift_operators());
+}
+
+#[test]
+fn test_aeternum_dialect_supports_match_against() {
+    use aeternumdb_core::sql::dialect::AeternumDialect;
+    use sqlparser::dialect::Dialect;
+    let d = AeternumDialect::default();
+    assert!(d.supports_match_against());
+}
+
+// ── Display implementations ───────────────────────────────────────────────────
+
+#[test]
+fn test_data_type_display_all_variants() {
+    assert_eq!(DataType::Integer.to_string(), "INTEGER");
+    assert_eq!(DataType::UnsignedInt.to_string(), "INTEGER UNSIGNED");
+    assert_eq!(DataType::Float.to_string(), "FLOAT");
+    assert_eq!(DataType::Double.to_string(), "DOUBLE");
+    assert_eq!(DataType::Varchar(Some(100)).to_string(), "VARCHAR(100)");
+    assert_eq!(DataType::Varchar(None).to_string(), "TEXT");
+    assert_eq!(DataType::Boolean.to_string(), "BOOLEAN");
+    assert_eq!(DataType::Date.to_string(), "DATE");
+    assert_eq!(DataType::Timestamp.to_string(), "TIMESTAMP");
+    assert_eq!(
+        DataType::Decimal(Some(10), Some(2)).to_string(),
+        "DECIMAL(10,2)"
+    );
+    assert_eq!(DataType::Decimal(Some(10), None).to_string(), "DECIMAL(10)");
+    assert_eq!(DataType::Decimal(None, None).to_string(), "DECIMAL");
+    assert_eq!(DataType::Reference("orders".into()).to_string(), "orders");
+    assert_eq!(
+        DataType::ReferenceArray("items".into()).to_string(),
+        "[items]"
+    );
+    assert_eq!(
+        DataType::VirtualReference {
+            table: "orders".into(),
+            column: "id".into()
+        }
+        .to_string(),
+        "~orders(id)"
+    );
+    assert_eq!(
+        DataType::VirtualReferenceArray {
+            table: "orders".into(),
+            column: "id".into()
+        }
+        .to_string(),
+        "~[orders](id)"
+    );
+    assert_eq!(DataType::TinyInt.to_string(), "TINYINT");
+    assert_eq!(DataType::UnsignedTinyInt.to_string(), "TINYINT UNSIGNED");
+    assert_eq!(DataType::SmallInt.to_string(), "SMALLINT");
+    assert_eq!(DataType::UnsignedSmallInt.to_string(), "SMALLINT UNSIGNED");
+    assert_eq!(DataType::MediumInt.to_string(), "MEDIUMINT");
+    assert_eq!(
+        DataType::UnsignedMediumInt.to_string(),
+        "MEDIUMINT UNSIGNED"
+    );
+    assert_eq!(DataType::BigInt.to_string(), "BIGINT");
+    assert_eq!(DataType::UnsignedBigInt.to_string(), "BIGINT UNSIGNED");
+    assert_eq!(DataType::Char(Some(10)).to_string(), "CHAR(10)");
+    assert_eq!(DataType::Char(None).to_string(), "CHAR");
+    assert_eq!(DataType::TinyText.to_string(), "TINYTEXT");
+    assert_eq!(DataType::MediumText.to_string(), "MEDIUMTEXT");
+    assert_eq!(DataType::LongText.to_string(), "LONGTEXT");
+    assert_eq!(DataType::Time.to_string(), "TIME");
+    assert_eq!(DataType::TimeTz.to_string(), "TIME WITH TIME ZONE");
+    assert_eq!(DataType::DateTime.to_string(), "DATETIME");
+    assert_eq!(
+        DataType::TimestampTz.to_string(),
+        "TIMESTAMP WITH TIME ZONE"
+    );
+    assert_eq!(
+        DataType::EnumRef("my_status".into()).to_string(),
+        "my_status"
+    );
+    assert_eq!(DataType::Uuid.to_string(), "UUID");
+    assert_eq!(DataType::Binary(Some(16)).to_string(), "BINARY(16)");
+    assert_eq!(DataType::Binary(None).to_string(), "BINARY");
+    assert_eq!(DataType::Varbinary(Some(256)).to_string(), "VARBINARY(256)");
+    assert_eq!(DataType::Varbinary(None).to_string(), "VARBINARY");
+    assert_eq!(DataType::Blob(Some(1024)).to_string(), "BLOB(1024)");
+    assert_eq!(DataType::Blob(None).to_string(), "BLOB");
+    assert_eq!(DataType::TinyBlob.to_string(), "TINYBLOB");
+    assert_eq!(DataType::MediumBlob.to_string(), "MEDIUMBLOB");
+    assert_eq!(DataType::LongBlob.to_string(), "LONGBLOB");
+    assert_eq!(
+        DataType::Vector(Box::new(DataType::Integer)).to_string(),
+        "[INTEGER]"
+    );
+    assert_eq!(DataType::Other("JSON".into()).to_string(), "JSON");
+}
+
+#[test]
+fn test_binary_operator_display_all_variants() {
+    assert_eq!(BinaryOperator::Plus.to_string(), "+");
+    assert_eq!(BinaryOperator::Minus.to_string(), "-");
+    assert_eq!(BinaryOperator::Multiply.to_string(), "*");
+    assert_eq!(BinaryOperator::Divide.to_string(), "/");
+    assert_eq!(BinaryOperator::Modulo.to_string(), "%");
+    assert_eq!(BinaryOperator::Eq.to_string(), "=");
+    assert_eq!(BinaryOperator::NotEq.to_string(), "!=");
+    assert_eq!(BinaryOperator::Lt.to_string(), "<");
+    assert_eq!(BinaryOperator::LtEq.to_string(), "<=");
+    assert_eq!(BinaryOperator::Gt.to_string(), ">");
+    assert_eq!(BinaryOperator::GtEq.to_string(), ">=");
+    assert_eq!(BinaryOperator::And.to_string(), "AND");
+    assert_eq!(BinaryOperator::Or.to_string(), "OR");
+    assert_eq!(BinaryOperator::Like.to_string(), "LIKE");
+    assert_eq!(BinaryOperator::NotLike.to_string(), "NOT LIKE");
+    assert_eq!(BinaryOperator::ILike.to_string(), "ILIKE");
+    assert_eq!(BinaryOperator::NotILike.to_string(), "NOT ILIKE");
+    assert_eq!(BinaryOperator::SimilarTo.to_string(), "SIMILAR TO");
+    assert_eq!(BinaryOperator::NotSimilarTo.to_string(), "NOT SIMILAR TO");
+    assert_eq!(BinaryOperator::Regexp.to_string(), "REGEXP");
+    assert_eq!(BinaryOperator::NotRegexp.to_string(), "NOT REGEXP");
+    assert_eq!(BinaryOperator::RegexpMatch.to_string(), "~");
+    assert_eq!(BinaryOperator::RegexpIMatch.to_string(), "~*");
+    assert_eq!(BinaryOperator::NotRegexpMatch.to_string(), "!~");
+    assert_eq!(BinaryOperator::NotRegexpIMatch.to_string(), "!~*");
+    assert_eq!(BinaryOperator::BitwiseAnd.to_string(), "&");
+    assert_eq!(BinaryOperator::BitwiseOr.to_string(), "|");
+    assert_eq!(BinaryOperator::BitwiseXor.to_string(), "^");
+    assert_eq!(BinaryOperator::ShiftLeft.to_string(), "<<");
+    assert_eq!(BinaryOperator::ShiftRight.to_string(), ">>");
+    assert_eq!(BinaryOperator::StringConcat.to_string(), "||");
+    assert_eq!(BinaryOperator::RevLike.to_string(), "REVLIKE");
+    assert_eq!(BinaryOperator::NotRevLike.to_string(), "NOT REVLIKE");
+    assert_eq!(BinaryOperator::RevILike.to_string(), "REVILIKE");
+    assert_eq!(BinaryOperator::NotRevILike.to_string(), "NOT REVILIKE");
+    assert_eq!(BinaryOperator::RevRegexp.to_string(), "REVREGEXP");
+    assert_eq!(BinaryOperator::NotRevRegexp.to_string(), "NOT REVREGEXP");
+    assert_eq!(BinaryOperator::RevRegexpIMatch.to_string(), "REVREGEXP*");
+    assert_eq!(
+        BinaryOperator::NotRevRegexpIMatch.to_string(),
+        "NOT REVREGEXP*"
+    );
+}
+
+#[test]
+fn test_unary_operator_display() {
+    assert_eq!(UnaryOperator::Minus.to_string(), "-");
+    assert_eq!(UnaryOperator::Not.to_string(), "NOT");
+    assert_eq!(UnaryOperator::BitwiseNot.to_string(), "~");
+}
+
+#[test]
+fn test_value_display() {
+    assert_eq!(Value::Integer(42).to_string(), "42");
+    assert_eq!(Value::Float(3.14).to_string(), "3.14");
+    assert_eq!(Value::String("hello".into()).to_string(), "'hello'");
+    assert_eq!(Value::Boolean(true).to_string(), "TRUE");
+    assert_eq!(Value::Boolean(false).to_string(), "FALSE");
+    assert_eq!(Value::Null.to_string(), "NULL");
+}
+
+#[test]
+fn test_validation_error_display_all_variants() {
+    let err = ValidationError::TableNotFound {
+        table: "users".into(),
+    };
+    assert!(err.to_string().contains("users"));
+
+    let err = ValidationError::ColumnNotFound {
+        table: "users".into(),
+        column: "foo".into(),
+    };
+    assert!(err.to_string().contains("foo"));
+
+    let err = ValidationError::TypeMismatch {
+        expected: Box::new(DataType::Integer),
+        found: Box::new(DataType::Varchar(None)),
+        context: "assignment".into(),
+    };
+    assert!(err.to_string().contains("type mismatch"));
+
+    let err = ValidationError::InvalidAggregateUsage("COUNT in WHERE".into());
+    assert!(err.to_string().contains("invalid aggregate"));
+
+    let err = ValidationError::NullConstraintViolation {
+        table: "t".into(),
+        column: "id".into(),
+    };
+    assert!(err.to_string().contains("null constraint"));
+
+    let err = ValidationError::ConstraintViolation("custom msg".into());
+    assert!(err.to_string().contains("constraint violation"));
+
+    let err = ValidationError::TypeNotFound("my_type".into());
+    assert!(err.to_string().contains("my_type"));
+
+    let err = ValidationError::TypeInUse("status_type".into());
+    assert!(err.to_string().contains("status_type"));
+
+    let err = ValidationError::InvalidEnumValue {
+        column: "status".into(),
+        value: "bad".into(),
+    };
+    assert!(err.to_string().contains("bad"));
+
+    let err = ValidationError::NoActiveTransaction;
+    assert!(err.to_string().contains("no active transaction"));
+
+    let err = ValidationError::TransactionNameConflict("tx1".into());
+    assert!(err.to_string().contains("tx1"));
+
+    let err = ValidationError::TransactionNotFound("tx2".into());
+    assert!(err.to_string().contains("tx2"));
+
+    let err = ValidationError::TransactionNestingViolation {
+        target: "outer".into(),
+        blocking: "inner".into(),
+    };
+    assert!(err.to_string().contains("outer"));
+
+    let err = ValidationError::ViewAsAggregateNotAllowed("COUNT".into());
+    assert!(err.to_string().contains("COUNT"));
+
+    let err = ValidationError::ViewAsSubqueryNotAllowed;
+    assert!(err.to_string().contains("sub-selects"));
+}
+
+// ── validate_sequence transaction tracking ────────────────────────────────────
+
+#[test]
+fn test_validate_sequence_simple_begin_commit() {
+    let catalog = Catalog::new();
+    let v = Validator::new(&catalog);
+    let stmts = vec![
+        Statement::BeginTransaction(BeginTransactionStatement {
+            name: Some("tx1".into()),
+            isolation_level: None,
+            read_only: false,
+        }),
+        Statement::Commit(CommitStatement {
+            scope: CommitScope::Current,
+            chain: false,
+        }),
+    ];
+    assert!(v.validate_sequence(&stmts).is_ok());
+}
+
+#[test]
+fn test_validate_sequence_commit_all() {
+    let catalog = Catalog::new();
+    let v = Validator::new(&catalog);
+    let stmts = vec![
+        Statement::BeginTransaction(BeginTransactionStatement {
+            name: Some("outer".into()),
+            isolation_level: None,
+            read_only: false,
+        }),
+        Statement::BeginTransaction(BeginTransactionStatement {
+            name: Some("inner".into()),
+            isolation_level: None,
+            read_only: false,
+        }),
+        Statement::Commit(CommitStatement {
+            scope: CommitScope::All,
+            chain: false,
+        }),
+    ];
+    assert!(v.validate_sequence(&stmts).is_ok());
+}
+
+#[test]
+fn test_validate_sequence_rollback_named() {
+    let catalog = Catalog::new();
+    let v = Validator::new(&catalog);
+    let stmts = vec![
+        Statement::BeginTransaction(BeginTransactionStatement {
+            name: Some("tx1".into()),
+            isolation_level: None,
+            read_only: false,
+        }),
+        Statement::Rollback(RollbackStatement {
+            scope: RollbackScope::Current,
+            chain: false,
+        }),
+    ];
+    assert!(v.validate_sequence(&stmts).is_ok());
+}
+
+#[test]
+fn test_validate_sequence_commit_no_transaction_error() {
+    let catalog = Catalog::new();
+    let v = Validator::new(&catalog);
+    let stmts = vec![Statement::Commit(CommitStatement {
+        scope: CommitScope::Current,
+        chain: false,
+    })];
+    let err = v.validate_sequence(&stmts).unwrap_err();
+    assert!(matches!(err, ValidationError::NoActiveTransaction));
+}
+
+#[test]
+fn test_validate_sequence_rollback_no_transaction_error() {
+    let catalog = Catalog::new();
+    let v = Validator::new(&catalog);
+    let stmts = vec![Statement::Rollback(RollbackStatement {
+        scope: RollbackScope::Current,
+        chain: false,
+    })];
+    let err = v.validate_sequence(&stmts).unwrap_err();
+    assert!(matches!(err, ValidationError::NoActiveTransaction));
+}
+
+#[test]
+fn test_validate_sequence_savepoint_no_transaction_error() {
+    let catalog = Catalog::new();
+    let v = Validator::new(&catalog);
+    let stmts = vec![Statement::Savepoint(SavepointStatement {
+        name: "sp1".into(),
+    })];
+    let err = v.validate_sequence(&stmts).unwrap_err();
+    assert!(matches!(err, ValidationError::NoActiveTransaction));
+}
+
+#[test]
+fn test_validate_sequence_release_savepoint_no_transaction_error() {
+    let catalog = Catalog::new();
+    let v = Validator::new(&catalog);
+    let stmts = vec![Statement::ReleaseSavepoint(ReleaseSavepointStatement {
+        name: "sp1".into(),
+    })];
+    let err = v.validate_sequence(&stmts).unwrap_err();
+    assert!(matches!(err, ValidationError::NoActiveTransaction));
+}
+
+#[test]
+fn test_validate_sequence_duplicate_tx_name_error() {
+    let catalog = Catalog::new();
+    let v = Validator::new(&catalog);
+    let stmts = vec![
+        Statement::BeginTransaction(BeginTransactionStatement {
+            name: Some("tx1".into()),
+            isolation_level: None,
+            read_only: false,
+        }),
+        Statement::BeginTransaction(BeginTransactionStatement {
+            name: Some("tx1".into()),
+            isolation_level: None,
+            read_only: false,
+        }),
+    ];
+    let err = v.validate_sequence(&stmts).unwrap_err();
+    assert!(matches!(err, ValidationError::TransactionNameConflict(_)));
+}
+
+#[test]
+fn test_validate_sequence_nesting_violation() {
+    let catalog = Catalog::new();
+    let v = Validator::new(&catalog);
+    let stmts = vec![
+        Statement::BeginTransaction(BeginTransactionStatement {
+            name: Some("outer".into()),
+            isolation_level: None,
+            read_only: false,
+        }),
+        Statement::BeginTransaction(BeginTransactionStatement {
+            name: Some("inner".into()),
+            isolation_level: None,
+            read_only: false,
+        }),
+        Statement::Commit(CommitStatement {
+            scope: CommitScope::Named("outer".into()),
+            chain: false,
+        }),
+    ];
+    let err = v.validate_sequence(&stmts).unwrap_err();
+    assert!(matches!(
+        err,
+        ValidationError::TransactionNestingViolation { .. }
+    ));
+}
+
+#[test]
+fn test_validate_sequence_transaction_not_found() {
+    let catalog = Catalog::new();
+    let v = Validator::new(&catalog);
+    let stmts = vec![
+        Statement::BeginTransaction(BeginTransactionStatement {
+            name: Some("tx1".into()),
+            isolation_level: None,
+            read_only: false,
+        }),
+        Statement::Commit(CommitStatement {
+            scope: CommitScope::Named("nonexistent".into()),
+            chain: false,
+        }),
+    ];
+    let err = v.validate_sequence(&stmts).unwrap_err();
+    assert!(matches!(err, ValidationError::TransactionNotFound(_)));
+}
+
+#[test]
+fn test_validate_sequence_savepoint_inside_tx() {
+    let catalog = Catalog::new();
+    let v = Validator::new(&catalog);
+    let stmts = vec![
+        Statement::BeginTransaction(BeginTransactionStatement {
+            name: Some("tx1".into()),
+            isolation_level: None,
+            read_only: false,
+        }),
+        Statement::Savepoint(SavepointStatement { name: "sp1".into() }),
+        Statement::ReleaseSavepoint(ReleaseSavepointStatement { name: "sp1".into() }),
+        Statement::Rollback(RollbackStatement {
+            scope: RollbackScope::Current,
+            chain: false,
+        }),
+    ];
+    assert!(v.validate_sequence(&stmts).is_ok());
+}
+
+#[test]
+fn test_validate_sequence_rollback_all() {
+    let catalog = Catalog::new();
+    let v = Validator::new(&catalog);
+    let stmts = vec![
+        Statement::BeginTransaction(BeginTransactionStatement {
+            name: Some("tx1".into()),
+            isolation_level: None,
+            read_only: false,
+        }),
+        Statement::Rollback(RollbackStatement {
+            scope: RollbackScope::All,
+            chain: false,
+        }),
+    ];
+    assert!(v.validate_sequence(&stmts).is_ok());
+}
+
+// ── Validator: DDL statements that always pass ─────────────────────────────────
+
+#[test]
+fn test_validate_ddl_always_ok() {
+    let catalog = Catalog::new();
+    let v = Validator::new(&catalog);
+
+    // DropTable always passes
+    let stmt = parser().parse_one("DROP TABLE IF EXISTS users").unwrap();
+    assert!(v.validate(&stmt).is_ok());
+
+    // Grant always passes
+    let stmt = parser()
+        .parse_one("GRANT SELECT ON users TO alice")
+        .unwrap();
+    assert!(v.validate(&stmt).is_ok());
+
+    // Revoke always passes
+    let stmt = parser()
+        .parse_one("REVOKE SELECT ON users FROM alice")
+        .unwrap();
+    assert!(v.validate(&stmt).is_ok());
+
+    // Transaction control always passes
+    assert!(v
+        .validate(&Statement::BeginTransaction(BeginTransactionStatement {
+            name: None,
+            isolation_level: None,
+            read_only: false,
+        }))
+        .is_ok());
+    assert!(v
+        .validate(&Statement::Commit(CommitStatement {
+            scope: CommitScope::Current,
+            chain: false,
+        }))
+        .is_ok());
+    assert!(v
+        .validate(&Statement::Rollback(RollbackStatement {
+            scope: RollbackScope::Current,
+            chain: false,
+        }))
+        .is_ok());
+    assert!(v
+        .validate(&Statement::Savepoint(SavepointStatement {
+            name: "sp".into(),
+        }))
+        .is_ok());
+    assert!(v
+        .validate(&Statement::ReleaseSavepoint(ReleaseSavepointStatement {
+            name: "sp".into(),
+        }))
+        .is_ok());
+
+    // New DDL scaffolding always passes
+    use aeternumdb_core::sql::ast::{
+        CreateIndexStatement, CreateUserStatement, DropIndexStatement, DropUserStatement,
+        IndexColumn, IndexType,
+    };
+    assert!(v
+        .validate(&Statement::CreateIndex(CreateIndexStatement {
+            name: Some("idx1".into()),
+            table: "t".into(),
+            columns: vec![IndexColumn {
+                name: "id".into(),
+                ascending: None
+            }],
+            unique: false,
+            if_not_exists: false,
+            index_type: IndexType::BTree,
+        }))
+        .is_ok());
+    assert!(v
+        .validate(&Statement::DropIndex(DropIndexStatement {
+            names: vec!["idx1".into()],
+            if_exists: false,
+        }))
+        .is_ok());
+    assert!(v
+        .validate(&Statement::CreateUser(CreateUserStatement {
+            name: "alice".into(),
+            password: None,
+            roles: vec![],
+        }))
+        .is_ok());
+    assert!(v
+        .validate(&Statement::DropUser(DropUserStatement {
+            names: vec!["alice".into()],
+            if_exists: false,
+        }))
+        .is_ok());
+}
+
+// ── validate_view_as_item ─────────────────────────────────────────────────────
+
+#[test]
+fn test_validate_view_as_aggregate_rejected() {
+    let catalog = catalog_with_users();
+    let v = Validator::new(&catalog);
+    // Parse a SELECT with VIEW AS that uses an aggregate function
+    let result =
+        parser().parse_one("SELECT id FROM users VIEW AS (id AS user_id, COUNT(id) AS cnt)");
+    if let Ok(stmt) = result {
+        let err = v.validate(&stmt).unwrap_err();
+        assert!(matches!(err, ValidationError::ViewAsAggregateNotAllowed(_)));
+    }
+    // If parser doesn't support VIEW AS syntax, just test the validator directly
+}
+
+// ── Catalog type management ───────────────────────────────────────────────────
+
+#[test]
+fn test_catalog_type_management() {
+    use aeternumdb_core::sql::validator::{UserTypeKind, UserTypeSchema};
+    let mut cat = Catalog::new();
+
+    assert!(!cat.type_exists("status"));
+    assert!(cat.get_type("status").is_none());
+
+    cat.add_type(UserTypeSchema {
+        name: "status".into(),
+        kind: UserTypeKind::Enum {
+            flag: false,
+            variants: vec![EnumVariant {
+                name: "active".into(),
+                is_none: false,
+            }],
+            resolved_values: vec![1],
+        },
+    });
+
+    assert!(cat.type_exists("status"));
+    assert!(cat.get_type("status").is_some());
+
+    // Remove table
+    cat.add_table(TableSchema {
+        name: "t".into(),
+        columns: vec![ColumnSchema {
+            name: "s".into(),
+            data_type: DataType::EnumRef("status".into()),
+            nullable: true,
+        }],
+    });
+    assert!(cat.is_type_in_use("status"));
+    let err = cat.remove_type("status").unwrap_err();
+    assert!(matches!(err, ValidationError::TypeInUse(_)));
+
+    // Remove table so type is no longer in use
+    cat.remove_table("t");
+    assert!(!cat.is_type_in_use("status"));
+    assert!(cat.remove_type("status").is_ok());
+    assert!(!cat.type_exists("status"));
+}

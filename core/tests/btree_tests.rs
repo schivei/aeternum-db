@@ -5,7 +5,7 @@
 
 use aeternumdb_core::index::btree::{BTree, BTreeConfig, BTreeKey};
 use aeternumdb_core::index::IndexError;
-use aeternumdb_core::storage::{StorageConfig, StorageEngine};
+use aeternumdb_core::storage::{StorageConfig, StorageEngine, StorageError};
 use std::sync::Arc;
 use tempfile::NamedTempFile;
 
@@ -360,4 +360,64 @@ async fn test_update_existing_key() {
         tree.search(&7i64).await.unwrap().as_deref(),
         Some("updated")
     );
+}
+
+// ── IndexError Display coverage ───────────────────────────────────────────────
+
+#[test]
+fn test_index_error_display_duplicate_key() {
+    let msg = IndexError::DuplicateKey.to_string();
+    assert!(msg.contains("duplicate key"), "got: {msg}");
+}
+
+#[test]
+fn test_index_error_display_invalid_fanout() {
+    let msg = IndexError::InvalidFanout(3).to_string();
+    assert!(msg.contains('3'), "got: {msg}");
+    assert!(msg.contains("fanout"), "got: {msg}");
+}
+
+#[test]
+fn test_index_error_display_corrupt() {
+    let msg = IndexError::Corrupt("bad page".to_string()).to_string();
+    assert!(msg.contains("corrupt"), "got: {msg}");
+    assert!(msg.contains("bad page"), "got: {msg}");
+}
+
+#[test]
+fn test_index_error_display_serialization() {
+    let msg = IndexError::Serialization("decode failed".to_string()).to_string();
+    assert!(msg.contains("serialization"), "got: {msg}");
+    assert!(msg.contains("decode failed"), "got: {msg}");
+}
+
+#[test]
+fn test_index_error_display_storage() {
+    let inner = StorageError::OutOfBounds;
+    let err = IndexError::Storage(inner);
+    let msg = err.to_string();
+    assert!(msg.contains("storage"), "got: {msg}");
+}
+
+#[test]
+fn test_index_error_from_storage_error() {
+    // Exercises the From<StorageError> impl for IndexError.
+    let inner = StorageError::OutOfBounds;
+    let converted: IndexError = IndexError::from(inner);
+    assert!(matches!(converted, IndexError::Storage(_)));
+}
+
+#[test]
+fn test_index_error_storage_source() {
+    use std::error::Error;
+    let inner = StorageError::OutOfBounds;
+    let err = IndexError::Storage(inner);
+    assert!(err.source().is_some());
+}
+
+#[test]
+fn test_index_error_non_storage_source_is_none() {
+    use std::error::Error;
+    assert!(IndexError::DuplicateKey.source().is_none());
+    assert!(IndexError::InvalidFanout(5).source().is_none());
 }
