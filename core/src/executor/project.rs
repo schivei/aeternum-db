@@ -36,14 +36,18 @@ impl ExecutionPlan for ProjectExec {
             while let Some(batch_result) = input_stream.next().await {
                 let batch = batch_result?;
                 let output_schema: Vec<String> = items.iter().enumerate()
-                    .map(|(i, item)| item.alias.clone().unwrap_or_else(|| format!("col_{}", i)))
+                    .map(|(i, item)| {
+                        let fallback = format!("col_{i}");
+                        item.alias.clone().unwrap_or(fallback)
+                    })
                     .collect();
                 let mut projected_batch = RecordBatch::new(output_schema.clone());
 
                 for row in batch.rows {
                     let mut projected_row = Row::new();
                     for (i, item) in items.iter().enumerate() {
-                        let col_name = item.alias.clone().unwrap_or_else(|| format!("col_{}", i));
+                        let fallback = format!("col_{i}");
+                        let col_name = item.alias.clone().unwrap_or(fallback);
                         let val = super::expressions::eval_expr(&item.expr, &row)?;
                         projected_row.insert(col_name, val);
                     }
@@ -62,7 +66,8 @@ impl ExecutionPlan for ProjectExec {
             .iter()
             .enumerate()
             .map(|(i, item)| {
-                let name = item.alias.clone().unwrap_or_else(|| format!("col_{}", i));
+                let fallback = format!("col_{i}");
+                let name = item.alias.clone().unwrap_or(fallback);
                 (name, "unknown".to_string())
             })
             .collect()
