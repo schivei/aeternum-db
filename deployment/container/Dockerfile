@@ -14,7 +14,7 @@ WORKDIR /build/core
 RUN cargo build --release
 
 # Final stage – Alpine has far fewer CVEs than Debian-based images
-FROM alpine:3.21
+FROM alpine:3.23
 
 # Upgrade all pre-installed base packages to their latest patched versions
 # (fixes CVEs in busybox, libcrypto3/libssl3, musl, etc. that ship in the base image)
