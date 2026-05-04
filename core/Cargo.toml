@@ -21,7 +21,7 @@ crc32fast = "1.3"
 parking_lot = "0.12"
 async-stream = "0.3"
 futures = "0.3"
-hashbrown = "0.14"
+hashbrown = "0.17"
 async-trait = "0.1"
 regex = "1.10"
 
