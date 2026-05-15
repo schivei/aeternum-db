@@ -25,20 +25,20 @@ function HomepageHeader() {
                 </p>
                 <div className={styles.buttons}>
                     <Link
-                        className="button button--secondary button--lg"
+                        className={clsx('button button--lg', styles.heroPrimaryButton)}
                         to="/docs/intro">
                         🚀 Get Started
                     </Link>
                     <Link
-                        className="button button--outline button--secondary button--lg"
+                        className={clsx('button button--outline button--lg', styles.heroSecondaryButton)}
                         to="/docs/getting-started/quick-start"
-                        style={{ marginLeft: '1rem' }}>
+                    >
                         ⚡ Quick Start
                     </Link>
                     <a
-                        className="button button--outline button--secondary button--lg"
+                        className={clsx('button button--outline button--lg', styles.heroSecondaryButton)}
                         href="https://github.com/schivei/aeternum-db"
-                        style={{ marginLeft: '1rem' }}>
+                    >
                         ⭐ Star on GitHub
                     </a>
                 </div>

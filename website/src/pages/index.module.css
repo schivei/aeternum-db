@@ -22,7 +22,7 @@
 
 .heroDescription {
   font-size: 1rem;
-  opacity: 0.85;
+  color: var(--ifm-navbar-link-color);
   margin-top: 0.75rem;
 }
 
@@ -33,6 +33,29 @@
   flex-wrap: wrap;
   gap: 0.5rem;
   margin-top: 2rem;
+}
+
+.heroPrimaryButton {
+  background-color: var(--ifm-color-primary-lightest);
+  border-color: var(--ifm-color-primary-lightest);
+  color: var(--ifm-background-color);
+}
+
+.heroPrimaryButton:hover {
+  background-color: var(--ifm-color-primary-lighter);
+  border-color: var(--ifm-color-primary-lighter);
+  color: var(--ifm-background-color);
+}
+
+.heroSecondaryButton {
+  border-color: var(--ifm-color-primary-lightest);
+  color: var(--ifm-color-primary-lightest);
+}
+
+.heroSecondaryButton:hover {
+  border-color: var(--ifm-color-primary-lightest);
+  background-color: var(--ifm-color-primary-darkest);
+  color: var(--ifm-color-primary-lightest);
 }
 
 .badges {
@@ -51,7 +74,7 @@
 /* Stats bar */
 .statsSection {
   padding: 2.5rem 0;
-  background-color: var(--ifm-color-primary);
+  background-color: var(--ifm-color-primary-darker);
   text-align: center;
 }
 
@@ -72,10 +95,6 @@
   text-transform: uppercase;
   letter-spacing: 0.05em;
   margin-top: 0.25rem;
-}
-
-[data-theme='dark'] .statsSection {
-  background-color: #1e1b4b;
 }
 
 /* Features */
