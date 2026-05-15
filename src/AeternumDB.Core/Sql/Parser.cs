@@ -1262,20 +1262,32 @@ internal sealed class Parser
     private Statement ParseDrop()
     {
         ExpectKeyword("DROP");
-        var statement =
-            TryParseDropTable() ??
-            TryParseDropIndex() ??
-            TryParseDropType() ??
-            TryParseDropEnum() ??
-            TryParseDropDatabase() ??
-            TryParseDropSchema() ??
-            TryParseDropUser();
 
-        if (statement is not null) return statement;
+        var dropTable = TryParseDropTable();
+        if (dropTable is not null) return dropTable;
+
+        var dropIndex = TryParseDropIndex();
+        if (dropIndex is not null) return dropIndex;
+
+        var dropType = TryParseDropType();
+        if (dropType is not null) return dropType;
+
+        var dropEnum = TryParseDropEnum();
+        if (dropEnum is not null) return dropEnum;
+
+        var dropDatabase = TryParseDropDatabase();
+        if (dropDatabase is not null) return dropDatabase;
+
+        var dropSchema = TryParseDropSchema();
+        if (dropSchema is not null) return dropSchema;
+
+        var dropUser = TryParseDropUser();
+        if (dropUser is not null) return dropUser;
+
         throw ParseError($"unexpected DROP subtype '{Current.Text}'");
     }
 
-    private Statement? TryParseDropTable()
+    private Statement.DropTable? TryParseDropTable()
     {
         if (!TryConsumeKeyword(KwTable)) return null;
 
@@ -1283,7 +1295,7 @@ internal sealed class Parser
         return new Statement.DropTable(new DropTableStatement(ParseIdentList(), ifExists));
     }
 
-    private Statement? TryParseDropIndex()
+    private Statement.DropIndex? TryParseDropIndex()
     {
         if (!TryConsumeKeyword("INDEX")) return null;
 
@@ -1291,7 +1303,7 @@ internal sealed class Parser
         return new Statement.DropIndex(new DropIndexStatement(ParseIdentList(), ifExists));
     }
 
-    private Statement? TryParseDropType()
+    private Statement.DropType? TryParseDropType()
     {
         if (!TryConsumeKeyword("TYPE")) return null;
 
@@ -1299,7 +1311,7 @@ internal sealed class Parser
         return new Statement.DropType(new DropTypeStatement(ParseIdent(), ifExists));
     }
 
-    private Statement? TryParseDropEnum()
+    private Statement.DropEnum? TryParseDropEnum()
     {
         if (!TryConsumeKeyword("ENUM")) return null;
 
@@ -1307,7 +1319,7 @@ internal sealed class Parser
         return new Statement.DropEnum(new DropEnumStatement(ParseIdent(), ifExists));
     }
 
-    private Statement? TryParseDropDatabase()
+    private Statement.DropDatabase? TryParseDropDatabase()
     {
         if (!TryConsumeKeyword("DATABASE")) return null;
 
@@ -1315,7 +1327,7 @@ internal sealed class Parser
         return new Statement.DropDatabase(new DropDatabaseStatement(ParseIdent(), ifExists));
     }
 
-    private Statement? TryParseDropSchema()
+    private Statement.DropSchema? TryParseDropSchema()
     {
         if (!TryConsumeKeyword("SCHEMA")) return null;
 
@@ -1323,7 +1335,7 @@ internal sealed class Parser
         return new Statement.DropSchema(new DropSchemaStatement(null, ParseIdent(), ifExists));
     }
 
-    private Statement? TryParseDropUser()
+    private Statement.DropUser? TryParseDropUser()
     {
         if (!TryConsumeKeyword("USER")) return null;
 
@@ -1576,7 +1588,11 @@ internal sealed class Parser
     private Expr ParseComparison()
     {
         var left = ParseBitOr();
-        while (TryParseComparisonContinuation(ref left)) { }
+        var hasMoreComparisons = TryParseComparisonContinuation(ref left);
+        while (hasMoreComparisons)
+        {
+            hasMoreComparisons = TryParseComparisonContinuation(ref left);
+        }
         return left;
     }
 
@@ -1632,7 +1648,7 @@ internal sealed class Parser
         return true;
     }
 
-    private Expr BuildBetweenExpr(Expr left, bool negated)
+    private Expr.Between BuildBetweenExpr(Expr left, bool negated)
     {
         var lower = ParseBitOr();
         ExpectKeyword("AND");
