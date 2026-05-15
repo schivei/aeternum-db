@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <IsAotCompatible>true</IsAotCompatible>
+    <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
+    <AssemblyName>AeternumDB.Core</AssemblyName>
+    <RootNamespace>AeternumDB.Core</RootNamespace>
+    <Version>0.1.0</Version>
+    <Authors>AeternumDB Contributors</Authors>
+    <Description>AeternumDB core engine — C# Safe with NativeAOT support</Description>
+    <LangVersion>latest</LangVersion>
+    <Optimize>true</Optimize>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="GenDI" Version="26.*" />
+    <PackageReference Include="GenDI.SourceGenerator" Version="26.*">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>contentfiles; compile; runtime</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+</Project>

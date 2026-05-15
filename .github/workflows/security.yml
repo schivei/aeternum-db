@@ -1,12 +1,8 @@
 name: Security Scanning
 
+# Temporarily disabled while migrating from Rust to C# Safe (ADR-001)
 on:
-  push:
-    branches: [ '**' ]
-  pull_request:
-  schedule:
-    # Run weekly on Mondays at 06:00 UTC to catch newly-published advisories
-    - cron: '0 6 * * 1'
+  workflow_dispatch:
 
 permissions:
   contents: read
