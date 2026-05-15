@@ -67,34 +67,45 @@ public sealed class ConstantFoldingRule : IOptimizationRule
     private static Expr FoldBinary(Expr left, BinaryOperator op, Expr right)
     {
         if (left is Expr.Literal { Value: SqlValue.Integer li } && right is Expr.Literal { Value: SqlValue.Integer ri })
-        {
-            return op switch
-            {
-                BinaryOperator.Plus => new Expr.Literal(new SqlValue.Integer(li.Value + ri.Value)),
-                BinaryOperator.Minus => new Expr.Literal(new SqlValue.Integer(li.Value - ri.Value)),
-                BinaryOperator.Multiply => new Expr.Literal(new SqlValue.Integer(li.Value * ri.Value)),
-                _ => new Expr.BinaryOp(left, op, right)
-            };
-        }
+            return FoldIntegerBinary(left, op, right, li.Value, ri.Value);
 
         if (left is Expr.Literal { Value: SqlValue.Boolean lb })
-        {
-            if (op == BinaryOperator.And && lb.Value) return right;
-            if (op == BinaryOperator.And && !lb.Value) return new Expr.Literal(new SqlValue.Boolean(false));
-            if (op == BinaryOperator.Or && lb.Value) return new Expr.Literal(new SqlValue.Boolean(true));
-            if (op == BinaryOperator.Or && !lb.Value) return right;
-        }
+            return FoldBooleanLeft(lb.Value, op, right) ?? new Expr.BinaryOp(left, op, right);
 
         if (right is Expr.Literal { Value: SqlValue.Boolean rb })
-        {
-            if (op == BinaryOperator.And && rb.Value) return left;
-            if (op == BinaryOperator.And && !rb.Value) return new Expr.Literal(new SqlValue.Boolean(false));
-            if (op == BinaryOperator.Or && rb.Value) return new Expr.Literal(new SqlValue.Boolean(true));
-            if (op == BinaryOperator.Or && !rb.Value) return left;
-        }
+            return FoldBooleanRight(left, op, rb.Value) ?? new Expr.BinaryOp(left, op, right);
 
         return new Expr.BinaryOp(left, op, right);
     }
+
+    private static Expr FoldIntegerBinary(Expr left, BinaryOperator op, Expr right, long li, long ri) =>
+        op switch
+        {
+            BinaryOperator.Plus => new Expr.Literal(new SqlValue.Integer(li + ri)),
+            BinaryOperator.Minus => new Expr.Literal(new SqlValue.Integer(li - ri)),
+            BinaryOperator.Multiply => new Expr.Literal(new SqlValue.Integer(li * ri)),
+            _ => new Expr.BinaryOp(left, op, right)
+        };
+
+    private static Expr? FoldBooleanLeft(bool lb, BinaryOperator op, Expr right) =>
+        (op, lb) switch
+        {
+            (BinaryOperator.And, true) => right,
+            (BinaryOperator.And, false) => new Expr.Literal(new SqlValue.Boolean(false)),
+            (BinaryOperator.Or, true) => new Expr.Literal(new SqlValue.Boolean(true)),
+            (BinaryOperator.Or, false) => right,
+            _ => null
+        };
+
+    private static Expr? FoldBooleanRight(Expr left, BinaryOperator op, bool rb) =>
+        (op, rb) switch
+        {
+            (BinaryOperator.And, true) => left,
+            (BinaryOperator.And, false) => new Expr.Literal(new SqlValue.Boolean(false)),
+            (BinaryOperator.Or, true) => new Expr.Literal(new SqlValue.Boolean(true)),
+            (BinaryOperator.Or, false) => left,
+            _ => null
+        };
 }
 
 public sealed class Optimizer(StatisticsRegistry stats)
@@ -124,7 +135,7 @@ public sealed class Optimizer(StatisticsRegistry stats)
             _ => plan
         };
 
-    private LogicalPlan ReorderInnerJoin(LogicalPlan.Join join)
+    private LogicalPlan.Join ReorderInnerJoin(LogicalPlan.Join join)
     {
         // Keep explicit join predicates in-place to avoid invalidating
         // side-qualified column references when swapping inputs.

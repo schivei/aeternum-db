@@ -26,6 +26,7 @@ public abstract class DbValue : IEquatable<DbValue>
         public override bool Equals(DbValue? other) => other is Null;
         public override bool Equals(object? obj) => obj is Null;
         public override int GetHashCode() => 0;
+        public override string? AsString() => null;
     }
 
     public sealed class Boolean(bool value) : DbValue
@@ -35,6 +36,7 @@ public abstract class DbValue : IEquatable<DbValue>
         public override bool Equals(DbValue? other) => other is Boolean b && b.Value == Value;
         public override bool Equals(object? obj) => obj is Boolean b && b.Value == Value;
         public override int GetHashCode() => Value.GetHashCode();
+        public override bool? AsBool() => Value;
     }
 
     public sealed class Integer(long value) : DbValue
@@ -44,6 +46,8 @@ public abstract class DbValue : IEquatable<DbValue>
         public override bool Equals(DbValue? other) => other is Integer i && i.Value == Value;
         public override bool Equals(object? obj) => obj is Integer i && i.Value == Value;
         public override int GetHashCode() => Value.GetHashCode();
+        public override long? AsInteger() => Value;
+        public override double? AsFloat() => (double)Value;
     }
 
     public sealed class Float(double value) : DbValue
@@ -51,10 +55,11 @@ public abstract class DbValue : IEquatable<DbValue>
         public double Value { get; } = value;
         public override string ToString() => Value.ToString("G17");
         public override bool Equals(DbValue? other) =>
-            other is Float f && BitConverter.DoubleToInt64Bits(f.Value) == BitConverter.DoubleToInt64Bits(Value);
+            other is Float f && f.Value.Equals(Value);
         public override bool Equals(object? obj) =>
-            obj is Float f && BitConverter.DoubleToInt64Bits(f.Value) == BitConverter.DoubleToInt64Bits(Value);
+            obj is Float f && f.Value.Equals(Value);
         public override int GetHashCode() => BitConverter.DoubleToInt64Bits(Value).GetHashCode();
+        public override double? AsFloat() => Value;
     }
 
     public sealed class Text(string value) : DbValue
@@ -64,6 +69,7 @@ public abstract class DbValue : IEquatable<DbValue>
         public override bool Equals(DbValue? other) => other is Text t && t.Value == Value;
         public override bool Equals(object? obj) => obj is Text t && t.Value == Value;
         public override int GetHashCode() => Value.GetHashCode(StringComparison.Ordinal);
+        public override string? AsString() => Value;
     }
 
     public sealed class Bytes(byte[] value) : DbValue
@@ -86,6 +92,7 @@ public abstract class DbValue : IEquatable<DbValue>
         public override bool Equals(object? obj) =>
             obj is Array a && a.Items.SequenceEqual(Items);
         public override int GetHashCode() => Items.Length;
+        public override DbValue[]? AsArray() => Items;
     }
 
     /// <summary>Exact decimal value (maps to Rust's Decimal variant).</summary>
@@ -110,49 +117,23 @@ public abstract class DbValue : IEquatable<DbValue>
 
     public bool IsNull => this is Null;
     public abstract bool Equals(DbValue? other);
-    public override bool Equals(object? obj) => obj is DbValue v && Equals(v);
+    public abstract override bool Equals(object? obj);
     public abstract override int GetHashCode();
 
     // ── Conversion helpers ────────────────────────────────────────────────
 
     /// <summary>Returns the integer value, or null if not an Integer or Null.</summary>
-    public long? AsInteger() => this switch
-    {
-        Integer i => i.Value,
-        Null => null,
-        _ => null,
-    };
+    public virtual long? AsInteger() => null;
 
     /// <summary>Returns the float value (Integer is coerced), or null.</summary>
-    public double? AsFloat() => this switch
-    {
-        Float f => f.Value,
-        Integer i => (double)i.Value,
-        Null => null,
-        _ => null,
-    };
+    public virtual double? AsFloat() => null;
 
     /// <summary>Returns the string representation, or null for Null.</summary>
-    public string? AsString() => this switch
-    {
-        Text t => t.Value,
-        Null => null,
-        _ => ToString(),
-    };
+    public virtual string? AsString() => ToString();
 
     /// <summary>Returns the boolean value, or null if not a Boolean or Null.</summary>
-    public bool? AsBool() => this switch
-    {
-        Boolean b => b.Value,
-        Null => null,
-        _ => null,
-    };
+    public virtual bool? AsBool() => null;
 
     /// <summary>Returns the array items, or null if not an Array or Null.</summary>
-    public DbValue[]? AsArray() => this switch
-    {
-        Array a => a.Items,
-        Null => null,
-        _ => null,
-    };
+    public virtual DbValue[]? AsArray() => null;
 }

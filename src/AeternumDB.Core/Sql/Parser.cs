@@ -44,13 +44,13 @@ internal sealed class Token
 // ── SqlError ──────────────────────────────────────────────────────────────────
 
 /// <summary>Errors returned by SqlParser.</summary>
-public sealed class SqlError : Exception
+public sealed class SqlException : Exception
 {
     public SqlErrorKind Kind { get; }
     public int? Line { get; }
     public int? Col { get; }
 
-    public SqlError(SqlErrorKind kind, string message, int? line = null, int? col = null)
+    public SqlException(SqlErrorKind kind, string message, int? line = null, int? col = null)
         : base(message)
     {
         Kind = kind;
@@ -269,7 +269,7 @@ internal sealed class Tokenizer
             '=' => new Token(TokenKind.Eq, "=", line),
             '!' => _pos < _src.Length && _src[_pos] == '='
                   ? AdvanceAndReturn(new Token(TokenKind.NotEq, "!=", line))
-                  : throw new SqlError(SqlErrorKind.ParseError, $"Unexpected character '!' at line {line}; did you mean '!='?"),
+                  : throw new SqlException(SqlErrorKind.ParseError, $"Unexpected character '!' at line {line}; did you mean '!='?"),
             '<' => _pos < _src.Length && _src[_pos] == '=' ? AdvanceAndReturn(new Token(TokenKind.LtEq, "<=", line))
                   : _pos < _src.Length && _src[_pos] == '>' ? AdvanceAndReturn(new Token(TokenKind.NotEq, "<>", line))
                   : _pos < _src.Length && _src[_pos] == '<' ? AdvanceAndReturn(new Token(TokenKind.ShiftLeft, "<<", line))
@@ -306,11 +306,11 @@ internal sealed class Parser
         return t;
     }
 
-    private Token Expect(TokenKind kind, string? expected = null)
+    private void Expect(TokenKind kind, string? expected = null)
     {
         if (Current.Kind != kind)
             throw ParseError($"expected {expected ?? kind.ToString()}, got '{Current.Text}'");
-        return Consume();
+        Consume();
     }
 
     private Token ExpectKeyword(string kw)
@@ -326,9 +326,7 @@ internal sealed class Parser
     private bool IsKeywordAny(params string[] kws) =>
         Current.Kind == TokenKind.Keyword && kws.Any(k => Current.Text.Equals(k, StringComparison.OrdinalIgnoreCase));
 
-    private bool IsIdent() => Current.Kind == TokenKind.Ident || Current.Kind == TokenKind.Keyword;
-
-    private SqlError ParseError(string msg) =>
+    private SqlException ParseError(string msg) =>
         new(SqlErrorKind.ParseError, msg, Current.Line);
 
     // Consume if keyword matches, return whether consumed
@@ -852,11 +850,11 @@ internal sealed class Parser
 
         return name switch
         {
-            "TINYINT" => ParseUnsignedVariant("TINYINT", DataType.TinyInt.Instance, DataType.UnsignedTinyInt.Instance),
-            "SMALLINT" => ParseUnsignedVariant("SMALLINT", DataType.SmallInt.Instance, DataType.UnsignedSmallInt.Instance),
-            "MEDIUMINT" => ParseUnsignedVariant("MEDIUMINT", DataType.MediumInt.Instance, DataType.UnsignedMediumInt.Instance),
-            "INT" or "INTEGER" => ParseUnsignedVariant("INTEGER", DataType.Integer.Instance, DataType.UnsignedInt.Instance),
-            "BIGINT" => ParseUnsignedVariant("BIGINT", DataType.BigInt.Instance, DataType.UnsignedBigInt.Instance),
+            "TINYINT" => ParseUnsignedVariant(DataType.TinyInt.Instance, DataType.UnsignedTinyInt.Instance),
+            "SMALLINT" => ParseUnsignedVariant(DataType.SmallInt.Instance, DataType.UnsignedSmallInt.Instance),
+            "MEDIUMINT" => ParseUnsignedVariant(DataType.MediumInt.Instance, DataType.UnsignedMediumInt.Instance),
+            "INT" or "INTEGER" => ParseUnsignedVariant(DataType.Integer.Instance, DataType.UnsignedInt.Instance),
+            "BIGINT" => ParseUnsignedVariant(DataType.BigInt.Instance, DataType.UnsignedBigInt.Instance),
             "FLOAT" or "REAL" => DataType.Float.Instance,
             "DOUBLE" => ParseDoubleType(),
             "DECIMAL" or "NUMERIC" => ParseDecimalType(),
@@ -868,9 +866,9 @@ internal sealed class Parser
             "CHAR" or "CHARACTER" => new DataType.Char(TryParseParenUInt64()),
             "BOOLEAN" or "BOOL" => DataType.Boolean.Instance,
             "DATE" => DataType.Date.Instance,
-            "TIME" => TryConsumeKeyword("WITH") && ExpectKeyword("TIME") != null && ExpectKeyword("ZONE") != null ? DataType.TimeTz.Instance : DataType.Time.Instance,
+            "TIME" => ParseTimeType(DataType.TimeTz.Instance, DataType.Time.Instance),
             "DATETIME" => DataType.DateTime.Instance,
-            "TIMESTAMP" => TryConsumeKeyword("WITH") && ExpectKeyword("TIME") != null && ExpectKeyword("ZONE") != null ? DataType.TimestampTz.Instance : DataType.Timestamp.Instance,
+            "TIMESTAMP" => ParseTimeType(DataType.TimestampTz.Instance, DataType.Timestamp.Instance),
             "UUID" or "GUID" => DataType.Uuid.Instance,
             "BINARY" => new DataType.Binary(TryParseParenUInt64()),
             "VARBINARY" => new DataType.Varbinary(TryParseParenUInt64()),
@@ -883,8 +881,16 @@ internal sealed class Parser
         };
     }
 
-    private DataType ParseUnsignedVariant(string typeName, DataType signed, DataType unsigned) =>
+    private DataType ParseUnsignedVariant(DataType signed, DataType unsigned) =>
         TryConsumeKeyword("UNSIGNED") ? unsigned : signed;
+
+    private DataType ParseTimeType(DataType withTz, DataType withoutTz)
+    {
+        if (!TryConsumeKeyword("WITH")) return withoutTz;
+        ExpectKeyword("TIME");
+        ExpectKeyword("ZONE");
+        return withTz;
+    }
 
     private DataType ParseDoubleType()
     {
@@ -1488,37 +1494,10 @@ internal sealed class Parser
     private Expr ParsePrimaryExpr()
     {
         // CAST
-        if (IsKeyword("CAST"))
-        {
-            Consume();
-            Expect(TokenKind.LeftParen, "(");
-            var castExpr = ParseExpr();
-            ExpectKeyword("AS");
-            var castType = ParseDataType();
-            Expect(TokenKind.RightParen, ")");
-            return new Expr.Cast(castExpr, castType);
-        }
+        if (IsKeyword("CAST")) return ParseCastExpr();
 
         // CASE
-        if (IsKeyword("CASE"))
-        {
-            Consume();
-            Expr? operand = null;
-            if (!IsKeyword("WHEN")) operand = ParseExpr();
-            var conditions = new List<(Expr, Expr)>();
-            while (IsKeyword("WHEN"))
-            {
-                Consume();
-                var cond = ParseExpr();
-                ExpectKeyword("THEN");
-                var res = ParseExpr();
-                conditions.Add((cond, res));
-            }
-            Expr? elseRes = null;
-            if (TryConsumeKeyword("ELSE")) elseRes = ParseExpr();
-            ExpectKeyword("END");
-            return new Expr.Case(operand, conditions, elseRes);
-        }
+        if (IsKeyword("CASE")) return ParseCaseExpr();
 
         // EXISTS
         if (IsKeyword("EXISTS"))
@@ -1531,35 +1510,10 @@ internal sealed class Parser
         }
 
         // SUBSTRING
-        if (IsKeyword("SUBSTRING") || IsKeyword("SUBSTR"))
-        {
-            Consume();
-            Expect(TokenKind.LeftParen, "(");
-            var sub = ParseExpr();
-            Expr? from = null, len = null;
-            if (TryConsumeKeyword("FROM") || Current.Kind == TokenKind.Comma) { if (Current.Kind == TokenKind.Comma) Consume(); from = ParseExpr(); }
-            if (TryConsumeKeyword("FOR") || Current.Kind == TokenKind.Comma) { if (Current.Kind == TokenKind.Comma) Consume(); len = ParseExpr(); }
-            Expect(TokenKind.RightParen, ")");
-            return new Expr.Substring(sub, from, len);
-        }
+        if (IsKeyword("SUBSTRING") || IsKeyword("SUBSTR")) return ParseSubstringExpr();
 
         // TRIM
-        if (IsKeyword("TRIM"))
-        {
-            Consume();
-            Expect(TokenKind.LeftParen, "(");
-            TrimWhereField? tw = null;
-            if (TryConsumeKeyword("LEADING")) tw = TrimWhereField.Leading;
-            else if (TryConsumeKeyword("TRAILING")) tw = TrimWhereField.Trailing;
-            else if (TryConsumeKeyword("BOTH")) tw = TrimWhereField.Both;
-            Expr? what = null;
-            if (!IsKeyword("FROM") && Current.Kind != TokenKind.RightParen)
-                what = ParseExpr();
-            if (IsKeyword("FROM")) Consume();
-            var trimExpr = ParseExpr();
-            Expect(TokenKind.RightParen, ")");
-            return new Expr.Trim(trimExpr, tw, what);
-        }
+        if (IsKeyword("TRIM")) return ParseTrimExpr();
 
         // POSITION
         if (IsKeyword("POSITION"))
@@ -1622,35 +1576,106 @@ internal sealed class Parser
 
         // Function call or identifier
         if (Current.Kind == TokenKind.Ident || Current.Kind == TokenKind.Keyword)
-        {
-            var name = Consume().Text;
-            // Function call
-            if (Current.Kind == TokenKind.LeftParen)
-            {
-                Consume();
-                bool distinct = TryConsumeKeyword("DISTINCT");
-                List<Expr> args = [];
-                if (Current.Kind != TokenKind.RightParen)
-                {
-                    if (Current.Kind == TokenKind.Star) { Consume(); args.Add(Expr.Wildcard.Instance); }
-                    else args = ParseExprList();
-                }
-                Expect(TokenKind.RightParen, ")");
-                return new Expr.Function(name.ToUpperInvariant(), args, distinct);
-            }
-            // Qualified column: table.col
-            if (Current.Kind == TokenKind.Dot)
-            {
-                Consume();
-                if (Current.Kind == TokenKind.Star) { Consume(); return Expr.Wildcard.Instance; }
-                var col = ParseIdent();
-                return new Expr.Column(name, col);
-            }
-            // Unqualified column
-            return new Expr.Column(null, name);
-        }
+            return ParseFunctionOrIdent();
 
         throw ParseError($"unexpected token in expression: '{Current.Text}'");
+    }
+
+    private Expr ParseCastExpr()
+    {
+        Consume();
+        Expect(TokenKind.LeftParen, "(");
+        var castExpr = ParseExpr();
+        ExpectKeyword("AS");
+        var castType = ParseDataType();
+        Expect(TokenKind.RightParen, ")");
+        return new Expr.Cast(castExpr, castType);
+    }
+
+    private Expr ParseCaseExpr()
+    {
+        Consume();
+        Expr? operand = null;
+        if (!IsKeyword("WHEN")) operand = ParseExpr();
+        var conditions = new List<(Expr, Expr)>();
+        while (IsKeyword("WHEN"))
+        {
+            Consume();
+            var cond = ParseExpr();
+            ExpectKeyword("THEN");
+            var res = ParseExpr();
+            conditions.Add((cond, res));
+        }
+        Expr? elseRes = null;
+        if (TryConsumeKeyword("ELSE")) elseRes = ParseExpr();
+        ExpectKeyword("END");
+        return new Expr.Case(operand, conditions, elseRes);
+    }
+
+    private Expr ParseSubstringExpr()
+    {
+        Consume();
+        Expect(TokenKind.LeftParen, "(");
+        var sub = ParseExpr();
+        Expr? from = null, len = null;
+        if (TryConsumeKeyword("FROM") || Current.Kind == TokenKind.Comma)
+        {
+            if (Current.Kind == TokenKind.Comma) Consume();
+            from = ParseExpr();
+        }
+        if (TryConsumeKeyword("FOR") || Current.Kind == TokenKind.Comma)
+        {
+            if (Current.Kind == TokenKind.Comma) Consume();
+            len = ParseExpr();
+        }
+        Expect(TokenKind.RightParen, ")");
+        return new Expr.Substring(sub, from, len);
+    }
+
+    private Expr ParseTrimExpr()
+    {
+        Consume();
+        Expect(TokenKind.LeftParen, "(");
+        TrimWhereField? tw = null;
+        if (TryConsumeKeyword("LEADING")) tw = TrimWhereField.Leading;
+        else if (TryConsumeKeyword("TRAILING")) tw = TrimWhereField.Trailing;
+        else if (TryConsumeKeyword("BOTH")) tw = TrimWhereField.Both;
+        Expr? what = null;
+        if (!IsKeyword("FROM") && Current.Kind != TokenKind.RightParen)
+            what = ParseExpr();
+        if (IsKeyword("FROM")) Consume();
+        var trimExpr = ParseExpr();
+        Expect(TokenKind.RightParen, ")");
+        return new Expr.Trim(trimExpr, tw, what);
+    }
+
+    private Expr ParseFunctionOrIdent()
+    {
+        var name = Consume().Text;
+        // Function call
+        if (Current.Kind == TokenKind.LeftParen)
+        {
+            Consume();
+            bool distinct = TryConsumeKeyword("DISTINCT");
+            List<Expr> args = [];
+            if (Current.Kind != TokenKind.RightParen)
+            {
+                if (Current.Kind == TokenKind.Star) { Consume(); args.Add(Expr.Wildcard.Instance); }
+                else args = ParseExprList();
+            }
+            Expect(TokenKind.RightParen, ")");
+            return new Expr.Function(name.ToUpperInvariant(), args, distinct);
+        }
+        // Qualified column: table.col
+        if (Current.Kind == TokenKind.Dot)
+        {
+            Consume();
+            if (Current.Kind == TokenKind.Star) { Consume(); return Expr.Wildcard.Instance; }
+            var col = ParseIdent();
+            return new Expr.Column(name, col);
+        }
+        // Unqualified column
+        return new Expr.Column(null, name);
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
@@ -1709,10 +1734,10 @@ public sealed class SqlParser
     public SqlParser() { }
 
     /// <summary>Parse one or more semicolon-separated SQL statements.</summary>
-    public List<Statement> Parse(string sql)
+    public static List<Statement> Parse(string sql)
     {
         if (string.IsNullOrWhiteSpace(sql))
-            throw new SqlError(SqlErrorKind.EmptyInput, "empty SQL input");
+            throw new SqlException(SqlErrorKind.EmptyInput, "empty SQL input");
 
         try
         {
@@ -1720,30 +1745,30 @@ public sealed class SqlParser
             var parser = new Parser(tokens);
             var stmts = parser.ParseStatements();
             if (stmts.Count == 0)
-                throw new SqlError(SqlErrorKind.EmptyInput, "empty SQL input");
+                throw new SqlException(SqlErrorKind.EmptyInput, "empty SQL input");
             return stmts;
         }
-        catch (SqlError) { throw; }
+        catch (SqlException) { throw; }
         catch (Exception ex)
         {
-            throw new SqlError(SqlErrorKind.ParseError, ex.Message);
+            throw new SqlException(SqlErrorKind.ParseError, ex.Message);
         }
     }
 
     /// <summary>Parse exactly one SQL statement.</summary>
-    public Statement ParseOne(string sql)
+    public static Statement ParseOne(string sql)
     {
         var stmts = Parse(sql);
         if (stmts.Count != 1)
-            throw new SqlError(SqlErrorKind.ParseError, $"expected exactly one statement, got {stmts.Count}");
+            throw new SqlException(SqlErrorKind.ParseError, $"expected exactly one statement, got {stmts.Count}");
         return stmts[0];
     }
 
     /// <summary>Parse a SQL expression (not a full statement).</summary>
-    public Expr ParseExpr(string exprSql)
+    public static Expr ParseExpr(string exprSql)
     {
         if (string.IsNullOrWhiteSpace(exprSql))
-            throw new SqlError(SqlErrorKind.EmptyInput, "empty SQL expression");
+            throw new SqlException(SqlErrorKind.EmptyInput, "empty SQL expression");
 
         var wrapped = $"SELECT {exprSql}";
         var stmt = ParseOne(wrapped);
@@ -1753,9 +1778,9 @@ public sealed class SqlParser
             {
                 SelectItem.ExprItem ei => ei.Expr,
                 SelectItem.Wildcard => Expr.Wildcard.Instance,
-                _ => throw new SqlError(SqlErrorKind.ParseError, "expected a single scalar expression"),
+                _ => throw new SqlException(SqlErrorKind.ParseError, "expected a single scalar expression"),
             };
         }
-        throw new SqlError(SqlErrorKind.ParseError, "failed to parse expression");
+        throw new SqlException(SqlErrorKind.ParseError, "failed to parse expression");
     }
 }

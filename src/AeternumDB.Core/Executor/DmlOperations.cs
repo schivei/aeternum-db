@@ -36,11 +36,8 @@ public static class DmlOperations
             }
 
             // Fill missing columns with NULL
-            foreach (var meta in schema)
-            {
-                if (!HasColumn(row, meta.Name))
-                    row.Set(meta.Name, DbValue.Null.Instance);
-            }
+            foreach (var meta in schema.Where(m => !HasColumn(row, m.Name)))
+                row.Set(meta.Name, DbValue.Null.Instance);
 
             rows.Add(row);
         }
@@ -139,13 +136,6 @@ public static class DmlOperations
 
     // ── private helpers ───────────────────────────────────────────────────────
 
-    private static bool HasColumn(DbRow row, string column)
-    {
-        foreach (var kv in row.Columns)
-        {
-            if (string.Equals(kv.Key, column, StringComparison.OrdinalIgnoreCase))
-                return true;
-        }
-        return false;
-    }
+    private static bool HasColumn(DbRow row, string column) =>
+        row.Columns.Any(kv => string.Equals(kv.Key, column, StringComparison.OrdinalIgnoreCase));
 }

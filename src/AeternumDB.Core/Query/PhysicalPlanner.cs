@@ -56,7 +56,7 @@ public sealed class PhysicalPlanner(CostModel costModel, StatisticsRegistry stat
             new NodeCost(seqRows, seqCpu, tableStats.NumPages * _costModel.IoCostFactor));
     }
 
-    private PhysicalPlan LowerFilter(LogicalPlan input, Expr predicate)
+    private PhysicalPlan.Filter LowerFilter(LogicalPlan input, Expr predicate)
     {
         var child = Lower(input);
         var inRows = (int)ChildNodeRows(child);
@@ -66,7 +66,7 @@ public sealed class PhysicalPlanner(CostModel costModel, StatisticsRegistry stat
         return new PhysicalPlan.Filter(child, predicate, new NodeCost(outRows, cpu, 0));
     }
 
-    private PhysicalPlan LowerProject(LogicalPlan input, List<ProjectionItem> items)
+    private PhysicalPlan.Project LowerProject(LogicalPlan input, List<ProjectionItem> items)
     {
         var child = Lower(input);
         var rows = (int)ChildNodeRows(child);
@@ -98,7 +98,7 @@ public sealed class PhysicalPlanner(CostModel costModel, StatisticsRegistry stat
         return new PhysicalPlan.NestedLoopJoin(leftPhys, rightPhys, joinType, nlCondition, new NodeCost(nlRows, nlCpu, 0));
     }
 
-    private PhysicalPlan LowerAggregate(LogicalPlan input, List<Expr> groupBy, List<AggregateExpr> aggs, Expr? having)
+    private PhysicalPlan.HashAggregate LowerAggregate(LogicalPlan input, List<Expr> groupBy, List<AggregateExpr> aggs, Expr? having)
     {
         var child = Lower(input);
         var inRows = (int)ChildNodeRows(child);
@@ -107,7 +107,7 @@ public sealed class PhysicalPlanner(CostModel costModel, StatisticsRegistry stat
         return new PhysicalPlan.HashAggregate(child, groupBy, aggs, having, new NodeCost(groups, cpu, 0));
     }
 
-    private PhysicalPlan LowerSort(LogicalPlan input, List<SortExpr> orderBy)
+    private PhysicalPlan.Sort LowerSort(LogicalPlan input, List<SortExpr> orderBy)
     {
         var child = Lower(input);
         var rows = (int)ChildNodeRows(child);
@@ -116,14 +116,14 @@ public sealed class PhysicalPlanner(CostModel costModel, StatisticsRegistry stat
         return new PhysicalPlan.Sort(child, orderBy, algo, new NodeCost(rows, cpu, 0));
     }
 
-    private PhysicalPlan LowerLimit(LogicalPlan input, int limit, int offset)
+    private PhysicalPlan.Limit LowerLimit(LogicalPlan input, int limit, int offset)
     {
         var child = Lower(input);
         var rows = Math.Max(0, Math.Min(limit, (int)ChildNodeRows(child) - offset));
         return new PhysicalPlan.Limit(child, limit, offset, new NodeCost(rows, 0, 0));
     }
 
-    private PhysicalPlan LowerUnnest(LogicalPlan input, Expr column, string? alias)
+    private PhysicalPlan.Unnest LowerUnnest(LogicalPlan input, Expr column, string? alias)
     {
         var child = Lower(input);
         var rows = Math.Max(1, (int)ChildNodeRows(child) * 5);
@@ -131,7 +131,7 @@ public sealed class PhysicalPlanner(CostModel costModel, StatisticsRegistry stat
         return new PhysicalPlan.Unnest(child, column, alias, new NodeCost(rows, cpu, 0));
     }
 
-    private PhysicalPlan LowerViewAs(LogicalPlan input, List<ViewAsProjection> items)
+    private PhysicalPlan.ViewAs LowerViewAs(LogicalPlan input, List<ViewAsProjection> items)
     {
         var child = Lower(input);
         var rows = (int)ChildNodeRows(child);
@@ -187,7 +187,7 @@ public sealed class PhysicalPlanner(CostModel costModel, StatisticsRegistry stat
             return new Expr.BinaryOp(original, BinaryOperator.And, residual);
         }
 
-        if (rk.Count != lk.Count || rk.Count == 0)
+        if (rk.Count != lk.Count)
         {
             if (original is null) return residual;
             if (residual is null) return original;

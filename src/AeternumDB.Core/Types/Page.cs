@@ -31,9 +31,6 @@ public readonly struct PageHeader
 
     public readonly ulong PageIdRaw;
     public readonly PageType PageType;
-#pragma warning disable CS0414
-    private readonly byte _reserved;
-#pragma warning restore CS0414
     public readonly ushort FreeSpace;
     public readonly uint Checksum;
 
@@ -41,7 +38,6 @@ public readonly struct PageHeader
     {
         PageIdRaw = pageId;
         PageType = type;
-        _reserved = 0;
         FreeSpace = freeSpace;
         Checksum = checksum;
     }

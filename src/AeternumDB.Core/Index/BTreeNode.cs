@@ -158,50 +158,54 @@ internal sealed class LeafNode
         var leaf = new LeafNode();
         for (var i = 0; i < count; i++)
         {
-            if (pos + 4 > data.Length)
-                throw new IndexException(IndexErrorKind.Serialization, "unexpected end of leaf key length");
-            var keyLen = BinaryPrimitives.ReadInt32LittleEndian(data.Slice(pos, 4));
-            pos += 4;
-            if (keyLen < 0 || pos + keyLen > data.Length)
-                throw new IndexException(IndexErrorKind.Serialization, "unexpected end of leaf key payload");
-            var key = data.Slice(pos, keyLen).ToArray();
-            pos += keyLen;
-
-            if (pos + 4 > data.Length)
-                throw new IndexException(IndexErrorKind.Serialization, "unexpected end of leaf value length");
-            var valueLen = BinaryPrimitives.ReadInt32LittleEndian(data.Slice(pos, 4));
-            pos += 4;
-            if (valueLen < 0 || pos + valueLen > data.Length)
-                throw new IndexException(IndexErrorKind.Serialization, "unexpected end of leaf value payload");
-            var value = data.Slice(pos, valueLen).ToArray();
-            pos += valueLen;
-
+            var (key, value) = ReadLeafEntry(data, ref pos);
             leaf.Keys.Add(key);
             leaf.Values.Add(value);
         }
 
-        if (pos + 1 > data.Length)
-            throw new IndexException(IndexErrorKind.Serialization, "unexpected end of leaf next flag");
-        var hasNext = data[pos++] != 0;
-        if (hasNext)
-        {
-            if (pos + 8 > data.Length)
-                throw new IndexException(IndexErrorKind.Serialization, "unexpected end of leaf next pointer");
-            leaf.NextLeaf = (PageId)BinaryPrimitives.ReadUInt64LittleEndian(data.Slice(pos, 8));
-            pos += 8;
-        }
-
-        if (pos + 1 > data.Length)
-            throw new IndexException(IndexErrorKind.Serialization, "unexpected end of leaf prev flag");
-        var hasPrev = data[pos++] != 0;
-        if (hasPrev)
-        {
-            if (pos + 8 > data.Length)
-                throw new IndexException(IndexErrorKind.Serialization, "unexpected end of leaf prev pointer");
-            leaf.PrevLeaf = (PageId)BinaryPrimitives.ReadUInt64LittleEndian(data.Slice(pos, 8));
-        }
+        leaf.NextLeaf = ReadOptionalPageId(data, ref pos,
+            "unexpected end of leaf next flag", "unexpected end of leaf next pointer");
+        leaf.PrevLeaf = ReadOptionalPageId(data, ref pos,
+            "unexpected end of leaf prev flag", "unexpected end of leaf prev pointer");
 
         return leaf;
+    }
+
+    private static (byte[] key, byte[] value) ReadLeafEntry(ReadOnlySpan<byte> data, ref int pos)
+    {
+        if (pos + 4 > data.Length)
+            throw new IndexException(IndexErrorKind.Serialization, "unexpected end of leaf key length");
+        var keyLen = BinaryPrimitives.ReadInt32LittleEndian(data.Slice(pos, 4));
+        pos += 4;
+        if (keyLen < 0 || pos + keyLen > data.Length)
+            throw new IndexException(IndexErrorKind.Serialization, "unexpected end of leaf key payload");
+        var key = data.Slice(pos, keyLen).ToArray();
+        pos += keyLen;
+
+        if (pos + 4 > data.Length)
+            throw new IndexException(IndexErrorKind.Serialization, "unexpected end of leaf value length");
+        var valueLen = BinaryPrimitives.ReadInt32LittleEndian(data.Slice(pos, 4));
+        pos += 4;
+        if (valueLen < 0 || pos + valueLen > data.Length)
+            throw new IndexException(IndexErrorKind.Serialization, "unexpected end of leaf value payload");
+        var value = data.Slice(pos, valueLen).ToArray();
+        pos += valueLen;
+
+        return (key, value);
+    }
+
+    private static PageId? ReadOptionalPageId(ReadOnlySpan<byte> data, ref int pos, string flagError, string pointerError)
+    {
+        if (pos + 1 > data.Length)
+            throw new IndexException(IndexErrorKind.Serialization, flagError);
+        var hasValue = data[pos++] != 0;
+        if (!hasValue) return null;
+
+        if (pos + 8 > data.Length)
+            throw new IndexException(IndexErrorKind.Serialization, pointerError);
+        var pageId = (PageId)BinaryPrimitives.ReadUInt64LittleEndian(data.Slice(pos, 8));
+        pos += 8;
+        return pageId;
     }
 }
 

@@ -10,6 +10,7 @@ public sealed class BTree<TKey, TValue> : IBTree<TKey, TValue>
     where TKey : IComparable<TKey>
 {
     private const int MetaSize = 8 + 4 + 4 + 4; // root, height, count, fanout
+    private const string InternalNodeOutOfRange = "internal node child index out of range";
 
     private readonly IStorageEngine _storage;
     private readonly IIndexCodec<TKey> _keyCodec;
@@ -21,7 +22,7 @@ public sealed class BTree<TKey, TValue> : IBTree<TKey, TValue>
     private PageId _rootPageId;
     private int _height;
     private int _count;
-    private int _fanout;
+    private readonly int _fanout;
 
     private BTree(
         IStorageEngine storage,
@@ -173,7 +174,6 @@ public sealed class BTree<TKey, TValue> : IBTree<TKey, TValue>
             var startPos = leaf.FindKeyIndex(startBytes, CompareKeyBytes, out _);
             var list = new List<(TKey Key, TValue Value)>();
 
-            var currentPage = leafPageId;
             var current = leaf;
             var pos = startPos;
 
@@ -190,8 +190,7 @@ public sealed class BTree<TKey, TValue> : IBTree<TKey, TValue>
                 }
 
                 if (!current.NextLeaf.HasValue) break;
-                currentPage = current.NextLeaf.Value;
-                current = await ReadLeafAsync(currentPage);
+                current = await ReadLeafAsync(current.NextLeaf.Value);
                 pos = 0;
             }
 
@@ -269,7 +268,7 @@ public sealed class BTree<TKey, TValue> : IBTree<TKey, TValue>
         var internalNode = await ReadInternalAsync(pageId);
         var childIndex = internalNode.FindChildIndex(keyBytes, CompareKeyBytes);
         if (childIndex < 0 || childIndex >= internalNode.Children.Count)
-            throw new IndexException(IndexErrorKind.TreeCorrupted, "internal node child index out of range");
+            throw new IndexException(IndexErrorKind.TreeCorrupted, InternalNodeOutOfRange);
 
         var childPage = internalNode.Children[childIndex];
         var childResult = await InsertRecursiveAsync(childPage, height - 1, keyBytes, valueBytes);
@@ -345,7 +344,7 @@ public sealed class BTree<TKey, TValue> : IBTree<TKey, TValue>
         var internalNode = await ReadInternalAsync(pageId);
         var childIndex = internalNode.FindChildIndex(keyBytes, CompareKeyBytes);
         if (childIndex < 0 || childIndex >= internalNode.Children.Count)
-            throw new IndexException(IndexErrorKind.TreeCorrupted, "internal node child index out of range");
+            throw new IndexException(IndexErrorKind.TreeCorrupted, InternalNodeOutOfRange);
         return await SearchRecursiveAsync(internalNode.Children[childIndex], height - 1, keyBytes);
     }
 
@@ -365,7 +364,7 @@ public sealed class BTree<TKey, TValue> : IBTree<TKey, TValue>
         var internalNode = await ReadInternalAsync(pageId);
         var childIndex = internalNode.FindChildIndex(keyBytes, CompareKeyBytes);
         if (childIndex < 0 || childIndex >= internalNode.Children.Count)
-            throw new IndexException(IndexErrorKind.TreeCorrupted, "internal node child index out of range");
+            throw new IndexException(IndexErrorKind.TreeCorrupted, InternalNodeOutOfRange);
         return await DeleteRecursiveAsync(internalNode.Children[childIndex], height - 1, keyBytes);
     }
 
@@ -378,7 +377,7 @@ public sealed class BTree<TKey, TValue> : IBTree<TKey, TValue>
             var internalNode = await ReadInternalAsync(currentPage);
             var childIndex = internalNode.FindChildIndex(keyBytes, CompareKeyBytes);
             if (childIndex < 0 || childIndex >= internalNode.Children.Count)
-                throw new IndexException(IndexErrorKind.TreeCorrupted, "internal node child index out of range");
+                throw new IndexException(IndexErrorKind.TreeCorrupted, InternalNodeOutOfRange);
             currentPage = internalNode.Children[childIndex];
             currentHeight--;
         }

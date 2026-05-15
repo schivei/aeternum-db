@@ -18,26 +18,26 @@ public sealed class PlannerContext(Catalog catalog)
 
 public sealed class QueryPlanner
 {
-    public LogicalPlan CreateLogicalPlan(Statement stmt, PlannerContext ctx)
+    public static LogicalPlan CreateLogicalPlan(Statement stmt, PlannerContext ctx)
     {
         var builder = new LogicalPlanBuilder(ctx.Catalog);
         foreach (var table in ctx.FlatTables) builder.RegisterFlatTable(table);
         return builder.BuildFromStatement(stmt);
     }
 
-    public LogicalPlan Optimize(LogicalPlan plan, PlannerContext ctx)
+    public static LogicalPlan Optimize(LogicalPlan plan, PlannerContext ctx)
     {
         var optimizer = new Optimizer(ctx.Statistics);
         return optimizer.Optimize(plan);
     }
 
-    public PhysicalPlan CreatePhysicalPlan(LogicalPlan plan, PlannerContext ctx)
+    public static PhysicalPlan CreatePhysicalPlan(LogicalPlan plan, PlannerContext ctx)
     {
         var planner = new PhysicalPlanner(ctx.CostModel, ctx.Statistics);
         return planner.Lower(plan);
     }
 
-    public string Explain(PhysicalPlan plan) => global::AeternumDB.Core.Query.Explain.ExplainPhysical(plan);
+    public static string Explain(PhysicalPlan plan) => global::AeternumDB.Core.Query.Explain.ExplainPhysical(plan);
 
     public PhysicalPlan Plan(Statement stmt, PlannerContext ctx)
     {
@@ -48,9 +48,8 @@ public sealed class QueryPlanner
 }
 
 [GenDI.ServiceInjection(Microsoft.Extensions.DependencyInjection.ServiceLifetime.Singleton)]
-public sealed class RuntimeQueryPlanner(SqlParser parser, Catalog catalog) : IQueryPlanner
+public sealed class RuntimeQueryPlanner(Catalog catalog) : IQueryPlanner
 {
-    private readonly SqlParser _parser = parser;
     private readonly Catalog _catalog = catalog;
     private readonly QueryPlanner _planner = new();
 
@@ -59,9 +58,9 @@ public sealed class RuntimeQueryPlanner(SqlParser parser, Catalog catalog) : IQu
         Statement statement;
         try
         {
-            statement = _parser.ParseOne(sql);
+            statement = SqlParser.ParseOne(sql);
         }
-        catch (SqlError ex)
+        catch (SqlException ex)
         {
             throw new PlannerException(PlannerErrorKind.Other, ex.Message);
         }

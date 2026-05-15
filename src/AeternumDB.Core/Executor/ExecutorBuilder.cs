@@ -71,7 +71,7 @@ public static class ExecutorBuilder
 
     // ── private helpers ───────────────────────────────────────────────────────
 
-    private static IExecutionPlan BuildViewAs(PhysicalPlan.ViewAs view)
+    private static ProjectExec BuildViewAs(PhysicalPlan.ViewAs view)
     {
         var inner = Build(view.Input);
         var projectionItems = view.Items

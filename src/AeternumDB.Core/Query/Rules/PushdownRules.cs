@@ -92,25 +92,37 @@ public sealed class PredicatePushdownRule : IOptimizationRule
             Expr.UnaryOp u => ReferencesTable(u.Inner, table),
             Expr.Cast c => ReferencesTable(c.Inner, table),
             Expr.IsNull i => ReferencesTable(i.Inner, table),
-            Expr.Function f => f.Args.Any(a => ReferencesTable(a, table)),
+            Expr.Function f => ReferencesTableInChildren(f.Args, table),
             Expr.Between b => ReferencesTable(b.Inner, table) || ReferencesTable(b.Low, table) || ReferencesTable(b.High, table),
-            Expr.InList i => ReferencesTable(i.Inner, table) || i.List.Any(x => ReferencesTable(x, table)),
-            Expr.Case c => (c.Operand is not null && ReferencesTable(c.Operand, table))
-                           || c.Conditions.Any(x => ReferencesTable(x.Condition, table) || ReferencesTable(x.Result, table))
-                           || (c.ElseResult is not null && ReferencesTable(c.ElseResult, table)),
+            Expr.InList i => ReferencesTable(i.Inner, table) || ReferencesTableInChildren(i.List, table),
+            Expr.Case c => ReferencesTableInCase(c, table),
             Expr.ArrayOp a => ReferencesTable(a.Inner, table) || ReferencesTable(a.Right, table),
-            Expr.Substring s => ReferencesTable(s.Inner, table)
-                                || (s.FromPos is not null && ReferencesTable(s.FromPos, table))
-                                || (s.Len is not null && ReferencesTable(s.Len, table)),
+            Expr.Substring s => ReferencesTableInSubstring(s, table),
             Expr.Position p => ReferencesTable(p.Substr, table) || ReferencesTable(p.InExpr, table),
             Expr.Trim t => ReferencesTable(t.Inner, table) || (t.TrimWhat is not null && ReferencesTable(t.TrimWhat, table)),
-            Expr.Overlay o => ReferencesTable(o.Inner, table)
-                              || ReferencesTable(o.OverlayWhat, table)
-                              || ReferencesTable(o.FromPos, table)
-                              || (o.ForLen is not null && ReferencesTable(o.ForLen, table)),
+            Expr.Overlay o => ReferencesTableInOverlay(o, table),
             Expr.InSubquery or Expr.Subquery or Expr.MatchAgainst => true,
             _ => false
         };
+
+    private static bool ReferencesTableInChildren(IEnumerable<Expr> exprs, string table) =>
+        exprs.Any(e => ReferencesTable(e, table));
+
+    private static bool ReferencesTableInCase(Expr.Case c, string table) =>
+        (c.Operand is not null && ReferencesTable(c.Operand, table))
+        || c.Conditions.Any(x => ReferencesTable(x.Condition, table) || ReferencesTable(x.Result, table))
+        || (c.ElseResult is not null && ReferencesTable(c.ElseResult, table));
+
+    private static bool ReferencesTableInSubstring(Expr.Substring s, string table) =>
+        ReferencesTable(s.Inner, table)
+        || (s.FromPos is not null && ReferencesTable(s.FromPos, table))
+        || (s.Len is not null && ReferencesTable(s.Len, table));
+
+    private static bool ReferencesTableInOverlay(Expr.Overlay o, string table) =>
+        ReferencesTable(o.Inner, table)
+        || ReferencesTable(o.OverlayWhat, table)
+        || ReferencesTable(o.FromPos, table)
+        || (o.ForLen is not null && ReferencesTable(o.ForLen, table));
 }
 
 public sealed class ProjectionPushdownRule : IOptimizationRule

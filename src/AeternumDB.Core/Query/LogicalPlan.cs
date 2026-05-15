@@ -147,7 +147,7 @@ public sealed class LogicalPlanBuilder(Catalog catalog)
             _ => throw new PlannerException(PlannerErrorKind.Other, "unsupported table reference")
         };
 
-    private LogicalPlan BuildNamedTable(string tableName, string? alias)
+    private LogicalPlan.Scan BuildNamedTable(string tableName, string? alias)
     {
         var lower = tableName.ToLowerInvariant();
         if (_catalog.GetTable(lower) is null)
@@ -156,7 +156,7 @@ public sealed class LogicalPlanBuilder(Catalog catalog)
         return new LogicalPlan.Scan(lower, alias, null, null);
     }
 
-    private LogicalPlan BuildJoin(TableReference left, TableReference right, JoinType joinType, Expr? filterBy)
+    private LogicalPlan.Join BuildJoin(TableReference left, TableReference right, JoinType joinType, Expr? filterBy)
     {
         var leftPlan = BuildTableRef(left);
         var rightPlan = BuildTableRef(right);
@@ -165,7 +165,7 @@ public sealed class LogicalPlanBuilder(Catalog catalog)
         return new LogicalPlan.Join(leftPlan, rightPlan, joinType, filterBy);
     }
 
-    private LogicalPlan ApplyProjection(LogicalPlan input, IReadOnlyList<SelectItem> items)
+    private static LogicalPlan ApplyProjection(LogicalPlan input, IReadOnlyList<SelectItem> items)
     {
         if (items.Count == 0 || (items.Count == 1 && items[0] is SelectItem.Wildcard))
             return input;

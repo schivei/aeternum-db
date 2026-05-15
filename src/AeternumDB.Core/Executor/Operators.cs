@@ -512,7 +512,8 @@ public sealed class NestedLoopJoinExec(
     public JoinType JoinType { get; } = joinType;
     public Expr? Condition { get; } = condition;
 
-    public IReadOnlyList<ColumnMeta> Schema => Left.Schema.Concat(Right.Schema).ToList();
+    private List<ColumnMeta>? _schema;
+    public IReadOnlyList<ColumnMeta> Schema => _schema ??= Left.Schema.Concat(Right.Schema).ToList();
 
     public async IAsyncEnumerable<RecordBatch> ExecuteAsync(IExecutionContext ctx)
     {
@@ -522,6 +523,16 @@ public sealed class NestedLoopJoinExec(
         var outSchema = leftSchema.Concat(rightSchema).ToList();
         var output = new List<DbRow>();
 
+        ProcessLeftRows(leftRows, rightRows, rightSchema, output);
+
+        if (JoinType is JoinType.Right || JoinType is JoinType.Full)
+            ProcessUnmatchedRightRows(leftRows, leftSchema, rightRows, output);
+
+        yield return new RecordBatch(output, outSchema);
+    }
+
+    private void ProcessLeftRows(List<DbRow> leftRows, List<DbRow> rightRows, IReadOnlyList<ColumnMeta> rightSchema, List<DbRow> output)
+    {
         foreach (var leftRow in leftRows)
         {
             bool matched = false;
@@ -529,8 +540,7 @@ public sealed class NestedLoopJoinExec(
             {
                 var joined = OperatorHelpers.MergeRows(leftRow, rightRow);
                 bool passes = Condition is null
-                    ? true
-                    : ExpressionEvaluator.Eval(Condition, joined).AsBool() == true;
+                    || ExpressionEvaluator.Eval(Condition, joined).AsBool() == true;
 
                 if (passes)
                 {
@@ -547,31 +557,25 @@ public sealed class NestedLoopJoinExec(
                 output.Add(outRow);
             }
         }
+    }
 
-        if (JoinType is JoinType.Right || JoinType is JoinType.Full)
+    private void ProcessUnmatchedRightRows(List<DbRow> leftRows, IReadOnlyList<ColumnMeta> leftSchema, List<DbRow> rightRows, List<DbRow> output)
+    {
+        foreach (var rightRow in rightRows)
         {
-            foreach (var rightRow in rightRows)
+            bool matched = leftRows.Any(leftRow =>
             {
-                bool matched = false;
-                foreach (var leftRow in leftRows)
-                {
-                    var joined = OperatorHelpers.MergeRows(leftRow, rightRow);
-                    bool passes = Condition is null
-                        ? true
-                        : ExpressionEvaluator.Eval(Condition, joined).AsBool() == true;
-                    if (passes) { matched = true; break; }
-                }
-                if (!matched)
-                {
-                    var outRow = new DbRow();
-                    foreach (var meta in leftSchema) outRow.Set(meta.Name, DbValue.Null.Instance);
-                    foreach (var kv in rightRow.Columns) outRow.Set(kv.Key, kv.Value);
-                    output.Add(outRow);
-                }
+                var joined = OperatorHelpers.MergeRows(leftRow, rightRow);
+                return Condition is null || ExpressionEvaluator.Eval(Condition, joined).AsBool() == true;
+            });
+            if (!matched)
+            {
+                var outRow = new DbRow();
+                foreach (var meta in leftSchema) outRow.Set(meta.Name, DbValue.Null.Instance);
+                foreach (var kv in rightRow.Columns) outRow.Set(kv.Key, kv.Value);
+                output.Add(outRow);
             }
         }
-
-        yield return new RecordBatch(output, outSchema);
     }
 }
 
@@ -593,7 +597,8 @@ public sealed class HashJoinExec(
     public IReadOnlyList<Expr> RightKeys { get; } = rightKeys;
     public Expr? Residual { get; } = residual;
 
-    public IReadOnlyList<ColumnMeta> Schema => Left.Schema.Concat(Right.Schema).ToList();
+    private List<ColumnMeta>? _schema;
+    public IReadOnlyList<ColumnMeta> Schema => _schema ??= Left.Schema.Concat(Right.Schema).ToList();
 
     public async IAsyncEnumerable<RecordBatch> ExecuteAsync(IExecutionContext ctx)
     {
@@ -620,8 +625,7 @@ public sealed class HashJoinExec(
             {
                 var joined = OperatorHelpers.MergeRows(leftRow, rightRow);
                 bool passes = Residual is null
-                    ? true
-                    : ExpressionEvaluator.Eval(Residual, joined).AsBool() == true;
+                    || ExpressionEvaluator.Eval(Residual, joined).AsBool() == true;
                 if (passes) output.Add(joined);
             }
         }
@@ -646,7 +650,8 @@ public sealed class SortMergeJoinExec(
     public IReadOnlyList<Expr> LeftKeys { get; } = leftKeys;
     public IReadOnlyList<Expr> RightKeys { get; } = rightKeys;
 
-    public IReadOnlyList<ColumnMeta> Schema => Left.Schema.Concat(Right.Schema).ToList();
+    private List<ColumnMeta>? _schema;
+    public IReadOnlyList<ColumnMeta> Schema => _schema ??= Left.Schema.Concat(Right.Schema).ToList();
 
     public async IAsyncEnumerable<RecordBatch> ExecuteAsync(IExecutionContext ctx)
     {
@@ -752,11 +757,8 @@ public sealed class HashAggregateExec(
                 outRow.Set(alias, accs[j].Finalize());
             }
 
-            if (Having is not null)
-            {
-                if (ExpressionEvaluator.Eval(Having, outRow).AsBool() != true)
-                    continue;
-            }
+            if (Having is not null && ExpressionEvaluator.Eval(Having, outRow).AsBool() != true)
+                continue;
             output.Add(outRow);
         }
 

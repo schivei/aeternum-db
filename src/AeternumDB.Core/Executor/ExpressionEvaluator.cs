@@ -15,6 +15,9 @@ using AeternumDB.Core.Types;
 public static class ExpressionEvaluator
 {
     private const double FloatingPointZeroTolerance = 1e-12;
+    private const string Numeric = "numeric";
+    private const string DivisionByZero = "Division by zero";
+    private const string StringType = "string";
 
     /// <summary>Evaluate an expression against a row, returning a DbValue.</summary>
     public static DbValue Eval(Expr expr, DbRow row) =>
@@ -68,22 +71,18 @@ public static class ExpressionEvaluator
 
             // Return null only if we truly can't find it — column may have a null value stored
             // Distinguish "stored null" from "column missing" by checking column set.
-            foreach (var kv in row.Columns)
-            {
-                if (string.Equals(kv.Key, qualified, StringComparison.OrdinalIgnoreCase)
-                    || string.Equals(kv.Key, name, StringComparison.OrdinalIgnoreCase))
-                    return kv.Value;
-            }
+            var col = row.Columns.FirstOrDefault(kv =>
+                string.Equals(kv.Key, qualified, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(kv.Key, name, StringComparison.OrdinalIgnoreCase));
+            if (col.Key is not null) return col.Value;
             throw new ExecutorException(ExecutorErrorKind.ColumnNotFound, $"Column not found: {qualified}");
         }
         else
         {
             // Check if the column exists (could be stored as Null)
-            foreach (var kv in row.Columns)
-            {
-                if (string.Equals(kv.Key, name, StringComparison.OrdinalIgnoreCase))
-                    return kv.Value;
-            }
+            var col = row.Columns.FirstOrDefault(kv =>
+                string.Equals(kv.Key, name, StringComparison.OrdinalIgnoreCase));
+            if (col.Key is not null) return col.Value;
             // Column not in row; for unqualified look-up this may just be NULL
             return DbValue.Null.Instance;
         }
@@ -161,7 +160,7 @@ public static class ExpressionEvaluator
             (DbValue.Float a, DbValue.Float b) => new DbValue.Float(a.Value + b.Value),
             (DbValue.Integer a, DbValue.Float b) => new DbValue.Float(a.Value + b.Value),
             (DbValue.Float a, DbValue.Integer b) => new DbValue.Float(a.Value + b.Value),
-            _ => throw TypeMismatch("numeric", lv, rv)
+            _ => throw TypeMismatch(Numeric, lv, rv)
         };
 
     private static DbValue EvalSub(DbValue lv, DbValue rv) =>
@@ -171,7 +170,7 @@ public static class ExpressionEvaluator
             (DbValue.Float a, DbValue.Float b) => new DbValue.Float(a.Value - b.Value),
             (DbValue.Integer a, DbValue.Float b) => new DbValue.Float(a.Value - b.Value),
             (DbValue.Float a, DbValue.Integer b) => new DbValue.Float(a.Value - b.Value),
-            _ => throw TypeMismatch("numeric", lv, rv)
+            _ => throw TypeMismatch(Numeric, lv, rv)
         };
 
     private static DbValue EvalMul(DbValue lv, DbValue rv) =>
@@ -181,33 +180,33 @@ public static class ExpressionEvaluator
             (DbValue.Float a, DbValue.Float b) => new DbValue.Float(a.Value * b.Value),
             (DbValue.Integer a, DbValue.Float b) => new DbValue.Float(a.Value * b.Value),
             (DbValue.Float a, DbValue.Integer b) => new DbValue.Float(a.Value * b.Value),
-            _ => throw TypeMismatch("numeric", lv, rv)
+            _ => throw TypeMismatch(Numeric, lv, rv)
         };
 
     private static DbValue EvalDiv(DbValue lv, DbValue rv)
     {
         return (lv, rv) switch
         {
-            (DbValue.Integer a, DbValue.Integer b) when b.Value == 0
-                => throw new ExecutorException(ExecutorErrorKind.EvalError, "Division by zero"),
+            (DbValue.Integer _, DbValue.Integer b) when b.Value == 0
+                => throw new ExecutorException(ExecutorErrorKind.EvalError, DivisionByZero),
             (DbValue.Integer a, DbValue.Integer b) => new DbValue.Integer(a.Value / b.Value),
-            (DbValue.Float a, DbValue.Float b) when Math.Abs(b.Value) <= FloatingPointZeroTolerance
-                => throw new ExecutorException(ExecutorErrorKind.EvalError, "Division by zero"),
+            (DbValue.Float _, DbValue.Float b) when Math.Abs(b.Value) <= FloatingPointZeroTolerance
+                => throw new ExecutorException(ExecutorErrorKind.EvalError, DivisionByZero),
             (DbValue.Float a, DbValue.Float b) => new DbValue.Float(a.Value / b.Value),
-            (DbValue.Integer a, DbValue.Float b) when Math.Abs(b.Value) <= FloatingPointZeroTolerance
-                => throw new ExecutorException(ExecutorErrorKind.EvalError, "Division by zero"),
+            (DbValue.Integer _, DbValue.Float b) when Math.Abs(b.Value) <= FloatingPointZeroTolerance
+                => throw new ExecutorException(ExecutorErrorKind.EvalError, DivisionByZero),
             (DbValue.Integer a, DbValue.Float b) => new DbValue.Float(a.Value / b.Value),
-            (DbValue.Float a, DbValue.Integer b) when b.Value == 0
-                => throw new ExecutorException(ExecutorErrorKind.EvalError, "Division by zero"),
+            (DbValue.Float _, DbValue.Integer b) when b.Value == 0
+                => throw new ExecutorException(ExecutorErrorKind.EvalError, DivisionByZero),
             (DbValue.Float a, DbValue.Integer b) => new DbValue.Float(a.Value / b.Value),
-            _ => throw TypeMismatch("numeric", lv, rv)
+            _ => throw TypeMismatch(Numeric, lv, rv)
         };
     }
 
-    private static DbValue EvalMod(DbValue lv, DbValue rv) =>
+    private static DbValue.Integer EvalMod(DbValue lv, DbValue rv) =>
         (lv, rv) switch
         {
-            (DbValue.Integer a, DbValue.Integer b) when b.Value == 0
+            (DbValue.Integer _, DbValue.Integer b) when b.Value == 0
                 => throw new ExecutorException(ExecutorErrorKind.EvalError, "Modulo by zero"),
             (DbValue.Integer a, DbValue.Integer b) => new DbValue.Integer(a.Value % b.Value),
             _ => throw TypeMismatch("integer", lv, rv)
@@ -247,15 +246,20 @@ public static class ExpressionEvaluator
     private static string LikeToRegex(string pattern)
     {
         var sb = new StringBuilder("^");
-        for (int i = 0; i < pattern.Length; i++)
+        int i = 0;
+        while (i < pattern.Length)
         {
             char c = pattern[i];
             if (c == '%') sb.Append(".*");
             else if (c == '_') sb.Append('.');
             else if (c == '\\' && i + 1 < pattern.Length)
-                sb.Append(Regex.Escape(pattern[++i].ToString()));
+            {
+                i++;
+                sb.Append(Regex.Escape(pattern[i].ToString()));
+            }
             else
                 sb.Append(Regex.Escape(c.ToString()));
+            i++;
         }
         sb.Append('$');
         return sb.ToString();
@@ -278,7 +282,7 @@ public static class ExpressionEvaluator
             {
                 DbValue.Integer i => new DbValue.Integer(-i.Value),
                 DbValue.Float f => new DbValue.Float(-f.Value),
-                _ => throw TypeMismatch("numeric", val)
+                _ => throw TypeMismatch(Numeric, val)
             },
             _ => val
         };
@@ -336,7 +340,7 @@ public static class ExpressionEvaluator
             null => DbValue.Null.Instance,
             DbValue.Integer i => new DbValue.Integer(Math.Abs(i.Value)),
             DbValue.Float f => new DbValue.Float(Math.Abs(f.Value)),
-            _ => throw TypeMismatch("numeric", args[0])
+            _ => throw TypeMismatch(Numeric, args[0])
         };
     }
 
@@ -386,7 +390,7 @@ public static class ExpressionEvaluator
         {
             DbValue.Float f => new DbValue.Float(Math.Round(f.Value, decimals, MidpointRounding.AwayFromZero)),
             DbValue.Integer i => new DbValue.Integer(i.Value),
-            _ => throw TypeMismatch("numeric", args[0])
+            _ => throw TypeMismatch(Numeric, args[0])
         };
     }
 
@@ -398,7 +402,7 @@ public static class ExpressionEvaluator
             null => DbValue.Null.Instance,
             DbValue.Float f => new DbValue.Integer((long)Math.Floor(f.Value)),
             DbValue.Integer i => new DbValue.Integer(i.Value),
-            _ => throw TypeMismatch("numeric", args[0])
+            _ => throw TypeMismatch(Numeric, args[0])
         };
     }
 
@@ -410,7 +414,7 @@ public static class ExpressionEvaluator
             null => DbValue.Null.Instance,
             DbValue.Float f => new DbValue.Integer((long)Math.Ceiling(f.Value)),
             DbValue.Integer i => new DbValue.Integer(i.Value),
-            _ => throw TypeMismatch("numeric", args[0])
+            _ => throw TypeMismatch(Numeric, args[0])
         };
     }
 
@@ -422,7 +426,7 @@ public static class ExpressionEvaluator
             null => DbValue.Null.Instance,
             DbValue.Float f => new DbValue.Float(Math.Sqrt(f.Value)),
             DbValue.Integer i => new DbValue.Float(Math.Sqrt(i.Value)),
-            _ => throw TypeMismatch("numeric", args[0])
+            _ => throw TypeMismatch(Numeric, args[0])
         };
     }
 
@@ -430,7 +434,7 @@ public static class ExpressionEvaluator
     {
         if (args.Length < 2 || args[0].IsNull) return DbValue.Null.Instance;
         if (args[0] is not DbValue.Text t)
-            throw TypeMismatch("string", args[0]);
+            throw TypeMismatch(StringType, args[0]);
         int from = (int)(args[1].AsInteger() ?? 1) - 1;
         if (from < 0) from = 0;
         if (from >= t.Value.Length) return new DbValue.Text(string.Empty);
@@ -442,7 +446,7 @@ public static class ExpressionEvaluator
         return new DbValue.Text(t.Value[from..]);
     }
 
-    private static DbValue EvalConcatFn(DbValue[] args)
+    private static DbValue.Text EvalConcatFn(DbValue[] args)
     {
         var sb = new StringBuilder();
         foreach (var a in args)
@@ -458,7 +462,7 @@ public static class ExpressionEvaluator
         if (args.Length != 3) throw ArgCountError("REPLACE", 3, args.Length);
         if (args[0].IsNull) return DbValue.Null.Instance;
         if (args[0] is not DbValue.Text src)
-            throw TypeMismatch("string", args[0]);
+            throw TypeMismatch(StringType, args[0]);
         var from = args[1].AsString() ?? string.Empty;
         var to = args[2].AsString() ?? string.Empty;
         return new DbValue.Text(src.Value.Replace(from, to, StringComparison.Ordinal));
@@ -485,7 +489,7 @@ public static class ExpressionEvaluator
         RequireOne("EXP", args, out var val);
         if (val is null) return DbValue.Null.Instance;
         double? d = val.AsFloat();
-        return d.HasValue ? new DbValue.Float(Math.Exp(d.Value)) : throw TypeMismatch("numeric", val);
+        return d.HasValue ? new DbValue.Float(Math.Exp(d.Value)) : throw TypeMismatch(Numeric, val);
     }
 
     private static DbValue EvalLog(DbValue[] args)
@@ -493,7 +497,7 @@ public static class ExpressionEvaluator
         RequireOne("LOG", args, out var val);
         if (val is null) return DbValue.Null.Instance;
         double? d = val.AsFloat();
-        return d.HasValue ? new DbValue.Float(Math.Log(d.Value)) : throw TypeMismatch("numeric", val);
+        return d.HasValue ? new DbValue.Float(Math.Log(d.Value)) : throw TypeMismatch(Numeric, val);
     }
 
     private static DbValue EvalSign(DbValue[] args)
@@ -504,7 +508,7 @@ public static class ExpressionEvaluator
         {
             DbValue.Integer i => new DbValue.Integer(Math.Sign(i.Value)),
             DbValue.Float f => new DbValue.Integer(Math.Sign(f.Value)),
-            _ => throw TypeMismatch("numeric", val)
+            _ => throw TypeMismatch(Numeric, val)
         };
     }
 
@@ -647,7 +651,7 @@ public static class ExpressionEvaluator
 
     // ── IS NULL ───────────────────────────────────────────────────────────────
 
-    private static DbValue EvalIsNull(Expr inner, bool negated, DbRow row)
+    private static DbValue.Boolean EvalIsNull(Expr inner, bool negated, DbRow row)
     {
         var val = Eval(inner, row);
         return new DbValue.Boolean(negated ? !val.IsNull : val.IsNull);
@@ -659,7 +663,7 @@ public static class ExpressionEvaluator
     {
         var val = Eval(inner, row);
         if (val.IsNull) return DbValue.Null.Instance;
-        if (val is not DbValue.Text t) throw TypeMismatch("string", val);
+        if (val is not DbValue.Text t) throw TypeMismatch(StringType, val);
 
         int from = fromPos is not null
             ? (int)(Eval(fromPos, row).AsInteger() ?? 1) - 1
@@ -685,7 +689,7 @@ public static class ExpressionEvaluator
     {
         var val = Eval(inner, row);
         if (val.IsNull) return DbValue.Null.Instance;
-        if (val is not DbValue.Text t) throw TypeMismatch("string", val);
+        if (val is not DbValue.Text t) throw TypeMismatch(StringType, val);
 
         char[]? chars = null;
         if (trimWhat is not null)
@@ -711,7 +715,7 @@ public static class ExpressionEvaluator
         var inVal = Eval(inExpr, row);
         if (subVal.IsNull || inVal.IsNull) return DbValue.Null.Instance;
         if (subVal is not DbValue.Text sub || inVal is not DbValue.Text src)
-            throw TypeMismatch("string", subVal);
+            throw TypeMismatch(StringType, subVal);
 
         int idx = src.Value.IndexOf(sub.Value, StringComparison.Ordinal);
         return new DbValue.Integer(idx < 0 ? 0 : idx + 1);
@@ -757,7 +761,7 @@ public static class ExpressionEvaluator
         RequireOne(fn, args, out var v);
         if (v is null) { val = null; return; }
         if (v is DbValue.Text t) { val = t.Value; return; }
-        throw TypeMismatch("string", v);
+        throw TypeMismatch(StringType, v);
     }
 
     private static ExecutorException TypeMismatch(string expected, params DbValue[] got) =>

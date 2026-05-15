@@ -224,10 +224,5 @@ public sealed class FileManager : IFileManager
     private static bool IsHeaderFree(byte[] buf) =>
         buf[8] == (byte)PageType.Free || IsAllZero(buf);
 
-    private static bool IsAllZero(byte[] buf)
-    {
-        foreach (var b in buf)
-            if (b != 0) return false;
-        return true;
-    }
+    private static bool IsAllZero(byte[] buf) => buf.All(b => b == 0);
 }

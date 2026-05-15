@@ -38,14 +38,8 @@ public sealed class TableSchema
     }
 
     /// <summary>Look up a column by name (case-insensitive).</summary>
-    public ColumnSchema? GetColumn(string name)
-    {
-        var lower = name.ToLowerInvariant();
-        foreach (var col in Columns)
-            if (col.Name.ToLowerInvariant() == lower)
-                return col;
-        return null;
-    }
+    public ColumnSchema? GetColumn(string name) =>
+        Columns.FirstOrDefault(col => string.Equals(col.Name, name, StringComparison.OrdinalIgnoreCase));
 }
 
 // ── User-defined type catalog ─────────────────────────────────────────────────
@@ -136,10 +130,9 @@ public sealed class Catalog
     /// <summary>Returns true if any column in any table references this type via EnumRef.</summary>
     public bool IsTypeInUse(string name)
     {
-        var lower = name.ToLowerInvariant();
         foreach (var table in _tables.Values)
             foreach (var col in table.Columns)
-                if (col.DataType is DataType.EnumRef er && er.Name.ToLowerInvariant() == lower)
+                if (col.DataType is DataType.EnumRef er && string.Equals(er.Name, name, StringComparison.OrdinalIgnoreCase))
                     return true;
         return false;
     }
@@ -148,25 +141,25 @@ public sealed class Catalog
 // ── Validation errors ─────────────────────────────────────────────────────────
 
 /// <summary>Errors produced by semantic validation.</summary>
-public abstract class ValidationError : Exception
+public abstract class ValidationException : Exception
 {
-    protected ValidationError(string message) : base(message) { }
+    protected ValidationException(string message) : base(message) { }
 
     public sealed class TableNotFound(string table)
-        : ValidationError($"table '{table}' does not exist")
+        : ValidationException($"table '{table}' does not exist")
     {
         public string Table { get; } = table;
     }
 
     public sealed class ColumnNotFound(string table, string column)
-        : ValidationError($"column '{column}' does not exist in table '{table}'")
+        : ValidationException($"column '{column}' does not exist in table '{table}'")
     {
         public string Table { get; } = table;
         public string Column { get; } = column;
     }
 
     public sealed class TypeMismatch(DataType expected, DataType found, string context)
-        : ValidationError($"type mismatch in {context}: expected {expected}, found {found}")
+        : ValidationException($"type mismatch in {context}: expected {expected}, found {found}")
     {
         public DataType Expected { get; } = expected;
         public DataType Found { get; } = found;
@@ -174,52 +167,52 @@ public abstract class ValidationError : Exception
     }
 
     public sealed class InvalidAggregateUsage(string message)
-        : ValidationError($"invalid aggregate usage: {message}") { }
+        : ValidationException($"invalid aggregate usage: {message}") { }
 
     public sealed class NullConstraintViolation(string table, string column)
-        : ValidationError($"null constraint violation: column '{column}' in table '{table}' is NOT NULL")
+        : ValidationException($"null constraint violation: column '{column}' in table '{table}' is NOT NULL")
     {
         public string Table { get; } = table;
         public string Column { get; } = column;
     }
 
     public sealed class ConstraintViolation(string message)
-        : ValidationError($"constraint violation: {message}") { }
+        : ValidationException($"constraint violation: {message}") { }
 
     public sealed class TypeNotFound(string name)
-        : ValidationError($"user-defined type '{name}' does not exist") { }
+        : ValidationException($"user-defined type '{name}' does not exist") { }
 
     public sealed class TypeInUse(string name)
-        : ValidationError($"cannot drop type '{name}': it is still referenced by one or more columns") { }
+        : ValidationException($"cannot drop type '{name}': it is still referenced by one or more columns") { }
 
     public sealed class InvalidEnumValue(string column, string value)
-        : ValidationError($"invalid enum value '{value}' for column '{column}'")
+        : ValidationException($"invalid enum value '{value}' for column '{column}'")
     {
         public string Column { get; } = column;
         public string Value { get; } = value;
     }
 
     public sealed class NoActiveTransaction()
-        : ValidationError("no active transaction") { }
+        : ValidationException("no active transaction") { }
 
     public sealed class TransactionNameConflict(string name)
-        : ValidationError($"transaction name '{name}' is already in use in this session") { }
+        : ValidationException($"transaction name '{name}' is already in use in this session") { }
 
     public sealed class TransactionNotFound(string name)
-        : ValidationError($"transaction '{name}' is not active in the current session") { }
+        : ValidationException($"transaction '{name}' is not active in the current session") { }
 
     public sealed class TransactionNestingViolation(string target, string blocking)
-        : ValidationError($"cannot commit or rollback transaction '{target}': nested transaction '{blocking}' is still open")
+        : ValidationException($"cannot commit or rollback transaction '{target}': nested transaction '{blocking}' is still open")
     {
         public string Target { get; } = target;
         public string Blocking { get; } = blocking;
     }
 
     public sealed class ViewAsAggregateNotAllowed(string func)
-        : ValidationError($"aggregate function '{func}' is not allowed in a VIEW AS clause") { }
+        : ValidationException($"aggregate function '{func}' is not allowed in a VIEW AS clause") { }
 
     public sealed class ViewAsSubqueryNotAllowed()
-        : ValidationError("sub-selects are not allowed in a VIEW AS clause") { }
+        : ValidationException("sub-selects are not allowed in a VIEW AS clause") { }
 }
 
 // ── SqlValidator ──────────────────────────────────────────────────────────────
@@ -271,7 +264,7 @@ public sealed class SqlValidator
                     SeqRollback(stack, r.Stmt.Scope);
                     break;
                 case Statement.Savepoint or Statement.ReleaseSavepoint when stack.Count == 0:
-                    throw new ValidationError.NoActiveTransaction();
+                    throw new ValidationException.NoActiveTransaction();
                 default:
                     break;
             }
@@ -352,7 +345,7 @@ public sealed class SqlValidator
             var resolved = aliases.TryGetValue(tbl, out var rt) ? rt : tbl;
             RequireTable(resolved);
             var schema = _catalog.GetTable(resolved)
-                ?? throw new ValidationError.TableNotFound(resolved);
+                ?? throw new ValidationException.TableNotFound(resolved);
             RequireColumn(schema, col.Name);
             return;
         }
@@ -364,11 +357,7 @@ public sealed class SqlValidator
         switch (expr)
         {
             case Expr.Column c:
-                if (defaultTable != null)
-                {
-                    var schema = _catalog.GetTable(defaultTable);
-                    if (schema != null) RequireColumn(schema, c.Name);
-                }
+                ValidateColumnExpr(c, defaultTable);
                 break;
             case Expr.BinaryOp b:
                 ValidateExpr(b.Left, defaultTable);
@@ -407,14 +396,10 @@ public sealed class SqlValidator
                 ValidateExpr(c.Inner, defaultTable);
                 break;
             case Expr.Case c:
-                if (c.Operand != null) ValidateExpr(c.Operand, defaultTable);
-                foreach (var (cond, res) in c.Conditions) { ValidateExpr(cond, defaultTable); ValidateExpr(res, defaultTable); }
-                if (c.ElseResult != null) ValidateExpr(c.ElseResult, defaultTable);
+                ValidateCaseExpr(c, defaultTable);
                 break;
             case Expr.Substring s:
-                ValidateExpr(s.Inner, defaultTable);
-                if (s.FromPos != null) ValidateExpr(s.FromPos, defaultTable);
-                if (s.Len != null) ValidateExpr(s.Len, defaultTable);
+                ValidateSubstringExpr(s, defaultTable);
                 break;
             case Expr.Trim t:
                 ValidateExpr(t.Inner, defaultTable);
@@ -422,9 +407,32 @@ public sealed class SqlValidator
                 break;
             case Expr.Literal or Expr.Wildcard:
                 break;
-            default:
-                break;
         }
+    }
+
+    private void ValidateColumnExpr(Expr.Column c, string? defaultTable)
+    {
+        if (defaultTable == null) return;
+        var schema = _catalog.GetTable(defaultTable);
+        if (schema != null) RequireColumn(schema, c.Name);
+    }
+
+    private void ValidateCaseExpr(Expr.Case c, string? defaultTable)
+    {
+        if (c.Operand != null) ValidateExpr(c.Operand, defaultTable);
+        foreach (var (cond, res) in c.Conditions)
+        {
+            ValidateExpr(cond, defaultTable);
+            ValidateExpr(res, defaultTable);
+        }
+        if (c.ElseResult != null) ValidateExpr(c.ElseResult, defaultTable);
+    }
+
+    private void ValidateSubstringExpr(Expr.Substring s, string? defaultTable)
+    {
+        ValidateExpr(s.Inner, defaultTable);
+        if (s.FromPos != null) ValidateExpr(s.FromPos, defaultTable);
+        if (s.Len != null) ValidateExpr(s.Len, defaultTable);
     }
 
     private void ValidateInsert(InsertStatement ins)
@@ -441,7 +449,7 @@ public sealed class SqlValidator
         foreach (var row in ins.Values)
         {
             if (row.Count != ins.Columns.Count)
-                throw new ValidationError.ConstraintViolation(
+                throw new ValidationException.ConstraintViolation(
                     $"INSERT column count ({ins.Columns.Count}) does not match value count ({row.Count})");
 
             for (int i = 0; i < ins.Columns.Count; i++)
@@ -449,7 +457,7 @@ public sealed class SqlValidator
                 var colName = ins.Columns[i];
                 var col = schema.GetColumn(colName);
                 if (col != null && !col.Nullable && row[i] is Expr.Literal { Value: SqlValue.Null })
-                    throw new ValidationError.NullConstraintViolation(ins.Table, colName);
+                    throw new ValidationException.NullConstraintViolation(ins.Table, colName);
             }
         }
 
@@ -457,7 +465,7 @@ public sealed class SqlValidator
         foreach (var col in schema.Columns)
         {
             if (!col.Nullable && !ins.Columns.Any(c => c.Equals(col.Name, StringComparison.OrdinalIgnoreCase)))
-                throw new ValidationError.NullConstraintViolation(ins.Table, col.Name);
+                throw new ValidationException.NullConstraintViolation(ins.Table, col.Name);
         }
     }
 
@@ -472,7 +480,7 @@ public sealed class SqlValidator
             RequireColumn(schema, col);
             var colMeta = schema.GetColumn(col);
             if (colMeta != null && !colMeta.Nullable && val is Expr.Literal { Value: SqlValue.Null })
-                throw new ValidationError.NullConstraintViolation(upd.Table, col);
+                throw new ValidationException.NullConstraintViolation(upd.Table, col);
         }
         if (upd.WhereClause != null) ValidateExpr(upd.WhereClause, upd.Table);
     }
@@ -489,7 +497,7 @@ public sealed class SqlValidator
         foreach (var col in ct.Columns)
         {
             if (col.DataType is DataType.EnumRef er && !_catalog.TypeExists(er.Name))
-                throw new ValidationError.TypeNotFound(er.Name);
+                throw new ValidationException.TypeNotFound(er.Name);
         }
     }
 
@@ -513,18 +521,18 @@ public sealed class SqlValidator
         }
     }
 
-    private void ValidateCreateEnum(CreateEnumStatement ce)
+    private static void ValidateCreateEnum(CreateEnumStatement ce)
     {
         if (ce.Variants.Count == 0)
-            throw new ValidationError.ConstraintViolation($"enum '{ce.Name}' must have at least one variant");
+            throw new ValidationException.ConstraintViolation($"enum '{ce.Name}' must have at least one variant");
     }
 
     private void ValidateDropEnum(DropEnumStatement de)
     {
         if (!de.IfExists && !_catalog.TypeExists(de.Name))
-            throw new ValidationError.TypeNotFound(de.Name);
+            throw new ValidationException.TypeNotFound(de.Name);
         if (_catalog.IsTypeInUse(de.Name))
-            throw new ValidationError.TypeInUse(de.Name);
+            throw new ValidationException.TypeInUse(de.Name);
     }
 
     private void ValidateViewAsItem(ViewAsItem item)
@@ -536,21 +544,21 @@ public sealed class SqlValidator
     private void CheckNoAggregateInViewAs(Expr expr)
     {
         if (expr is Expr.Function f && IsAggregate(f.Name))
-            throw new ValidationError.ViewAsAggregateNotAllowed(f.Name);
+            throw new ValidationException.ViewAsAggregateNotAllowed(f.Name);
         WalkExpr(expr, CheckNoAggregateInViewAs);
     }
 
     private void CheckNoSubqueryInViewAs(Expr expr)
     {
         if (expr is Expr.Subquery)
-            throw new ValidationError.ViewAsSubqueryNotAllowed();
+            throw new ValidationException.ViewAsSubqueryNotAllowed();
         WalkExpr(expr, CheckNoSubqueryInViewAs);
     }
 
     private void CheckNoAggregateInWhere(Expr expr)
     {
         if (expr is Expr.Function f && IsAggregate(f.Name))
-            throw new ValidationError.InvalidAggregateUsage($"aggregate '{f.Name}' not allowed in WHERE clause");
+            throw new ValidationException.InvalidAggregateUsage($"aggregate '{f.Name}' not allowed in WHERE clause");
         WalkExpr(expr, CheckNoAggregateInWhere);
     }
 
@@ -593,32 +601,28 @@ public sealed class SqlValidator
     private void RequireTable(string name)
     {
         if (!_catalog.TableExists(name))
-            throw new ValidationError.TableNotFound(name);
+            throw new ValidationException.TableNotFound(name);
     }
 
     private static void RequireColumn(TableSchema schema, string column)
     {
         if (schema.GetColumn(column) == null)
-            throw new ValidationError.ColumnNotFound(schema.Name, column);
+            throw new ValidationException.ColumnNotFound(schema.Name, column);
     }
 
     // ── Transaction sequence helpers ───────────────────────────────────────────
 
     private static void SeqBegin(List<string?> stack, string? name)
     {
-        if (name != null)
-        {
-            foreach (var open in stack)
-                if (open != null && open.Equals(name, StringComparison.OrdinalIgnoreCase))
-                    throw new ValidationError.TransactionNameConflict(name);
-        }
+        if (name != null && stack.Any(open => open != null && open.Equals(name, StringComparison.OrdinalIgnoreCase)))
+            throw new ValidationException.TransactionNameConflict(name);
         stack.Add(name);
     }
 
     private static void SeqCommit(List<string?> stack, CommitScope scope)
     {
         if (stack.Count == 0)
-            throw new ValidationError.NoActiveTransaction();
+            throw new ValidationException.NoActiveTransaction();
 
         switch (scope)
         {
@@ -630,11 +634,11 @@ public sealed class SqlValidator
                 break;
             case CommitScope.Named n:
                 var idx = FindTransaction(stack, n.Name);
-                if (idx < 0) throw new ValidationError.TransactionNotFound(n.Name);
+                if (idx < 0) throw new ValidationException.TransactionNotFound(n.Name);
                 if (idx < stack.Count - 1)
                 {
                     var blocking = stack[^1] ?? "(anonymous)";
-                    throw new ValidationError.TransactionNestingViolation(n.Name, blocking);
+                    throw new ValidationException.TransactionNestingViolation(n.Name, blocking);
                 }
                 stack.RemoveAt(idx);
                 break;
@@ -644,7 +648,7 @@ public sealed class SqlValidator
     private static void SeqRollback(List<string?> stack, RollbackScope scope)
     {
         if (stack.Count == 0)
-            throw new ValidationError.NoActiveTransaction();
+            throw new ValidationException.NoActiveTransaction();
 
         switch (scope)
         {
@@ -659,11 +663,11 @@ public sealed class SqlValidator
                 break;
             case RollbackScope.Named n:
                 var idx = FindTransaction(stack, n.Name);
-                if (idx < 0) throw new ValidationError.TransactionNotFound(n.Name);
+                if (idx < 0) throw new ValidationException.TransactionNotFound(n.Name);
                 if (idx < stack.Count - 1)
                 {
                     var blocking = stack[^1] ?? "(anonymous)";
-                    throw new ValidationError.TransactionNestingViolation(n.Name, blocking);
+                    throw new ValidationException.TransactionNestingViolation(n.Name, blocking);
                 }
                 stack.RemoveAt(idx);
                 break;
