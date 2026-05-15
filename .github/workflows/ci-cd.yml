@@ -1,0 +1,341 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'src/**'
+      - 'website/**'
+      - '.github/workflows/ci-cd.yml'
+  pull_request:
+    branches: [ '*' ]
+  workflow_dispatch:
+
+env:
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 1
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: 1
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  # ── Website Build ────────────────────────────────────────────────────────────
+  site-build:
+    name: 🌐 Build Documentation Site
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: ./website
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: './website/package-lock.json'
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Build website
+        run: npm run build
+
+  # ── .NET Build & Test ────────────────────────────────────────────────────────
+  build-and-test:
+    name: 🔨 Build and Test (.NET)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET SDK 10.x
+        uses: actions/setup-dotnet@c2fa09f4bde5ebb9d1777cf28262a3eb3db3ced7 # v5.2.0
+        with:
+          dotnet-version: '10.x'
+
+      - name: Install SonarScanner for .NET
+        if: ${{ (github.event_name == 'pull_request' || github.ref == 'refs/heads/main') && env.SONAR_TOKEN != '' }}
+        run: |
+          dotnet tool install --global dotnet-sonarscanner --version 11.2.1 || \
+            dotnet tool update --global dotnet-sonarscanner --version 11.2.1
+          echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
+
+      - name: Begin SonarCloud analysis
+        if: ${{ (github.event_name == 'pull_request' || github.ref == 'refs/heads/main') && env.SONAR_TOKEN != '' }}
+        env:
+          SONAR_PROJECT_KEY: schivei_aeternum-db
+          SONAR_ORGANIZATION: schivei
+          SONAR_HOST_URL: https://sonarcloud.io
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BRANCH: ${{ github.head_ref }}
+          PR_BASE: ${{ github.base_ref }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          SONAR_ARGS=(
+            "/k:${SONAR_PROJECT_KEY}"
+            "/o:${SONAR_ORGANIZATION}"
+            "/d:sonar.host.url=${SONAR_HOST_URL}"
+            "/d:sonar.token=${SONAR_TOKEN}"
+            "/d:sonar.cs.cobertura.reportsPaths=coverage/**/coverage.cobertura.xml"
+            "/d:sonar.coverage.exclusions=.github/**"
+            "/d:sonar.exclusions=**/website/**,website/**"
+            "/d:sonar.cpd.exclusions=.github/**,**/website/**,website/**"
+            "/d:sonar.test.exclusions=**/website/**,website/**"
+          )
+
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            SONAR_ARGS+=(
+              "/d:sonar.pullrequest.key=${PR_NUMBER}"
+              "/d:sonar.pullrequest.branch=${PR_BRANCH}"
+              "/d:sonar.pullrequest.base=${PR_BASE}"
+            )
+          else
+            SONAR_ARGS+=("/d:sonar.branch.name=${REF_NAME}")
+          fi
+
+          dotnet-sonarscanner begin "${SONAR_ARGS[@]}"
+
+      - name: Cache NuGet packages
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: Restore dependencies
+        working-directory: ./src
+        run: dotnet restore AeternumDB.slnx
+
+      - name: Build AeternumDB.Core
+        working-directory: ./src
+        run: dotnet build AeternumDB.Core/AeternumDB.Core.csproj --configuration Release --no-restore
+
+      - name: Build AeternumDB.Core.Tests
+        working-directory: ./src
+        run: dotnet build AeternumDB.Core.Tests/AeternumDB.Core.Tests.csproj --configuration Release --no-restore
+
+      - name: Run tests with coverage
+        working-directory: ./src
+        run: |
+          dotnet test AeternumDB.slnx \
+            --configuration Release \
+            --no-build \
+            --verbosity normal \
+            --collect:"XPlat Code Coverage" \
+            --results-directory ../coverage
+
+      - name: Enforce 80% line coverage
+        run: |
+          python3 << 'PYEOF'
+          import xml.etree.ElementTree as ET, os, sys
+
+          xml_files = [
+              os.path.join(r, f)
+              for r, _, files in os.walk('./coverage')
+              for f in files if f == 'coverage.cobertura.xml'
+          ]
+          if not xml_files:
+              print("No coverage.cobertura.xml found.", file=sys.stderr)
+              sys.exit(1)
+
+          merged: dict = {}
+          for xml_file in xml_files:
+              root = ET.parse(xml_file).getroot()
+              for cls in root.findall('.//class'):
+                  filename = cls.get('filename', '')
+                  norm = filename.replace('\\', '/')
+                  if '/obj/' in norm:
+                      continue
+                  if not (norm.startswith('AeternumDB') or norm.startswith('src/')):
+                      continue
+                  for line in cls.findall('./lines/line'):
+                      hits = int(line.get('hits', 0) or 0)
+                      lnum = int(line.get('number', 0) or 0)
+                      key = (filename, lnum)
+                      merged[key] = max(merged.get(key, 0), hits)
+
+          total   = len(merged)
+          covered = sum(1 for hits in merged.values() if hits > 0)
+
+          if total == 0:
+              print("⚠️  No trackable source lines found — skipping gate.", file=sys.stderr)
+              sys.exit(0)
+
+          pct = 100.0 * covered / total
+          THRESHOLD = 80.0
+          status = '✅' if pct >= THRESHOLD else '❌'
+          print(f"{status} Line coverage: {pct:.1f}% ({covered}/{total} lines) — threshold {THRESHOLD:.0f}%")
+
+          if pct < THRESHOLD:
+              sys.exit(1)
+          PYEOF
+
+      - name: Generate coverage summary
+        if: always()
+        run: |
+          python3 << 'PYEOF'
+          import xml.etree.ElementTree as ET, os, sys
+
+          xml_files = [
+              os.path.join(r, f)
+              for r, _, files in os.walk('./coverage')
+              for f in files if f == 'coverage.cobertura.xml'
+          ]
+
+          merged_lines = {}
+          merged_branches = {}
+
+          for xml_file in xml_files:
+              root = ET.parse(xml_file).getroot()
+              for cls in root.findall('.//class'):
+                  filename = cls.get('filename')
+                  if not filename or '/obj/' in filename.replace('\\', '/'):
+                      continue
+                  for line in cls.findall('./lines/line'):
+                      line_number = int(line.get('number', 0) or 0)
+                      hits = int(line.get('hits', 0) or 0)
+                      line_key = (filename, line_number)
+                      merged_lines[line_key] = max(merged_lines.get(line_key, 0), hits)
+
+                      if line.get('branch') == 'True':
+                          coverage = line.get('condition-coverage', '')
+                          if '(' in coverage and '/' in coverage:
+                              fraction = coverage.split('(', 1)[1].split(')', 1)[0]
+                              cov_part, tot_part = fraction.split('/', 1)
+                              covered_b, valid_b = int(cov_part), int(tot_part)
+                          else:
+                              covered_b = 1 if hits > 0 else 0
+                              valid_b = 1
+                          branch_key = (filename, line_number)
+                          prev_c, prev_v = merged_branches.get(branch_key, (0, 0))
+                          merged_branches[branch_key] = (max(prev_c, covered_b), max(prev_v, valid_b))
+
+          total_valid   = len(merged_lines)
+          total_covered = sum(1 for h in merged_lines.values() if h > 0)
+          bv = sum(v for _, v in merged_branches.values())
+          bc = sum(c for c, _ in merged_branches.values())
+
+          lr = (total_covered / total_valid * 100) if total_valid > 0 else 0.0
+          br = (bc / bv * 100) if bv > 0 else 0.0
+
+          summary = [
+              "## 📊 Code Coverage Report",
+              "",
+              "| Metric | Coverage |",
+              "|--------|----------|",
+              f"| **Lines** | {lr:.1f}% ({total_covered}/{total_valid} lines) |",
+              f"| **Branches** | {br:.1f}% |",
+              "",
+              "<sub>Generated by CI from `dotnet test --collect:\"XPlat Code Coverage\"`</sub>",
+          ]
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f:
+              f.write('\n'.join(summary) + '\n')
+          PYEOF
+
+      - name: End SonarCloud analysis
+        if: ${{ always() && (github.event_name == 'pull_request' || github.ref == 'refs/heads/main') && env.SONAR_TOKEN != '' }}
+        run: dotnet-sonarscanner end "/d:sonar.token=${SONAR_TOKEN}"
+
+      - name: Post coverage summary to PR
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          python3 << 'PYEOF'
+          import xml.etree.ElementTree as ET, os, subprocess, sys
+
+          MARKER = "<!-- aeternumdb-coverage-report -->"
+
+          xml_files = [
+              os.path.join(r, f)
+              for r, _, files in os.walk('./coverage')
+              for f in files if f == 'coverage.cobertura.xml'
+          ]
+          if not xml_files:
+              print("No coverage.cobertura.xml found, skipping PR comment.")
+              sys.exit(0)
+
+          merged_lines = {}
+          merged_branches = {}
+          for xml_file in xml_files:
+              root = ET.parse(xml_file).getroot()
+              for cls in root.findall('.//class'):
+                  filename = cls.get('filename')
+                  if not filename or '/obj/' in filename.replace('\\', '/'):
+                      continue
+                  for line in cls.findall('./lines/line'):
+                      lnum = int(line.get('number', 0) or 0)
+                      hits = int(line.get('hits', 0) or 0)
+                      line_key = (filename, lnum)
+                      merged_lines[line_key] = max(merged_lines.get(line_key, 0), hits)
+                      if line.get('branch') == 'True':
+                          cov_str = line.get('condition-coverage', '')
+                          if '(' in cov_str and '/' in cov_str:
+                              frac = cov_str.split('(', 1)[1].split(')', 1)[0]
+                              c, v = int(frac.split('/')[0]), int(frac.split('/')[1])
+                          else:
+                              c, v = (1 if hits > 0 else 0), 1
+                          bk = (filename, lnum)
+                          pc, pv = merged_branches.get(bk, (0, 0))
+                          merged_branches[bk] = (max(pc, c), max(pv, v))
+
+          tv   = len(merged_lines)
+          tc   = sum(1 for h in merged_lines.values() if h > 0)
+          bv   = sum(v for _, v in merged_branches.values())
+          bc   = sum(c for c, _ in merged_branches.values())
+          lr   = (tc / tv * 100) if tv > 0 else 0.0
+          br   = (bc / bv * 100) if bv > 0 else 0.0
+          emoji = '✅' if lr >= 80 else '⚠️' if lr >= 60 else '❌'
+          sha  = os.environ['COMMIT_SHA'][:7]
+
+          comment = (
+              f"{MARKER}\n\n"
+              f"## {emoji} Code Coverage Report — `{sha}`\n\n"
+              f"| Metric | Coverage |\n"
+              f"|--------|----------|\n"
+              f"| **Lines** | {lr:.1f}% ({tc}/{tv} lines) |\n"
+              f"| **Branches** | {br:.1f}% |\n\n"
+              f"<sub>Generated by CI from `dotnet test --collect:\"XPlat Code Coverage\"`</sub>"
+          )
+
+          pr   = os.environ['PR_NUMBER']
+          repo = os.environ['REPO']
+
+          list_result = subprocess.run(
+              ['gh', 'api', f'repos/{repo}/issues/{pr}/comments',
+               '--jq', f'[.[] | select(.body | startswith("{MARKER}")) | .id][0]'],
+              capture_output=True, text=True
+          )
+          comment_id = list_result.stdout.strip()
+
+          if comment_id and comment_id not in ('null', ''):
+              subprocess.run(
+                  ['gh', 'api', f'repos/{repo}/issues/comments/{comment_id}',
+                   '-X', 'PATCH', '-f', f'body={comment}'],
+                  check=True
+              )
+              print(f"Updated existing coverage comment {comment_id}.")
+          else:
+              subprocess.run(
+                  ['gh', 'pr', 'comment', pr, '--repo', repo, '--body', comment],
+                  check=True
+              )
+              print("Created new coverage comment.")
+          PYEOF
