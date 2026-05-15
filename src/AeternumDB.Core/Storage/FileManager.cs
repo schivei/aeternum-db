@@ -148,6 +148,7 @@ public sealed class FileManager : IFileManager
 
     private async Task ExtendFileAsync(int newCount)
     {
+        var oldCount = _bitmap.Count;
         long newSize = (long)newCount * _pageSize;
         // Extend file to newSize by writing a zero byte at the last position
         await RandomAccess.WriteAsync(_handle, new byte[] { 0 }.AsMemory(), newSize - 1);
@@ -156,8 +157,8 @@ public sealed class FileManager : IFileManager
         while (_bitmap.Count < newCount)
             _bitmap.Add(false);
 
-        // Write PageType.Free headers for all new slots
-        await WriteFreeHeadersForRangeAsync(_bitmap.Count - GrowthChunkPages, newCount);
+        // Write PageType.Free headers for the new slots only
+        await WriteFreeHeadersForRangeAsync(oldCount, newCount);
     }
 
     private async Task WriteFreeHeadersForRangeAsync(int from, int to)

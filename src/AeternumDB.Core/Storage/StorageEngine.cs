@@ -140,8 +140,12 @@ public sealed class StorageEngine : IStorageEngine
             var dirty = _bufferPool.FlushDirty();
             foreach (var (id, raw) in dirty)
             {
-                try { await _fm.WritePageAsync(id, raw); _bufferPool.MarkClean(id); }
-                catch { /* best-effort flush */ }
+                try
+                {
+                    await _fm.WritePageAsync(id, raw);
+                    _bufferPool.MarkClean(id);
+                }
+                catch { /* best-effort flush on dispose */ }
             }
             await _fm.DisposeAsync();
         }
