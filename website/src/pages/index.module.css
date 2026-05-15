@@ -22,7 +22,7 @@
 
 .heroDescription {
   font-size: 1rem;
-  opacity: 0.85;
+  color: rgba(255, 255, 255, 0.92);
   margin-top: 0.75rem;
 }
 
@@ -33,6 +33,52 @@
   flex-wrap: wrap;
   gap: 0.5rem;
   margin-top: 2rem;
+}
+
+.heroPrimaryButton {
+  background-color: #ffffff;
+  border-color: #ffffff;
+  color: #1e1b4b;
+}
+
+.heroPrimaryButton:hover {
+  background-color: #ede9fe;
+  border-color: #ede9fe;
+  color: #1e1b4b;
+}
+
+.heroSecondaryButton {
+  border-color: rgba(255, 255, 255, 0.7);
+  color: #ffffff;
+}
+
+.heroSecondaryButton:hover {
+  border-color: #ffffff;
+  background-color: rgba(255, 255, 255, 0.14);
+  color: #ffffff;
+}
+
+[data-theme='dark'] .heroPrimaryButton {
+  background-color: #a78bfa;
+  border-color: #a78bfa;
+  color: #161b22;
+}
+
+[data-theme='dark'] .heroPrimaryButton:hover {
+  background-color: #c4b5fd;
+  border-color: #c4b5fd;
+  color: #161b22;
+}
+
+[data-theme='dark'] .heroSecondaryButton {
+  border-color: rgba(240, 240, 255, 0.75);
+  color: #f0f0ff;
+}
+
+[data-theme='dark'] .heroSecondaryButton:hover {
+  border-color: #f0f0ff;
+  background-color: rgba(240, 240, 255, 0.12);
+  color: #f0f0ff;
 }
 
 .badges {
@@ -51,7 +97,7 @@
 /* Stats bar */
 .statsSection {
   padding: 2.5rem 0;
-  background-color: var(--ifm-color-primary);
+  background-color: #5b21b6;
   text-align: center;
 }
 
@@ -75,7 +121,7 @@
 }
 
 [data-theme='dark'] .statsSection {
-  background-color: #1e1b4b;
+  background-color: #312e81;
 }
 
 /* Features */
