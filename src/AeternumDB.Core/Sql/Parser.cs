@@ -353,7 +353,7 @@ internal sealed class Parser
         public ReferentialAction? OnDelete { get; set; }
         public ulong? MinLength { get; set; }
         public ulong? MaxLength { get; set; }
-        public bool Uniques { get; set; }
+        public bool RequiresDistinctReferences { get; set; }
     }
 
     public Parser(List<Token> tokens) { _tokens = tokens; }
@@ -892,7 +892,7 @@ internal sealed class Parser
             OnDelete = options.OnDelete,
             MinLength = options.MinLength,
             MaxLength = options.MaxLength,
-            Uniques = options.Uniques,
+            RequiresDistinctReferences = options.RequiresDistinctReferences,
         };
     }
 
@@ -916,7 +916,7 @@ internal sealed class Parser
         if (TryParseColumnLengthOption(options)) return true;
         if (!IsKeyword("UNIQUES")) return false;
         Consume();
-        options.Uniques = true;
+        options.RequiresDistinctReferences = true;
         return true;
     }
 

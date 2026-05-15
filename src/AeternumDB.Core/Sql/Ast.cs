@@ -491,7 +491,7 @@ public sealed class ColumnDef
     public bool AutoIncrement { get; init; }
     public ulong? MinLength { get; init; }
     public ulong? MaxLength { get; init; }
-    public bool Uniques { get; init; }
+    public bool RequiresDistinctReferences { get; init; }
     public Expr? Check { get; init; }
     public TextDirective? TextDirective { get; init; }
     public IReadOnlyList<TermsDirective> TermsDirectives { get; init; } = [];
