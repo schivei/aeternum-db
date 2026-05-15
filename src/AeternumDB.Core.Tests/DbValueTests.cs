@@ -164,38 +164,38 @@ public class DbValueTests
         var b = new DbValue.Boolean(true);
         Assert.Equal("TRUE", b.ToString());
         Assert.True(b.Equals((DbValue)new DbValue.Boolean(true)));
-        _ = b.GetHashCode();
+        Assert.Equal(new DbValue.Boolean(true).GetHashCode(), b.GetHashCode());
 
         var i = new DbValue.Integer(5);
         Assert.Equal("5", i.ToString());
         Assert.True(i.Equals((DbValue)new DbValue.Integer(5)));
-        _ = i.GetHashCode();
+        Assert.Equal(new DbValue.Integer(5).GetHashCode(), i.GetHashCode());
 
         var f = new DbValue.Float(1.5);
         Assert.Equal("1.5", f.ToString());
         Assert.True(f.Equals((DbValue)new DbValue.Float(1.5)));
-        _ = f.GetHashCode();
+        Assert.Equal(new DbValue.Float(1.5).GetHashCode(), f.GetHashCode());
 
         var t = new DbValue.Text("abc");
         Assert.Equal("abc", t.ToString());
         Assert.True(t.Equals((DbValue)new DbValue.Text("abc")));
-        _ = t.GetHashCode();
+        Assert.Equal(new DbValue.Text("abc").GetHashCode(), t.GetHashCode());
 
         var by = new DbValue.Bytes([1, 2, 3]);
         Assert.True(by.Equals((DbValue)new DbValue.Bytes([1, 2, 3])));
-        _ = by.GetHashCode();
+        Assert.Equal(new DbValue.Bytes([1, 2, 3]).GetHashCode(), by.GetHashCode());
 
         var arr = new DbValue.Array([new DbValue.Integer(1)]);
         Assert.True(arr.Equals((DbValue)new DbValue.Array([new DbValue.Integer(1)])));
-        _ = arr.GetHashCode();
+        Assert.Equal(new DbValue.Array([new DbValue.Integer(1)]).GetHashCode(), arr.GetHashCode());
 
         var d = new DbValue.Decimal(1.25m);
         Assert.True(d.Equals((DbValue)new DbValue.Decimal(1.25m)));
-        _ = d.GetHashCode();
+        Assert.Equal(new DbValue.Decimal(1.25m).GetHashCode(), d.GetHashCode());
 
         var j = new DbValue.Json("{\"k\":1}");
         Assert.True(j.Equals((DbValue)new DbValue.Json("{\"k\":1}")));
-        _ = j.GetHashCode();
+        Assert.Equal(new DbValue.Json("{\"k\":1}").GetHashCode(), j.GetHashCode());
     }
 
     [Fact]

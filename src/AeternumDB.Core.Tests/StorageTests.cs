@@ -11,7 +11,7 @@ public sealed class StorageTests
     {
         var pool = new BufferPool(2);
         pool.Insert(1UL, new byte[32]);
-        pool.Insert(1UL, new byte[32]); // no-op duplicate insert path
+        pool.Insert(1UL, new byte[32]);
 
         Assert.True(pool.TryPin(1UL, out var bytes));
         Assert.NotNull(bytes);
@@ -189,7 +189,7 @@ public sealed class StorageTests
             var b = await se.AllocatePageAsync();
 
             await se.WritePageDataAsync(a, 0, new byte[] { 1, 2, 3 });
-            _ = await se.ReadPageDataAsync(a, 0, 3); // cache a (TryPin true path on EvictFromPool)
+            _ = await se.ReadPageDataAsync(a, 0, 3); // cache page a before deallocation
 
             await se.DeallocatePageAsync(a);
             await se.DeallocatePageAsync(b); // non-cached path in EvictFromPool
