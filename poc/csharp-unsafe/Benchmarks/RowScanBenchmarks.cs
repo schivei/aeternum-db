@@ -1,12 +1,12 @@
+using AeternumDB.PoC.Shared.Query;
 using AeternumDB.PoC.Shared.Types;
 using AeternumDB.PoC.Unsafe.Executor;
 using BenchmarkDotNet.Attributes;
-using BenchmarkDotNet.Jobs;
 
 namespace AeternumDB.PoC.Unsafe.Benchmarks;
 
 /// <summary>Row scan / executor benchmarks — mirrors core/benches/ executor scenarios.</summary>
-[SimpleJob(RuntimeMoniker.Net80)]
+[SimpleJob]
 [MemoryDiagnoser]
 [HideColumns("Error", "StdDev", "Median", "RatioSD")]
 public class RowScanBenchmarks
@@ -80,7 +80,7 @@ public class RowScanBenchmarks
             groupKeys: [],
             aggregates:
             [
-                ("count", Query.Accumulators.Count, row => row.Get("id"))
+                ("count", Accumulators.Count, row => row.Get("id"))
             ]);
         await foreach (var _ in agg.ExecuteAsync(_ctx)) { }
     }

@@ -1,11 +1,10 @@
 using AeternumDB.PoC.Safe.Executor;
 using AeternumDB.PoC.Shared.Types;
 using BenchmarkDotNet.Attributes;
-using BenchmarkDotNet.Jobs;
 
 namespace AeternumDB.PoC.Safe.Benchmarks;
 
-[SimpleJob(RuntimeMoniker.Net80)]
+[SimpleJob]
 [MemoryDiagnoser]
 [HideColumns("Error", "StdDev", "Median", "RatioSD")]
 public class RowScanBenchmarks

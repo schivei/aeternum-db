@@ -5,7 +5,7 @@
 #
 # Uso: bash poc/benchmark-comparison.sh [--skip-rust] [--skip-safe] [--skip-unsafe]
 #
-# Pré-requisitos: Rust/Cargo, .NET 9+ SDK
+# Pré-requisitos: Rust/Cargo, .NET 10 SDK
 
 set -euo pipefail
 
@@ -72,6 +72,7 @@ if [ "$SKIP_SAFE" -eq 0 ]; then
   echo "==> Rodando benchmarks C# Safe..."
   cd "$SAFE_DIR"
   dotnet run -c Release -- \
+    --benchmark \
     --filter "*" \
     --exporters json markdown \
     --artifacts "$SAFE_OUTPUT" \
@@ -101,6 +102,7 @@ if [ "$SKIP_UNSAFE" -eq 0 ]; then
   echo "==> Rodando benchmarks C# Unsafe..."
   cd "$UNSAFE_DIR"
   dotnet run -c Release -- \
+    --benchmark \
     --filter "*" \
     --exporters json markdown \
     --artifacts "$UNSAFE_OUTPUT" \

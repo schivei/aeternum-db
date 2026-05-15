@@ -1,11 +1,10 @@
 using AeternumDB.PoC.Unsafe.Index;
 using BenchmarkDotNet.Attributes;
-using BenchmarkDotNet.Jobs;
 
 namespace AeternumDB.PoC.Unsafe.Benchmarks;
 
 /// <summary>B-tree index benchmarks — mirrors core/benches/ index scenarios.</summary>
-[SimpleJob(RuntimeMoniker.Net80)]
+[SimpleJob]
 [MemoryDiagnoser]
 [HideColumns("Error", "StdDev", "Median", "RatioSD")]
 public class BTreeBenchmarks

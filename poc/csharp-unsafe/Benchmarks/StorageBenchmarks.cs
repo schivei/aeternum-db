@@ -2,7 +2,6 @@ using AeternumDB.PoC.Unsafe.Storage;
 using AeternumDB.PoC.Shared.Config;
 using AeternumDB.PoC.Shared.Types;
 using BenchmarkDotNet.Attributes;
-using BenchmarkDotNet.Jobs;
 
 namespace AeternumDB.PoC.Unsafe.Benchmarks;
 
@@ -10,7 +9,7 @@ namespace AeternumDB.PoC.Unsafe.Benchmarks;
 /// Storage layer benchmarks for the unsafe PoC.
 /// Mirrors core/benches/ storage scenarios.
 /// </summary>
-[SimpleJob(RuntimeMoniker.Net80)]
+[SimpleJob]
 [MemoryDiagnoser]
 [HideColumns("Error", "StdDev", "Median", "RatioSD")]
 public class StorageBenchmarks : IDisposable

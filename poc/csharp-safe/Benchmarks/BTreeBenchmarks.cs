@@ -1,10 +1,9 @@
 using AeternumDB.PoC.Safe.Index;
 using BenchmarkDotNet.Attributes;
-using BenchmarkDotNet.Jobs;
 
 namespace AeternumDB.PoC.Safe.Benchmarks;
 
-[SimpleJob(RuntimeMoniker.Net80)]
+[SimpleJob]
 [MemoryDiagnoser]
 [HideColumns("Error", "StdDev", "Median", "RatioSD")]
 public class BTreeBenchmarks

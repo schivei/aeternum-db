@@ -2,11 +2,10 @@ using AeternumDB.PoC.Safe.Storage;
 using AeternumDB.PoC.Shared.Config;
 using AeternumDB.PoC.Shared.Types;
 using BenchmarkDotNet.Attributes;
-using BenchmarkDotNet.Jobs;
 
 namespace AeternumDB.PoC.Safe.Benchmarks;
 
-[SimpleJob(RuntimeMoniker.Net80)]
+[SimpleJob]
 [MemoryDiagnoser]
 [HideColumns("Error", "StdDev", "Median", "RatioSD")]
 public class StorageBenchmarks : IDisposable
