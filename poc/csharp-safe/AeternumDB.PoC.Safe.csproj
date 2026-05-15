@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Optimize>true</Optimize>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+
+    <!-- NativeAOT / Trimming compatibility -->
+    <PublishAot>false</PublishAot><!-- set true when publishing for AOT verification -->
+    <TrimmerRootDescriptor></TrimmerRootDescriptor>
+    <IsAotCompatible>true</IsAotCompatible>
+    <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
+
+    <AssemblyName>AeternumDB.PoC.Safe</AssemblyName>
+    <RootNamespace>AeternumDB.PoC.Safe</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- BenchmarkDotNet 0.13.12 — no known vulnerabilities -->
+    <PackageReference Include="BenchmarkDotNet" Version="0.13.12" />
+    <PackageReference Include="BenchmarkDotNet.Diagnostics.Windows" Version="0.13.12" Condition="$([MSBuild]::IsOSPlatform('Windows'))" />
+  </ItemGroup>
+</Project>
