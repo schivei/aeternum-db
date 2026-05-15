@@ -102,7 +102,13 @@ internal sealed class UInt32Codec : IIndexCodec<uint>
 
 internal sealed class StringCodec : IIndexCodec<string>
 {
-    public byte[] Serialize(string value) => Encoding.UTF8.GetBytes(value);
+    public byte[] Serialize(string value)
+    {
+        if (value is null)
+            throw new IndexException(IndexErrorKind.Serialization, "string key/value cannot be null");
+        return Encoding.UTF8.GetBytes(value);
+    }
+
     public string Deserialize(ReadOnlySpan<byte> bytes)
     {
         try
@@ -118,7 +124,13 @@ internal sealed class StringCodec : IIndexCodec<string>
 
 internal sealed class BytesCodec : IIndexCodec<byte[]>
 {
-    public byte[] Serialize(byte[] value) => [.. value];
+    public byte[] Serialize(byte[] value)
+    {
+        if (value is null)
+            throw new IndexException(IndexErrorKind.Serialization, "byte[] key/value cannot be null");
+        return [.. value];
+    }
+
     public byte[] Deserialize(ReadOnlySpan<byte> bytes) => bytes.ToArray();
 }
 

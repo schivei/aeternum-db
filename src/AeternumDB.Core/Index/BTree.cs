@@ -9,7 +9,7 @@ namespace AeternumDB.Core.Index;
 public sealed class BTree<TKey, TValue> : IBTree<TKey, TValue>
     where TKey : IComparable<TKey>
 {
-    private const int MetaSize = 8 + 8 + 4 + 4; // root, height, count, fanout
+    private const int MetaSize = 8 + 4 + 4 + 4; // root, height, count, fanout
 
     private readonly IStorageEngine _storage;
     private readonly IIndexCodec<TKey> _keyCodec;
@@ -84,14 +84,15 @@ public sealed class BTree<TKey, TValue> : IBTree<TKey, TValue>
         if (payload.Length < MetaSize)
             throw new IndexException(IndexErrorKind.TreeCorrupted, "btree metadata page is too small");
 
-        var pos = 0;
-        var root = (PageId)BinaryPrimitives.ReadUInt64LittleEndian(payload.AsSpan(pos, 8));
-        pos += 8;
-        var height = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(pos, 4));
-        pos += 4;
-        var count = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(pos, 4));
-        pos += 4;
-        var fanout = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(pos, 4));
+        const int rootOffset = 0;
+        const int heightOffset = 8;
+        const int countOffset = 12;
+        const int fanoutOffset = 16;
+
+        var root = (PageId)BinaryPrimitives.ReadUInt64LittleEndian(payload.AsSpan(rootOffset, 8));
+        var height = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(heightOffset, 4));
+        var count = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(countOffset, 4));
+        var fanout = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(fanoutOffset, 4));
 
         if (height < 1)
             throw new IndexException(IndexErrorKind.TreeCorrupted, "btree metadata invalid: height must be >= 1");
@@ -236,6 +237,8 @@ public sealed class BTree<TKey, TValue> : IBTree<TKey, TValue>
 
     public async ValueTask BulkLoadAsync(IReadOnlyList<(TKey Key, TValue Value)> entries)
     {
+        // Current implementation favors correctness and parity with existing
+        // insert semantics. A bottom-up bulk loader can be added later.
         foreach (var (key, value) in entries)
             await InsertAsync(key, value);
     }
@@ -418,10 +421,10 @@ public sealed class BTree<TKey, TValue> : IBTree<TKey, TValue>
 
     private static (LeafNode Left, LeafNode Right, byte[] SplitKey) SplitLeaf(LeafNode leaf)
     {
+        // Midpoint split keeps both sides balanced and minimizes tree height growth.
         var mid = leaf.Keys.Count / 2;
         var left = new LeafNode
         {
-            NextLeaf = leaf.NextLeaf,
             PrevLeaf = leaf.PrevLeaf
         };
         left.Keys.AddRange(leaf.Keys.Take(mid));
@@ -440,6 +443,7 @@ public sealed class BTree<TKey, TValue> : IBTree<TKey, TValue>
 
     private static (InternalNode Left, InternalNode Right, byte[] PushUpKey) SplitInternal(InternalNode node)
     {
+        // Midpoint split keeps both sides balanced and minimizes tree height growth.
         var mid = node.Keys.Count / 2;
         var pushUp = node.Keys[mid];
 
