@@ -1,102 +1,81 @@
-using AeternumDB.PoC.Unsafe.Core;
+using AeternumDB.PoC.Unsafe.Storage;
+using AeternumDB.PoC.Shared.Config;
+using AeternumDB.PoC.Shared.Types;
 using BenchmarkDotNet.Attributes;
+using BenchmarkDotNet.Jobs;
 
 namespace AeternumDB.PoC.Unsafe.Benchmarks;
 
 /// <summary>
-/// Storage benchmarks mirroring core/benches/storage_bench.rs.
-/// Hot paths use <see cref="NativeMemory"/> (via <see cref="PageBuffer"/>)
-/// instead of <see cref="System.Buffers.ArrayPool{T}"/>.
+/// Storage layer benchmarks for the unsafe PoC.
+/// Mirrors core/benches/ storage scenarios.
 /// </summary>
-[SimpleJob]
+[SimpleJob(RuntimeMoniker.Net80)]
 [MemoryDiagnoser]
-[MarkdownExporterAttribute.GitHub]
-public class StorageBenchmarks
+[HideColumns("Error", "StdDev", "Median", "RatioSD")]
+public class StorageBenchmarks : IDisposable
 {
-    private const int PageSize = 8192;
-    private static readonly byte[] Payload = new byte[64];
+    private UnsafeStorageEngine _engine = null!;
+    private UnsafeBufferPool _pool = null!;
+    private UnsafeFileManager _fm = null!;
+    private string _tmpFile = null!;
 
-    [Params(100, 500, 1000)]
-    public int N { get; set; }
+    [Params(100, 1_000, 10_000)]
+    public int PageCount { get; set; }
 
-    // ── Sequential write ──────────────────────────────────────────────────────
-
-    [Benchmark(Description = "sequential_write")]
-    public void SequentialWrite()
+    [GlobalSetup]
+    public async Task Setup()
     {
-        using var buf = new PageBuffer(PageSize);
-        for (int i = 0; i < N; i++)
+        _tmpFile = Path.GetTempFileName();
+        var cfg = new StorageConfig { DataPath = _tmpFile, BufferPoolSize = 512, PageSize = 8192 };
+        _fm = new UnsafeFileManager(_tmpFile, cfg.PageSize);
+        _pool = new UnsafeBufferPool(cfg.BufferPoolSize, cfg.PageSize);
+        _engine = new UnsafeStorageEngine(_fm, _pool, cfg);
+        await Task.CompletedTask;
+    }
+
+    [GlobalCleanup]
+    public async Task Cleanup()
+    {
+        await _engine.DisposeAsync();
+        if (File.Exists(_tmpFile)) File.Delete(_tmpFile);
+    }
+
+    [Benchmark(Description = "StorageWrite")]
+    public async Task WritePages()
+    {
+        var data = new byte[8192 - 16];
+        for (int i = 0; i < PageCount; i++)
         {
-            ulong id = buf.AllocatePage();
-            buf.WritePage(id, 0, Payload);
+            var id = await _engine.AllocatePageAsync();
+            await _engine.WritePageDataAsync(id, 0, data);
         }
     }
 
-    // ── Random read ───────────────────────────────────────────────────────────
-
-    [Benchmark(Description = "random_read")]
-    public void RandomRead()
+    [Benchmark(Description = "StorageRead")]
+    public async Task ReadPages()
     {
-        using var buf = new PageBuffer(PageSize);
-        var ids = new ulong[N];
-        for (int i = 0; i < N; i++)
+        var ids = new List<PageId>();
+        var data = new byte[8192 - 16];
+        for (int i = 0; i < PageCount; i++)
         {
-            ids[i] = buf.AllocatePage();
-            buf.WritePage(ids[i], 0, Payload);
+            var id = await _engine.AllocatePageAsync();
+            await _engine.WritePageDataAsync(id, 0, data);
+            ids.Add(id);
         }
-
-        Span<byte> dest = stackalloc byte[64];
-        int idx = 0;
-        for (int i = 0; i < N; i++)
-        {
-            idx = XorShuffleIndex(idx, N);
-            buf.ReadPage(ids[idx], 0, 64, dest);
-        }
-    }
-
-    // ── Mixed 80 % read / 20 % write ─────────────────────────────────────────
-
-    [Benchmark(Description = "mixed_80r_20w")]
-    public void MixedWorkload()
-    {
-        using var buf = new PageBuffer(PageSize);
-        var ids = new ulong[N];
-        for (int i = 0; i < N; i++)
-        {
-            ids[i] = buf.AllocatePage();
-            buf.WritePage(ids[i], 0, Payload);
-        }
-
-        Span<byte> dest = stackalloc byte[64];
-        for (int i = 0; i < N; i++)
-        {
-            if (i % 5 == 0)
-                buf.WritePage(ids[i % ids.Length], 0, Payload);
-            else
-                buf.ReadPage(ids[i % ids.Length], 0, 64, dest);
-        }
-    }
-
-    // ── Buffer-hit read ───────────────────────────────────────────────────────
-
-    [Benchmark(Description = "buffer_hit_read")]
-    public void BufferHitRead()
-    {
-        using var buf = new PageBuffer(PageSize);
-        var ids = new ulong[N];
-        for (int i = 0; i < N; i++)
-        {
-            ids[i] = buf.AllocatePage();
-            buf.WritePage(ids[i], 0, Payload);
-        }
-
-        Span<byte> dest = stackalloc byte[64];
         foreach (var id in ids)
-            buf.ReadPage(id, 0, 64, dest);
+            await _engine.ReadPageDataAsync(id, 0, 64);
     }
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
+    [Benchmark(Description = "BufferHit")]
+    public async Task BufferHit()
+    {
+        var id = await _engine.AllocatePageAsync();
+        var data = new byte[64];
+        await _engine.WritePageDataAsync(id, 0, data);
+        for (int i = 0; i < PageCount; i++)
+            await _engine.ReadPageDataAsync(id, 0, 64);
+    }
 
-    private static int XorShuffleIndex(int current, int n) =>
-        (current ^ (current >> 3) ^ 0xABCD) % n;
+    public void Dispose() => _engine.DisposeAsync().AsTask().Wait();
 }

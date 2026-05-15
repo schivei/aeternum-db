@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/csharp-safe/">
+    <Project Path="csharp-safe/AeternumDB.PoC.Safe.csproj" />
+  </Folder>
+  <Folder Name="/csharp-unsafe/">
+    <Project Path="csharp-unsafe/AeternumDB.PoC.Unsafe.csproj" />
+  </Folder>
+  <Folder Name="/shared/">
+    <Project Path="shared/AeternumDB.PoC.Shared.csproj" />
+  </Folder>
+</Solution>

@@ -17,8 +17,15 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- BenchmarkDotNet 0.13.12 — no known vulnerabilities -->
-    <PackageReference Include="BenchmarkDotNet" Version="0.13.12" />
-    <PackageReference Include="BenchmarkDotNet.Diagnostics.Windows" Version="0.13.12" Condition="$([MSBuild]::IsOSPlatform('Windows'))" />
+    <ProjectReference Include="..\shared\AeternumDB.PoC.Shared.csproj" />
+    <PackageReference Include="BenchmarkDotNet" Version="0.*" />
+    <PackageReference Include="BenchmarkDotNet.Diagnostics.Windows" Version="0.*" Condition="$([MSBuild]::IsOSPlatform('Windows'))" />
+    <PackageReference Include="GenDI" Version="26.*" />
+    <PackageReference Include="GenDI.SourceGenerator" Version="26.*">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>contentfiles; compile; runtime</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.*" />
   </ItemGroup>
 </Project>
+

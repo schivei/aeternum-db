@@ -1,117 +1,67 @@
-using AeternumDB.PoC.Unsafe.Core;
+using AeternumDB.PoC.Unsafe.Index;
 using BenchmarkDotNet.Attributes;
+using BenchmarkDotNet.Jobs;
 
 namespace AeternumDB.PoC.Unsafe.Benchmarks;
 
-/// <summary>
-/// B-tree benchmarks mirroring core/benches/btree_bench.rs.
-/// Uses the unsafe B-tree variant with bounds-check-free binary search.
-/// </summary>
-[SimpleJob]
+/// <summary>B-tree index benchmarks — mirrors core/benches/ index scenarios.</summary>
+[SimpleJob(RuntimeMoniker.Net80)]
 [MemoryDiagnoser]
-[MarkdownExporterAttribute.GitHub]
+[HideColumns("Error", "StdDev", "Median", "RatioSD")]
 public class BTreeBenchmarks
 {
-    [Params(100, 500, 1000)]
-    public int N { get; set; }
+    private UnsafeBTree<long, string> _tree = null!;
 
-    // ── Sequential insert ─────────────────────────────────────────────────────
+    [Params(1_000, 10_000, 100_000)]
+    public int EntryCount { get; set; }
 
-    [Benchmark(Description = "sequential_insert")]
-    public void SequentialInsert()
+    [GlobalSetup]
+    public async Task Setup()
     {
-        var tree = new BTree<long, string>(order: 100);
-        for (long i = 0; i < N; i++)
-            tree.Insert(i, i.ToString());
+        _tree = new UnsafeBTree<long, string>(100);
+        for (long i = 0; i < EntryCount; i++)
+            await _tree.InsertAsync(i, $"value-{i}");
     }
 
-    // ── Random insert ─────────────────────────────────────────────────────────
-
-    [Benchmark(Description = "random_insert")]
-    public void RandomInsert()
+    [Benchmark(Description = "BTree Insert")]
+    public async Task Insert()
     {
-        var keys = BuildShuffledKeys(N);
-        var tree = new BTree<long, string>(order: 100);
-        foreach (long k in keys)
-            tree.Insert(k, k.ToString());
+        var t = new UnsafeBTree<long, string>(100);
+        for (long i = 0; i < EntryCount; i++)
+            await t.InsertAsync(i, $"v{i}");
     }
 
-    // ── Point query ───────────────────────────────────────────────────────────
-
-    private BTree<long, string>? _pointTree;
-
-    [GlobalSetup(Targets = new[] { nameof(PointQuery) })]
-    public void SetupPointQuery()
+    [Benchmark(Description = "BTree Search")]
+    public async Task Search()
     {
-        _pointTree = new BTree<long, string>(order: 100);
-        for (long i = 0; i < N; i++)
-            _pointTree.Insert(i, i.ToString());
+        for (long i = 0; i < EntryCount; i++)
+            await _tree.SearchAsync(i);
     }
 
-    [Benchmark(Description = "point_query")]
-    public string? PointQuery()
+    [Benchmark(Description = "BTree Range")]
+    public async Task Range()
     {
-        string? last = null;
-        for (long i = 0; i < N; i++)
-            last = _pointTree!.Search(i);
-        return last;
+        long mid = EntryCount / 2;
+        await _tree.RangeAsync(0, mid);
     }
 
-    // ── Range scan ────────────────────────────────────────────────────────────
-
-    private BTree<long, string>? _rangeTree;
-
-    [GlobalSetup(Targets = new[] { nameof(RangeScan) })]
-    public void SetupRangeScan()
+    [Benchmark(Description = "BTree Delete")]
+    public async Task Delete()
     {
-        _rangeTree = new BTree<long, string>(order: 100);
-        for (long i = 0; i < N; i++)
-            _rangeTree.Insert(i, i.ToString());
+        var t = new UnsafeBTree<long, string>(100);
+        for (long i = 0; i < EntryCount; i++)
+            await t.InsertAsync(i, $"v{i}");
+        for (long i = 0; i < EntryCount; i++)
+            await t.DeleteAsync(i);
     }
 
-    [Benchmark(Description = "range_scan")]
-    public int RangeScan()
+    [Benchmark(Description = "BTree BulkLoad")]
+    public async Task BulkLoad()
     {
-        var results = _rangeTree!.Range(0L, (long)(N - 1));
-        return results.Count;
-    }
-
-    // ── Delete ────────────────────────────────────────────────────────────────
-
-    [Benchmark(Description = "delete")]
-    public void Delete()
-    {
-        var tree = new BTree<long, string>(order: 100);
-        for (long i = 0; i < N; i++)
-            tree.Insert(i, i.ToString());
-        for (long i = 0; i < N; i++)
-            tree.Delete(i);
-    }
-
-    // ── Bulk load ─────────────────────────────────────────────────────────────
-
-    [Benchmark(Description = "bulk_load")]
-    public void BulkLoad()
-    {
-        var entries = new List<(long, string)>(N);
-        for (long i = 0; i < N; i++)
-            entries.Add((i, i.ToString()));
-
-        var tree = new BTree<long, string>(order: 100);
-        tree.BulkLoad(entries);
-    }
-
-    // ── Helpers ───────────────────────────────────────────────────────────────
-
-    private static long[] BuildShuffledKeys(int n)
-    {
-        var keys = new long[n];
-        for (int i = 0; i < n; i++) keys[i] = i;
-        for (int i = 0; i < n; i++)
-        {
-            int j = (i * 17 + 5) % n;
-            (keys[i], keys[j]) = (keys[j], keys[i]);
-        }
-        return keys;
+        var entries = Enumerable.Range(0, EntryCount)
+            .Select(i => ((long)i, $"v{i}"))
+            .ToList();
+        var t = new UnsafeBTree<long, string>(100);
+        await t.BulkLoadAsync(entries);
     }
 }

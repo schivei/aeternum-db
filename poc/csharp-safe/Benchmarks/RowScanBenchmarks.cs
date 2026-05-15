@@ -1,49 +1,87 @@
-using AeternumDB.PoC.Safe.Core;
+using AeternumDB.PoC.Safe.Executor;
+using AeternumDB.PoC.Shared.Types;
 using BenchmarkDotNet.Attributes;
+using BenchmarkDotNet.Jobs;
 
 namespace AeternumDB.PoC.Safe.Benchmarks;
 
-/// <summary>
-/// Row-scan benchmarks mirroring core/benches/executor_bench.rs.
-///
-/// Operations:
-///   - Seq scan 1000 rows (no filter)
-///   - Seq scan 1000 rows (age > 18 filter)
-///   - VALUES: materialise 100 inline rows
-/// </summary>
-[SimpleJob]
+[SimpleJob(RuntimeMoniker.Net80)]
 [MemoryDiagnoser]
-[MarkdownExporterAttribute.GitHub]
+[HideColumns("Error", "StdDev", "Median", "RatioSD")]
 public class RowScanBenchmarks
 {
-    private RowStore _store = null!;
+    private SafeInMemoryTableProvider _provider = null!;
+    private SafeExecutionContext _ctx = null!;
+    private SafeSeqScanExec _scanAll = null!;
+    private SafeSeqScanExec _scanFiltered = null!;
+
+    [Params(1_000, 10_000, 100_000)]
+    public int RowCount { get; set; }
 
     [GlobalSetup]
     public void Setup()
     {
-        _store = new RowStore();
-        for (int i = 0; i < 1000; i++)
-            _store.Add(new Row(i, i % 80, $"user_{i}"));
+        _provider = new SafeInMemoryTableProvider();
+        var schema = new List<ColumnMeta>
+        {
+            new("id", "integer"),
+            new("value", "float"),
+            new("label", "varchar"),
+        };
+        _provider.CreateTable("bench", schema);
+        var rows = Enumerable.Range(0, RowCount).Select(i =>
+        {
+            var row = new DbRow();
+            row.Set("id", new DbValue.Integer(i));
+            row.Set("value", new DbValue.Float(i * 1.1));
+            row.Set("label", new DbValue.Text($"row-{i}"));
+            return row;
+        }).ToList();
+        _provider.InsertAsync("bench", rows).AsTask().Wait();
+        _ctx = new SafeExecutionContext(_provider);
+        _scanAll = new SafeSeqScanExec("bench", schema);
+        _scanFiltered = new SafeSeqScanExec("bench", schema,
+            row => row.Get("id") is DbValue.Integer i && i.Value % 2 == 0);
     }
 
-    // ── Seq scan without filter ───────────────────────────────────────────────
-
-    [Benchmark(Description = "seq_scan_no_filter")]
-    public int SeqScanNoFilter() => _store.Scan();
-
-    // ── Seq scan with filter (age > 18) ──────────────────────────────────────
-
-    [Benchmark(Description = "seq_scan_with_filter")]
-    public int SeqScanWithFilter() => _store.Scan(static r => r.Age > 18);
-
-    // ── VALUES: materialise 100 inline rows ───────────────────────────────────
-
-    [Benchmark(Description = "values_executor_100_rows")]
-    public int ValuesExecutor()
+    [Benchmark(Description = "SeqScan all rows")]
+    public async Task SeqScanAll()
     {
-        var store = new RowStore();
-        for (int i = 0; i < 100; i++)
-            store.Add(new Row(i, i, $"row_{i}"));
-        return store.Count;
+        await foreach (var _ in _scanAll.ExecuteAsync(_ctx)) { }
+    }
+
+    [Benchmark(Description = "SeqScan with filter")]
+    public async Task SeqScanFiltered()
+    {
+        await foreach (var _ in _scanFiltered.ExecuteAsync(_ctx)) { }
+    }
+
+    [Benchmark(Description = "Values inline")]
+    public async Task ValuesInline()
+    {
+        var schema = new List<ColumnMeta> { new("x", "integer"), new("y", "float") };
+        var rows = Enumerable.Range(0, RowCount)
+            .Select(i => (IReadOnlyList<DbValue>)new List<DbValue>
+                { new DbValue.Integer(i), new DbValue.Float(i * 1.5) })
+            .ToList();
+        var exec = new SafeValuesExec(rows, schema);
+        await foreach (var _ in exec.ExecuteAsync(_ctx)) { }
+    }
+
+    [Benchmark(Description = "HashAggregate COUNT")]
+    public async Task HashAggregateCount()
+    {
+        var agg = new SafeHashAggregateExec(
+            _scanAll,
+            groupKeys: [],
+            aggregates: [("count", vals => new DbValue.Integer(vals.Count(v => !v.IsNull)), row => row.Get("id"))]);
+        await foreach (var _ in agg.ExecuteAsync(_ctx)) { }
+    }
+
+    [Benchmark(Description = "Sort by id")]
+    public async Task SortById()
+    {
+        var sort = new SafeSortExec(_scanAll, [(row => row.Get("id"), true)]);
+        await foreach (var _ in sort.ExecuteAsync(_ctx)) { }
     }
 }

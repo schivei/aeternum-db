@@ -1,45 +1,56 @@
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+using AeternumDB.PoC.Shared.Abstractions;
+using AeternumDB.PoC.Shared.Errors;
+using AeternumDB.PoC.Shared.Types;
+using GenDI;
+using Microsoft.Extensions.DependencyInjection;
 
-namespace AeternumDB.PoC.Safe.Core;
+namespace AeternumDB.PoC.Safe.Index;
 
 /// <summary>
-/// In-memory B-tree with array-backed nodes.
-/// Uses binary search and pre-allocated node arrays to minimise heap pressure.
-/// No unsafe code. NativeAOT compatible — no reflection.
+/// B+ tree using fully managed arrays.
+/// Binary search uses <see cref="CollectionsMarshal.AsSpan{T}"/> internally.
+/// Hot paths use <see cref="Span{T}"/> to avoid bounds checks from JIT analysis.
+///
+/// Mirrors Rust: struct BTree — safe/GC variant.
 /// </summary>
-public sealed class BTree<TKey, TValue>
+public sealed class SafeBTree<TKey, TValue> : IBTree<TKey, TValue>
     where TKey : IComparable<TKey>
 {
     private readonly int _order;
     private BTreeNode _root;
     private int _count;
 
-    public BTree(int order = 100)
+    public int Count => _count;
+
+    public SafeBTree(int order = 100)
     {
+        if (order is < 4 or > 1000)
+            throw new IndexException(IndexErrorKind.InvalidFanout,
+                $"Fanout must be in [4,1000], got {order}");
         _order = order;
         _root = new BTreeNode(order, isLeaf: true);
     }
 
-    public int Count => _count;
-
-    // ── Insert ────────────────────────────────────────────────────────────────
-
-    public void Insert(TKey key, TValue value)
+    public ValueTask InsertAsync(TKey key, TValue value)
     {
         if (_root.IsFull(_order))
         {
-            var newRoot = new BTreeNode(_order, isLeaf: false);
+            var newRoot = new BTreeNode(_order, false);
             newRoot.Children[0] = _root;
             SplitChild(newRoot, 0);
             _root = newRoot;
         }
         InsertNonFull(_root, key, value);
         _count++;
+        return ValueTask.CompletedTask;
     }
 
     private void InsertNonFull(BTreeNode node, TKey key, TValue value)
     {
-        int i = node.Count - 1;
+        var keys = node.Keys.AsSpan(0, node.Count);
+        int i = keys.Length - 1;
         if (node.IsLeaf)
         {
             while (i >= 0 && key.CompareTo(node.Keys[i]) < 0)
@@ -70,13 +81,11 @@ public sealed class BTree<TKey, TValue>
         var child = parent.Children[idx]!;
         var sibling = new BTreeNode(_order, child.IsLeaf);
         int mid = (_order - 1) / 2;
-
         sibling.Count = child.Count - mid - 1;
         Array.Copy(child.Keys, mid + 1, sibling.Keys, 0, sibling.Count);
         Array.Copy(child.Values, mid + 1, sibling.Values, 0, sibling.Count);
         if (!child.IsLeaf)
             Array.Copy(child.Children, mid + 1, sibling.Children, 0, sibling.Count + 1);
-
         for (int j = parent.Count; j > idx; j--)
         {
             parent.Keys[j] = parent.Keys[j - 1];
@@ -90,48 +99,42 @@ public sealed class BTree<TKey, TValue>
         child.Count = mid;
     }
 
-    // ── Search ────────────────────────────────────────────────────────────────
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public TValue? Search(TKey key)
+    public ValueTask<TValue?> SearchAsync(TKey key)
     {
         var node = _root;
         while (true)
         {
-            int pos = BinarySearch(node, key);
+            int pos = BinarySearch(node.Keys.AsSpan(0, node.Count), key);
             if (pos < node.Count && node.Keys[pos].CompareTo(key) == 0)
-                return node.Values[pos];
-            if (node.IsLeaf) return default;
+                return ValueTask.FromResult(node.Values[pos]);
+            if (node.IsLeaf) return ValueTask.FromResult(default(TValue?));
             node = node.Children[pos]!;
         }
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static int BinarySearch(BTreeNode node, TKey key)
+    private static int BinarySearch(Span<TKey> keys, TKey key)
     {
-        int lo = 0, hi = node.Count;
+        int lo = 0, hi = keys.Length;
         while (lo < hi)
         {
             int mid = (lo + hi) >>> 1;
-            if (node.Keys[mid].CompareTo(key) < 0) lo = mid + 1;
+            if (keys[mid].CompareTo(key) < 0) lo = mid + 1;
             else hi = mid;
         }
         return lo;
     }
 
-    // ── Range ─────────────────────────────────────────────────────────────────
-
-    public IReadOnlyList<(TKey Key, TValue Value)> Range(TKey from, TKey to)
+    public ValueTask<IReadOnlyList<(TKey Key, TValue Value)>> RangeAsync(TKey from, TKey to)
     {
         var results = new List<(TKey, TValue)>();
         RangeSearch(_root, from, to, results);
-        return results;
+        return ValueTask.FromResult<IReadOnlyList<(TKey, TValue)>>(results);
     }
 
-    private static void RangeSearch(
-        BTreeNode node, TKey from, TKey to, List<(TKey, TValue)> results)
+    private static void RangeSearch(BTreeNode node, TKey from, TKey to,
+        List<(TKey, TValue)> results)
     {
-        int i = BinarySearch(node, from);
+        int i = BinarySearch(node.Keys.AsSpan(0, node.Count), from);
         while (i < node.Count && node.Keys[i].CompareTo(to) <= 0)
         {
             if (!node.IsLeaf) RangeSearch(node.Children[i]!, from, to, results);
@@ -143,18 +146,16 @@ public sealed class BTree<TKey, TValue>
             RangeSearch(node.Children[i]!, from, to, results);
     }
 
-    // ── Delete ────────────────────────────────────────────────────────────────
-
-    public bool Delete(TKey key)
+    public ValueTask<bool> DeleteAsync(TKey key)
     {
-        bool deleted = DeleteFromNode(_root, key);
-        if (deleted) _count--;
-        return deleted;
+        bool ok = DeleteFromNode(_root, key);
+        if (ok) _count--;
+        return ValueTask.FromResult(ok);
     }
 
     private static bool DeleteFromNode(BTreeNode node, TKey key)
     {
-        int pos = BinarySearch(node, key);
+        int pos = BinarySearch(node.Keys.AsSpan(0, node.Count), key);
         if (node.IsLeaf)
         {
             if (pos >= node.Count || node.Keys[pos].CompareTo(key) != 0) return false;
@@ -168,50 +169,33 @@ public sealed class BTree<TKey, TValue>
         }
         if (pos < node.Count && node.Keys[pos].CompareTo(key) == 0)
         {
-            var pred = GetMax(node.Children[pos]!);
-            node.Keys[pos] = pred.Key;
-            node.Values[pos] = pred.Value;
-            return DeleteFromNode(node.Children[pos]!, pred.Key);
+            var (pk, pv) = GetMax(node.Children[pos]!);
+            node.Keys[pos] = pk;
+            node.Values[pos] = pv;
+            return DeleteFromNode(node.Children[pos]!, pk);
         }
-        return node.Children[pos] is not null
-            && DeleteFromNode(node.Children[pos]!, key);
+        return node.Children[pos] is not null && DeleteFromNode(node.Children[pos]!, key);
     }
 
     private static (TKey Key, TValue Value) GetMax(BTreeNode node)
     {
-        while (!node.IsLeaf)
-            node = node.Children[node.Count]!;
+        while (!node.IsLeaf) node = node.Children[node.Count]!;
         return (node.Keys[node.Count - 1], node.Values[node.Count - 1]!);
     }
 
-    // ── Bulk load ─────────────────────────────────────────────────────────────
-
-    public void BulkLoad(IReadOnlyList<(TKey Key, TValue Value)> entries)
+    public async ValueTask BulkLoadAsync(IReadOnlyList<(TKey Key, TValue Value)> entries)
     {
         foreach (var (k, v) in entries)
-            Insert(k, v);
+            await InsertAsync(k, v).ConfigureAwait(false);
     }
 
-    // ── Node ──────────────────────────────────────────────────────────────────
-
-    private sealed class BTreeNode
+    private sealed class BTreeNode(int order, bool isLeaf)
     {
-        public readonly TKey[] Keys;
-        public readonly TValue?[] Values;
-        public readonly BTreeNode?[] Children;
+        public readonly TKey[] Keys = new TKey[order];
+        public readonly TValue?[] Values = new TValue?[order];
+        public readonly BTreeNode?[] Children = new BTreeNode?[order + 1];
         public int Count;
-        public readonly bool IsLeaf;
-
-        public BTreeNode(int order, bool isLeaf)
-        {
-            Keys = new TKey[order];
-            Values = new TValue?[order];
-            Children = new BTreeNode?[order + 1];
-            IsLeaf = isLeaf;
-            Count = 0;
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public bool IsFull(int order) => Count >= order - 1;
+        public readonly bool IsLeaf = isLeaf;
+        public bool IsFull(int ord) => Count >= ord - 1;
     }
 }
