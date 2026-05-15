@@ -59,7 +59,7 @@ public sealed class PhysicalPlanner(CostModel costModel, StatisticsRegistry stat
     private PhysicalPlan LowerFilter(LogicalPlan input, Expr predicate)
     {
         var child = Lower(input);
-        var inRows = (int)childNodeRows(child);
+        var inRows = (int)ChildNodeRows(child);
         const double sel = 0.1;
         var cpu = _costModel.EstimateFilterCost(inRows, sel);
         var outRows = CostModel.EstimatedRows(inRows, sel);
@@ -69,7 +69,7 @@ public sealed class PhysicalPlanner(CostModel costModel, StatisticsRegistry stat
     private PhysicalPlan LowerProject(LogicalPlan input, List<ProjectionItem> items)
     {
         var child = Lower(input);
-        var rows = (int)childNodeRows(child);
+        var rows = (int)ChildNodeRows(child);
         var cpu = rows * _costModel.CpuCostFactor * 0.5;
         return new PhysicalPlan.Project(child, items, new NodeCost(rows, cpu, 0));
     }
@@ -78,8 +78,8 @@ public sealed class PhysicalPlanner(CostModel costModel, StatisticsRegistry stat
     {
         var leftPhys = Lower(left);
         var rightPhys = Lower(right);
-        var lr = (int)childNodeRows(leftPhys);
-        var rr = (int)childNodeRows(rightPhys);
+        var lr = (int)ChildNodeRows(leftPhys);
+        var rr = (int)ChildNodeRows(rightPhys);
 
         var (lk, rk, residual) = SplitJoinCondition(condition);
         var hasEquiKeys = lk.Count > 0;
@@ -101,7 +101,7 @@ public sealed class PhysicalPlanner(CostModel costModel, StatisticsRegistry stat
     private PhysicalPlan LowerAggregate(LogicalPlan input, List<Expr> groupBy, List<AggregateExpr> aggs, Expr? having)
     {
         var child = Lower(input);
-        var inRows = (int)childNodeRows(child);
+        var inRows = (int)ChildNodeRows(child);
         var groups = groupBy.Count == 0 ? 1 : Math.Max(1, inRows / 10);
         var cpu = _costModel.EstimateAggregateCost(inRows, groups);
         return new PhysicalPlan.HashAggregate(child, groupBy, aggs, having, new NodeCost(groups, cpu, 0));
@@ -110,7 +110,7 @@ public sealed class PhysicalPlanner(CostModel costModel, StatisticsRegistry stat
     private PhysicalPlan LowerSort(LogicalPlan input, List<SortExpr> orderBy)
     {
         var child = Lower(input);
-        var rows = (int)childNodeRows(child);
+        var rows = (int)ChildNodeRows(child);
         var cpu = _costModel.EstimateSortCost(rows);
         var algo = rows > InMemorySortThreshold ? SortAlgorithm.External : SortAlgorithm.InMemory;
         return new PhysicalPlan.Sort(child, orderBy, algo, new NodeCost(rows, cpu, 0));
@@ -119,14 +119,14 @@ public sealed class PhysicalPlanner(CostModel costModel, StatisticsRegistry stat
     private PhysicalPlan LowerLimit(LogicalPlan input, int limit, int offset)
     {
         var child = Lower(input);
-        var rows = Math.Max(0, Math.Min(limit, (int)childNodeRows(child) - offset));
+        var rows = Math.Max(0, Math.Min(limit, (int)ChildNodeRows(child) - offset));
         return new PhysicalPlan.Limit(child, limit, offset, new NodeCost(rows, 0, 0));
     }
 
     private PhysicalPlan LowerUnnest(LogicalPlan input, Expr column, string? alias)
     {
         var child = Lower(input);
-        var rows = Math.Max(1, (int)childNodeRows(child) * 5);
+        var rows = Math.Max(1, (int)ChildNodeRows(child) * 5);
         var cpu = rows * _costModel.CpuCostFactor;
         return new PhysicalPlan.Unnest(child, column, alias, new NodeCost(rows, cpu, 0));
     }
@@ -134,12 +134,12 @@ public sealed class PhysicalPlanner(CostModel costModel, StatisticsRegistry stat
     private PhysicalPlan LowerViewAs(LogicalPlan input, List<ViewAsProjection> items)
     {
         var child = Lower(input);
-        var rows = (int)childNodeRows(child);
+        var rows = (int)ChildNodeRows(child);
         var cpu = rows * _costModel.CpuCostFactor;
         return new PhysicalPlan.ViewAs(child, items, new NodeCost(rows, cpu, 0));
     }
 
-    private static double childNodeRows(PhysicalPlan plan) =>
+    private static double ChildNodeRows(PhysicalPlan plan) =>
         plan switch
         {
             PhysicalPlan.SeqScan s => s.Cost.Rows,
@@ -157,12 +157,18 @@ public sealed class PhysicalPlanner(CostModel costModel, StatisticsRegistry stat
             _ => 0
         };
 
-    private static string? DetectIndexPredicate(Expr pred) =>
-        pred is Expr.BinaryOp b
-            && (b.Op is BinaryOperator.Eq or BinaryOperator.Lt or BinaryOperator.LtEq or BinaryOperator.Gt or BinaryOperator.GtEq)
-            && ((b.Left is Expr.Column lc && b.Right is Expr.Literal) || (b.Left is Expr.Literal && b.Right is Expr.Column lc2))
-                ? $"{(b.Left as Expr.Column)?.Name ?? (b.Right as Expr.Column)!.Name}_idx"
-                : null;
+    private static string? DetectIndexPredicate(Expr pred)
+    {
+        if (pred is not Expr.BinaryOp b) return null;
+        if (b.Op is not (BinaryOperator.Eq or BinaryOperator.Lt or BinaryOperator.LtEq or BinaryOperator.Gt or BinaryOperator.GtEq))
+            return null;
+
+        if (b.Left is Expr.Column leftColumn && b.Right is Expr.Literal)
+            return $"{leftColumn.Name}_idx";
+        if (b.Left is Expr.Literal && b.Right is Expr.Column rightColumn)
+            return $"{rightColumn.Name}_idx";
+        return null;
+    }
 
     private static (List<Expr> leftKeys, List<Expr> rightKeys, Expr? residual) SplitJoinCondition(Expr? condition)
     {

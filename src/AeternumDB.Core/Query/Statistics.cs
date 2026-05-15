@@ -67,7 +67,7 @@ public sealed class ColumnStats(
 
 public sealed class TableStats(string tableName)
 {
-    public string TableName { get; } = tableName;
+    public string TableName { get; } = tableName.ToLowerInvariant();
     public int NumRows { get; set; } = 1000;
     public int NumPages { get; set; } = 10;
     public int AvgRowSize { get; set; } = 128;
@@ -89,4 +89,3 @@ public sealed class StatisticsRegistry
             ? s
             : new TableStats(tableName);
 }
-

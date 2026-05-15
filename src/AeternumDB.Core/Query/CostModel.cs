@@ -38,4 +38,3 @@ public sealed class CostModel(double ioCostFactor = 1.0, double cpuCostFactor = 
         return Math.Max(1, rows);
     }
 }
-

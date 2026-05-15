@@ -40,4 +40,3 @@ public sealed class RuleEngine
         return current;
     }
 }
-

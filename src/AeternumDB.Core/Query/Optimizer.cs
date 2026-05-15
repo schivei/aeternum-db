@@ -126,6 +126,11 @@ public sealed class Optimizer(StatisticsRegistry stats)
 
     private LogicalPlan ReorderInnerJoin(LogicalPlan.Join join)
     {
+        // Keep explicit join predicates in-place to avoid invalidating
+        // side-qualified column references when swapping inputs.
+        if (join.Condition is not null)
+            return new LogicalPlan.Join(ReorderJoins(join.Left), ReorderJoins(join.Right), JoinType.Inner, join.Condition);
+
         var leftRows = ScanRows(join.Left);
         var rightRows = ScanRows(join.Right);
         if (rightRows < leftRows)
