@@ -1,4 +1,5 @@
 using AeternumDB.Core.Types;
+using AeternumDB.Core.Errors;
 
 namespace AeternumDB.Core.Tests;
 
@@ -51,5 +52,163 @@ public class DbValueTests
         var schema = new[] { new ColumnMeta("id", "integer") };
         var batch = RecordBatch.Empty(schema);
         Assert.Equal(0, batch.RowCount);
+    }
+
+    [Fact]
+    public void PrimitiveValue_Conversions_Work()
+    {
+        DbValue i = new DbValue.Integer(42);
+        DbValue f = new DbValue.Float(3.5);
+        DbValue b = new DbValue.Boolean(true);
+        DbValue t = new DbValue.Text("txt");
+        DbValue n = DbValue.Null.Instance;
+
+        Assert.Equal(42, i.AsInteger());
+        Assert.Equal(42d, i.AsFloat());
+        Assert.Equal(3.5, f.AsFloat());
+        Assert.Equal("txt", t.AsString());
+        Assert.Equal("42", i.AsString());
+        Assert.True(b.AsBool());
+        Assert.Null(n.AsBool());
+        Assert.Null(n.AsInteger());
+        Assert.Null(n.AsFloat());
+        Assert.Null(n.AsString());
+    }
+
+    [Fact]
+    public void ArrayAndBytes_Equality_AndToString_Work()
+    {
+        DbValue bytes1 = new DbValue.Bytes([1, 2, 3]);
+        DbValue bytes2 = new DbValue.Bytes([1, 2, 3]);
+        DbValue bytes3 = new DbValue.Bytes([1, 2]);
+        Assert.Equal(bytes1, bytes2);
+        Assert.NotEqual(bytes1, bytes3);
+        Assert.Equal("<3 bytes>", bytes1.ToString());
+
+        DbValue array = new DbValue.Array([new DbValue.Integer(1), new DbValue.Text("x")]);
+        Assert.Equal("[1, x]", array.ToString());
+        var asArray = array.AsArray();
+        Assert.NotNull(asArray);
+        Assert.Equal(2, asArray!.Length);
+    }
+
+    [Fact]
+    public void DecimalAndJson_Equality_Work()
+    {
+        DbValue d1 = new DbValue.Decimal(10.5m);
+        DbValue d2 = new DbValue.Decimal(10.5m);
+        DbValue j1 = new DbValue.Json("{\"a\":1}");
+        DbValue j2 = new DbValue.Json("{\"a\":1}");
+        Assert.Equal(d1, d2);
+        Assert.Equal(j1, j2);
+        Assert.Equal("10.5", d1.ToString());
+        Assert.Equal("{\"a\":1}", j1.ToString());
+    }
+
+    [Fact]
+    public void ColumnMeta_IsArray_DetectsArrayAndVector()
+    {
+        Assert.True(new ColumnMeta("v", "array<int>").IsArray);
+        Assert.True(new ColumnMeta("v", "VECTOR(3)").IsArray);
+        Assert.False(new ColumnMeta("v", "int").IsArray);
+    }
+
+    [Fact]
+    public void DbRow_FromPairs_AndCaseInsensitiveGet_Work()
+    {
+        var row = DbRow.FromPairs([
+            ("Id", (DbValue)new DbValue.Integer(7)),
+            ("Name", new DbValue.Text("Ana"))
+        ]);
+
+        Assert.Equal(new DbValue.Integer(7), row.Get("id"));
+        Assert.Equal(new DbValue.Text("Ana"), row.Get("NAME"));
+        Assert.Equal(2, row.ColumnCount);
+        Assert.Equal(2, row.Columns.Count());
+    }
+
+    [Fact]
+    public void RecordBatch_Constructor_StoresSchemaAndRows()
+    {
+        var schema = new[] { new ColumnMeta("id", "integer", innerCount: null) };
+        var row = new DbRow();
+        row.Set("id", new DbValue.Integer(1));
+        var batch = new RecordBatch([row], schema);
+        Assert.Equal(1, batch.RowCount);
+        Assert.Single(batch.Rows);
+        Assert.Single(batch.Schema);
+    }
+
+    [Fact]
+    public void ErrorTypes_ExposeKind()
+    {
+        var se = new StorageException(StorageErrorKind.ChecksumMismatch, "x");
+        var ie = new IndexException(IndexErrorKind.TreeCorrupted, "x");
+        var ee = new ExecutorException(ExecutorErrorKind.EvalError, "x");
+        var pe = new PlannerException(PlannerErrorKind.CatalogError, "x");
+
+        Assert.Equal(StorageErrorKind.ChecksumMismatch, se.Kind);
+        Assert.Equal(IndexErrorKind.TreeCorrupted, ie.Kind);
+        Assert.Equal(ExecutorErrorKind.EvalError, ee.Kind);
+        Assert.Equal(PlannerErrorKind.CatalogError, pe.Kind);
+    }
+
+    [Fact]
+    public void DbValue_ObjectEquals_HashCode_AndToStringBranches_AreCovered()
+    {
+        DbValue n = DbValue.Null.Instance;
+        Assert.Equal("NULL", n.ToString());
+        Assert.True(n.Equals((object)DbValue.Null.Instance));
+        _ = n.GetHashCode();
+
+        var b = new DbValue.Boolean(true);
+        Assert.Equal("TRUE", b.ToString());
+        Assert.True(b.Equals((DbValue)new DbValue.Boolean(true)));
+        _ = b.GetHashCode();
+
+        var i = new DbValue.Integer(5);
+        Assert.Equal("5", i.ToString());
+        Assert.True(i.Equals((DbValue)new DbValue.Integer(5)));
+        _ = i.GetHashCode();
+
+        var f = new DbValue.Float(1.5);
+        Assert.Equal("1.5", f.ToString());
+        Assert.True(f.Equals((DbValue)new DbValue.Float(1.5)));
+        _ = f.GetHashCode();
+
+        var t = new DbValue.Text("abc");
+        Assert.Equal("abc", t.ToString());
+        Assert.True(t.Equals((DbValue)new DbValue.Text("abc")));
+        _ = t.GetHashCode();
+
+        var by = new DbValue.Bytes([1, 2, 3]);
+        Assert.True(by.Equals((DbValue)new DbValue.Bytes([1, 2, 3])));
+        _ = by.GetHashCode();
+
+        var arr = new DbValue.Array([new DbValue.Integer(1)]);
+        Assert.True(arr.Equals((DbValue)new DbValue.Array([new DbValue.Integer(1)])));
+        _ = arr.GetHashCode();
+
+        var d = new DbValue.Decimal(1.25m);
+        Assert.True(d.Equals((DbValue)new DbValue.Decimal(1.25m)));
+        _ = d.GetHashCode();
+
+        var j = new DbValue.Json("{\"k\":1}");
+        Assert.True(j.Equals((DbValue)new DbValue.Json("{\"k\":1}")));
+        _ = j.GetHashCode();
+    }
+
+    [Fact]
+    public void DbValue_ConversionDefaultBranches_ReturnNull()
+    {
+        DbValue t = new DbValue.Text("x");
+        DbValue b = new DbValue.Boolean(false);
+        DbValue i = new DbValue.Integer(1);
+
+        Assert.Null(t.AsInteger());
+        Assert.Null(b.AsFloat());
+        Assert.Null(i.AsBool());
+        Assert.Null(t.AsArray());
+        Assert.Null(DbValue.Null.Instance.AsArray());
     }
 }

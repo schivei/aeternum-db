@@ -6,6 +6,7 @@
     <IsPackable>false</IsPackable>
     <IsAotCompatible>false</IsAotCompatible>
     <LangVersion>latest</LangVersion>
+    <RunSettingsFilePath>coverage.runsettings</RunSettingsFilePath>
   </PropertyGroup>
 
   <ItemGroup>
