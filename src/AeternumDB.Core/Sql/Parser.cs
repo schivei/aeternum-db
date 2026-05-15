@@ -171,7 +171,13 @@ internal sealed class Tokenizer
             _pos++;
         }
 
-        if (_pos + 1 < _src.Length) _pos += 2;
+        if (_pos + 1 >= _src.Length)
+        {
+            _pos = _src.Length;
+            return true;
+        }
+
+        _pos += 2;
         return true;
     }
 
@@ -191,6 +197,7 @@ internal sealed class Tokenizer
 
     private bool TryReadEscapedQuote(StringBuilder sb, char quote)
     {
+        if (_pos >= _src.Length) return false;
         if (_src[_pos] != quote) return false;
         _pos++;
         if (_pos < _src.Length && _src[_pos] == quote)
@@ -205,6 +212,7 @@ internal sealed class Tokenizer
 
     private bool TryReadEscapedCharacter(StringBuilder sb)
     {
+        if (_pos >= _src.Length) return false;
         if (_src[_pos] != '\\' || _pos + 1 >= _src.Length) return false;
         _pos++;
         sb.Append(_src[_pos] switch { 'n' => '\n', 't' => '\t', 'r' => '\r', var x => x });
@@ -1254,105 +1262,73 @@ internal sealed class Parser
     private Statement ParseDrop()
     {
         ExpectKeyword("DROP");
-        if (TryParseDropTable(out var dropTable)) return dropTable;
-        if (TryParseDropIndex(out var dropIndex)) return dropIndex;
-        if (TryParseDropType(out var dropType)) return dropType;
-        if (TryParseDropEnum(out var dropEnum)) return dropEnum;
-        if (TryParseDropDatabase(out var dropDatabase)) return dropDatabase;
-        if (TryParseDropSchema(out var dropSchema)) return dropSchema;
-        if (TryParseDropUser(out var dropUser)) return dropUser;
+        var statement =
+            TryParseDropTable() ??
+            TryParseDropIndex() ??
+            TryParseDropType() ??
+            TryParseDropEnum() ??
+            TryParseDropDatabase() ??
+            TryParseDropSchema() ??
+            TryParseDropUser();
+
+        if (statement is not null) return statement;
         throw ParseError($"unexpected DROP subtype '{Current.Text}'");
     }
 
-    private bool TryParseDropTable(out Statement statement)
+    private Statement? TryParseDropTable()
     {
-        if (!TryConsumeKeyword(KwTable))
-        {
-            statement = null!;
-            return false;
-        }
+        if (!TryConsumeKeyword(KwTable)) return null;
 
         var ifExists = TryParseIfExists();
-        statement = new Statement.DropTable(new DropTableStatement(ParseIdentList(), ifExists));
-        return true;
+        return new Statement.DropTable(new DropTableStatement(ParseIdentList(), ifExists));
     }
 
-    private bool TryParseDropIndex(out Statement statement)
+    private Statement? TryParseDropIndex()
     {
-        if (!TryConsumeKeyword("INDEX"))
-        {
-            statement = null!;
-            return false;
-        }
+        if (!TryConsumeKeyword("INDEX")) return null;
 
         var ifExists = TryParseIfExists();
-        statement = new Statement.DropIndex(new DropIndexStatement(ParseIdentList(), ifExists));
-        return true;
+        return new Statement.DropIndex(new DropIndexStatement(ParseIdentList(), ifExists));
     }
 
-    private bool TryParseDropType(out Statement statement)
+    private Statement? TryParseDropType()
     {
-        if (!TryConsumeKeyword("TYPE"))
-        {
-            statement = null!;
-            return false;
-        }
+        if (!TryConsumeKeyword("TYPE")) return null;
 
         var ifExists = TryParseIfExists();
-        statement = new Statement.DropType(new DropTypeStatement(ParseIdent(), ifExists));
-        return true;
+        return new Statement.DropType(new DropTypeStatement(ParseIdent(), ifExists));
     }
 
-    private bool TryParseDropEnum(out Statement statement)
+    private Statement? TryParseDropEnum()
     {
-        if (!TryConsumeKeyword("ENUM"))
-        {
-            statement = null!;
-            return false;
-        }
+        if (!TryConsumeKeyword("ENUM")) return null;
 
         var ifExists = TryParseIfExists();
-        statement = new Statement.DropEnum(new DropEnumStatement(ParseIdent(), ifExists));
-        return true;
+        return new Statement.DropEnum(new DropEnumStatement(ParseIdent(), ifExists));
     }
 
-    private bool TryParseDropDatabase(out Statement statement)
+    private Statement? TryParseDropDatabase()
     {
-        if (!TryConsumeKeyword("DATABASE"))
-        {
-            statement = null!;
-            return false;
-        }
+        if (!TryConsumeKeyword("DATABASE")) return null;
 
         var ifExists = TryParseIfExists();
-        statement = new Statement.DropDatabase(new DropDatabaseStatement(ParseIdent(), ifExists));
-        return true;
+        return new Statement.DropDatabase(new DropDatabaseStatement(ParseIdent(), ifExists));
     }
 
-    private bool TryParseDropSchema(out Statement statement)
+    private Statement? TryParseDropSchema()
     {
-        if (!TryConsumeKeyword("SCHEMA"))
-        {
-            statement = null!;
-            return false;
-        }
+        if (!TryConsumeKeyword("SCHEMA")) return null;
 
         var ifExists = TryParseIfExists();
-        statement = new Statement.DropSchema(new DropSchemaStatement(null, ParseIdent(), ifExists));
-        return true;
+        return new Statement.DropSchema(new DropSchemaStatement(null, ParseIdent(), ifExists));
     }
 
-    private bool TryParseDropUser(out Statement statement)
+    private Statement? TryParseDropUser()
     {
-        if (!TryConsumeKeyword("USER"))
-        {
-            statement = null!;
-            return false;
-        }
+        if (!TryConsumeKeyword("USER")) return null;
 
         var ifExists = TryParseIfExists();
-        statement = new Statement.DropUser(new DropUserStatement(ParseIdentList(), ifExists));
-        return true;
+        return new Statement.DropUser(new DropUserStatement(ParseIdentList(), ifExists));
     }
 
     private bool TryParseIfExists()
