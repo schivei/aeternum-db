@@ -1576,7 +1576,11 @@ internal sealed class Parser
     private Expr ParseComparison()
     {
         var left = ParseBitOr();
-        while (TryParseComparisonContinuation(ref left)) continue;
+        var hasContinuation = TryParseComparisonContinuation(ref left);
+        while (hasContinuation)
+        {
+            hasContinuation = TryParseComparisonContinuation(ref left);
+        }
         return left;
     }
 
