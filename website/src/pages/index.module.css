@@ -22,7 +22,7 @@
 
 .heroDescription {
   font-size: 1rem;
-  color: rgba(255, 255, 255, 0.92);
+  color: var(--ifm-navbar-link-color);
   margin-top: 0.75rem;
 }
 
@@ -97,7 +97,7 @@
 /* Stats bar */
 .statsSection {
   padding: 2.5rem 0;
-  background-color: #5b21b6;
+  background-color: var(--ifm-color-primary-darker);
   text-align: center;
 }
 
@@ -118,10 +118,6 @@
   text-transform: uppercase;
   letter-spacing: 0.05em;
   margin-top: 0.25rem;
-}
-
-[data-theme='dark'] .statsSection {
-  background-color: #312e81;
 }
 
 /* Features */
