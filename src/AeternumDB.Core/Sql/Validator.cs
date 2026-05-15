@@ -145,20 +145,20 @@ public abstract class ValidationException : Exception
 {
     protected ValidationException(string message) : base(message) { }
 
-    public sealed class TableNotFound(string table)
+    public sealed class TableNotFoundException(string table)
         : ValidationException($"table '{table}' does not exist")
     {
         public string Table { get; } = table;
     }
 
-    public sealed class ColumnNotFound(string table, string column)
+    public sealed class ColumnNotFoundException(string table, string column)
         : ValidationException($"column '{column}' does not exist in table '{table}'")
     {
         public string Table { get; } = table;
         public string Column { get; } = column;
     }
 
-    public sealed class TypeMismatch(DataType expected, DataType found, string context)
+    public sealed class TypeMismatchException(DataType expected, DataType found, string context)
         : ValidationException($"type mismatch in {context}: expected {expected}, found {found}")
     {
         public DataType Expected { get; } = expected;
@@ -166,52 +166,52 @@ public abstract class ValidationException : Exception
         public string Context { get; } = context;
     }
 
-    public sealed class InvalidAggregateUsage(string message)
+    public sealed class InvalidAggregateUsageException(string message)
         : ValidationException($"invalid aggregate usage: {message}") { }
 
-    public sealed class NullConstraintViolation(string table, string column)
+    public sealed class NullConstraintViolationException(string table, string column)
         : ValidationException($"null constraint violation: column '{column}' in table '{table}' is NOT NULL")
     {
         public string Table { get; } = table;
         public string Column { get; } = column;
     }
 
-    public sealed class ConstraintViolation(string message)
+    public sealed class ConstraintViolationException(string message)
         : ValidationException($"constraint violation: {message}") { }
 
-    public sealed class TypeNotFound(string name)
+    public sealed class TypeNotFoundException(string name)
         : ValidationException($"user-defined type '{name}' does not exist") { }
 
-    public sealed class TypeInUse(string name)
+    public sealed class TypeInUseException(string name)
         : ValidationException($"cannot drop type '{name}': it is still referenced by one or more columns") { }
 
-    public sealed class InvalidEnumValue(string column, string value)
+    public sealed class InvalidEnumValueException(string column, string value)
         : ValidationException($"invalid enum value '{value}' for column '{column}'")
     {
         public string Column { get; } = column;
         public string Value { get; } = value;
     }
 
-    public sealed class NoActiveTransaction()
+    public sealed class NoActiveTransactionException()
         : ValidationException("no active transaction") { }
 
-    public sealed class TransactionNameConflict(string name)
+    public sealed class TransactionNameConflictException(string name)
         : ValidationException($"transaction name '{name}' is already in use in this session") { }
 
-    public sealed class TransactionNotFound(string name)
+    public sealed class TransactionNotFoundException(string name)
         : ValidationException($"transaction '{name}' is not active in the current session") { }
 
-    public sealed class TransactionNestingViolation(string target, string blocking)
+    public sealed class TransactionNestingViolationException(string target, string blocking)
         : ValidationException($"cannot commit or rollback transaction '{target}': nested transaction '{blocking}' is still open")
     {
         public string Target { get; } = target;
         public string Blocking { get; } = blocking;
     }
 
-    public sealed class ViewAsAggregateNotAllowed(string func)
+    public sealed class ViewAsAggregateNotAllowedException(string func)
         : ValidationException($"aggregate function '{func}' is not allowed in a VIEW AS clause") { }
 
-    public sealed class ViewAsSubqueryNotAllowed()
+    public sealed class ViewAsSubqueryNotAllowedException()
         : ValidationException("sub-selects are not allowed in a VIEW AS clause") { }
 }
 
@@ -264,7 +264,7 @@ public sealed class SqlValidator
                     SeqRollback(stack, r.Stmt.Scope);
                     break;
                 case Statement.Savepoint or Statement.ReleaseSavepoint when stack.Count == 0:
-                    throw new ValidationException.NoActiveTransaction();
+                    throw new ValidationException.NoActiveTransactionException();
                 default:
                     break;
             }
@@ -345,7 +345,7 @@ public sealed class SqlValidator
             var resolved = aliases.TryGetValue(tbl, out var rt) ? rt : tbl;
             RequireTable(resolved);
             var schema = _catalog.GetTable(resolved)
-                ?? throw new ValidationException.TableNotFound(resolved);
+                ?? throw new ValidationException.TableNotFoundException(resolved);
             RequireColumn(schema, col.Name);
             return;
         }
@@ -435,6 +435,20 @@ public sealed class SqlValidator
         if (s.Len != null) ValidateExpr(s.Len, defaultTable);
     }
 
+    private static void ValidateInsertRow(TableSchema schema, IReadOnlyList<string> columns, IReadOnlyList<Expr> row)
+    {
+        if (row.Count != columns.Count)
+            throw new ValidationException.ConstraintViolationException(
+                $"INSERT column count ({columns.Count}) does not match value count ({row.Count})");
+
+        for (int i = 0; i < columns.Count; i++)
+        {
+            var col = schema.GetColumn(columns[i]);
+            if (col != null && !col.Nullable && row[i] is Expr.Literal { Value: SqlValue.Null })
+                throw new ValidationException.NullConstraintViolationException(schema.Name, columns[i]);
+        }
+    }
+
     private void ValidateInsert(InsertStatement ins)
     {
         RequireTable(ins.Table);
@@ -447,25 +461,13 @@ public sealed class SqlValidator
             RequireColumn(schema, col);
 
         foreach (var row in ins.Values)
-        {
-            if (row.Count != ins.Columns.Count)
-                throw new ValidationException.ConstraintViolation(
-                    $"INSERT column count ({ins.Columns.Count}) does not match value count ({row.Count})");
-
-            for (int i = 0; i < ins.Columns.Count; i++)
-            {
-                var colName = ins.Columns[i];
-                var col = schema.GetColumn(colName);
-                if (col != null && !col.Nullable && row[i] is Expr.Literal { Value: SqlValue.Null })
-                    throw new ValidationException.NullConstraintViolation(ins.Table, colName);
-            }
-        }
+            ValidateInsertRow(schema, ins.Columns, row);
 
         // Check NOT NULL columns without defaults
         foreach (var col in schema.Columns)
         {
             if (!col.Nullable && !ins.Columns.Any(c => c.Equals(col.Name, StringComparison.OrdinalIgnoreCase)))
-                throw new ValidationException.NullConstraintViolation(ins.Table, col.Name);
+                throw new ValidationException.NullConstraintViolationException(ins.Table, col.Name);
         }
     }
 
@@ -480,7 +482,7 @@ public sealed class SqlValidator
             RequireColumn(schema, col);
             var colMeta = schema.GetColumn(col);
             if (colMeta != null && !colMeta.Nullable && val is Expr.Literal { Value: SqlValue.Null })
-                throw new ValidationException.NullConstraintViolation(upd.Table, col);
+                throw new ValidationException.NullConstraintViolationException(upd.Table, col);
         }
         if (upd.WhereClause != null) ValidateExpr(upd.WhereClause, upd.Table);
     }
@@ -497,7 +499,7 @@ public sealed class SqlValidator
         foreach (var col in ct.Columns)
         {
             if (col.DataType is DataType.EnumRef er && !_catalog.TypeExists(er.Name))
-                throw new ValidationException.TypeNotFound(er.Name);
+                throw new ValidationException.TypeNotFoundException(er.Name);
         }
     }
 
@@ -524,15 +526,15 @@ public sealed class SqlValidator
     private static void ValidateCreateEnum(CreateEnumStatement ce)
     {
         if (ce.Variants.Count == 0)
-            throw new ValidationException.ConstraintViolation($"enum '{ce.Name}' must have at least one variant");
+            throw new ValidationException.ConstraintViolationException($"enum '{ce.Name}' must have at least one variant");
     }
 
     private void ValidateDropEnum(DropEnumStatement de)
     {
         if (!de.IfExists && !_catalog.TypeExists(de.Name))
-            throw new ValidationException.TypeNotFound(de.Name);
+            throw new ValidationException.TypeNotFoundException(de.Name);
         if (_catalog.IsTypeInUse(de.Name))
-            throw new ValidationException.TypeInUse(de.Name);
+            throw new ValidationException.TypeInUseException(de.Name);
     }
 
     private void ValidateViewAsItem(ViewAsItem item)
@@ -544,21 +546,21 @@ public sealed class SqlValidator
     private void CheckNoAggregateInViewAs(Expr expr)
     {
         if (expr is Expr.Function f && IsAggregate(f.Name))
-            throw new ValidationException.ViewAsAggregateNotAllowed(f.Name);
+            throw new ValidationException.ViewAsAggregateNotAllowedException(f.Name);
         WalkExpr(expr, CheckNoAggregateInViewAs);
     }
 
     private void CheckNoSubqueryInViewAs(Expr expr)
     {
         if (expr is Expr.Subquery)
-            throw new ValidationException.ViewAsSubqueryNotAllowed();
+            throw new ValidationException.ViewAsSubqueryNotAllowedException();
         WalkExpr(expr, CheckNoSubqueryInViewAs);
     }
 
     private void CheckNoAggregateInWhere(Expr expr)
     {
         if (expr is Expr.Function f && IsAggregate(f.Name))
-            throw new ValidationException.InvalidAggregateUsage($"aggregate '{f.Name}' not allowed in WHERE clause");
+            throw new ValidationException.InvalidAggregateUsageException($"aggregate '{f.Name}' not allowed in WHERE clause");
         WalkExpr(expr, CheckNoAggregateInWhere);
     }
 
@@ -568,10 +570,15 @@ public sealed class SqlValidator
         {
             case Expr.BinaryOp b: visit(b.Left); visit(b.Right); break;
             case Expr.UnaryOp u: visit(u.Inner); break;
-            case Expr.Function fn: foreach (var a in fn.Args) visit(a); break;
+            case Expr.Function fn:
+                foreach (var a in fn.Args) { visit(a); }
+                break;
             case Expr.IsNull n: visit(n.Inner); break;
             case Expr.Between b: visit(b.Inner); visit(b.Low); visit(b.High); break;
-            case Expr.InList il: visit(il.Inner); foreach (var e in il.List) visit(e); break;
+            case Expr.InList il:
+                visit(il.Inner);
+                foreach (var e in il.List) { visit(e); }
+                break;
             case Expr.Cast c: visit(c.Inner); break;
             case Expr.Case c:
                 if (c.Operand != null) visit(c.Operand);
@@ -601,13 +608,13 @@ public sealed class SqlValidator
     private void RequireTable(string name)
     {
         if (!_catalog.TableExists(name))
-            throw new ValidationException.TableNotFound(name);
+            throw new ValidationException.TableNotFoundException(name);
     }
 
     private static void RequireColumn(TableSchema schema, string column)
     {
         if (schema.GetColumn(column) == null)
-            throw new ValidationException.ColumnNotFound(schema.Name, column);
+            throw new ValidationException.ColumnNotFoundException(schema.Name, column);
     }
 
     // ── Transaction sequence helpers ───────────────────────────────────────────
@@ -615,14 +622,14 @@ public sealed class SqlValidator
     private static void SeqBegin(List<string?> stack, string? name)
     {
         if (name != null && stack.Any(open => open != null && open.Equals(name, StringComparison.OrdinalIgnoreCase)))
-            throw new ValidationException.TransactionNameConflict(name);
+            throw new ValidationException.TransactionNameConflictException(name);
         stack.Add(name);
     }
 
     private static void SeqCommit(List<string?> stack, CommitScope scope)
     {
         if (stack.Count == 0)
-            throw new ValidationException.NoActiveTransaction();
+            throw new ValidationException.NoActiveTransactionException();
 
         switch (scope)
         {
@@ -634,11 +641,11 @@ public sealed class SqlValidator
                 break;
             case CommitScope.Named n:
                 var idx = FindTransaction(stack, n.Name);
-                if (idx < 0) throw new ValidationException.TransactionNotFound(n.Name);
+                if (idx < 0) throw new ValidationException.TransactionNotFoundException(n.Name);
                 if (idx < stack.Count - 1)
                 {
                     var blocking = stack[^1] ?? "(anonymous)";
-                    throw new ValidationException.TransactionNestingViolation(n.Name, blocking);
+                    throw new ValidationException.TransactionNestingViolationException(n.Name, blocking);
                 }
                 stack.RemoveAt(idx);
                 break;
@@ -648,7 +655,7 @@ public sealed class SqlValidator
     private static void SeqRollback(List<string?> stack, RollbackScope scope)
     {
         if (stack.Count == 0)
-            throw new ValidationException.NoActiveTransaction();
+            throw new ValidationException.NoActiveTransactionException();
 
         switch (scope)
         {
@@ -663,11 +670,11 @@ public sealed class SqlValidator
                 break;
             case RollbackScope.Named n:
                 var idx = FindTransaction(stack, n.Name);
-                if (idx < 0) throw new ValidationException.TransactionNotFound(n.Name);
+                if (idx < 0) throw new ValidationException.TransactionNotFoundException(n.Name);
                 if (idx < stack.Count - 1)
                 {
                     var blocking = stack[^1] ?? "(anonymous)";
-                    throw new ValidationException.TransactionNestingViolation(n.Name, blocking);
+                    throw new ValidationException.TransactionNestingViolationException(n.Name, blocking);
                 }
                 stack.RemoveAt(idx);
                 break;

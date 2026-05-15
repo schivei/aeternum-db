@@ -39,7 +39,7 @@ public sealed class QueryPlanner
 
     public static string Explain(PhysicalPlan plan) => global::AeternumDB.Core.Query.Explain.ExplainPhysical(plan);
 
-    public PhysicalPlan Plan(Statement stmt, PlannerContext ctx)
+    public static PhysicalPlan Plan(Statement stmt, PlannerContext ctx)
     {
         var logical = CreateLogicalPlan(stmt, ctx);
         var optimized = Optimize(logical, ctx);
@@ -51,7 +51,6 @@ public sealed class QueryPlanner
 public sealed class RuntimeQueryPlanner(Catalog catalog) : IQueryPlanner
 {
     private readonly Catalog _catalog = catalog;
-    private readonly QueryPlanner _planner = new();
 
     public IExecutionPlan Plan(string sql, IExecutionContext context)
     {
@@ -66,7 +65,7 @@ public sealed class RuntimeQueryPlanner(Catalog catalog) : IQueryPlanner
         }
 
         var ctx = new PlannerContext(_catalog);
-        var physical = _planner.Plan(statement, ctx);
+        var physical = QueryPlanner.Plan(statement, ctx);
         return ExecutorBuilder.Build(physical);
     }
 }

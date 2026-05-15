@@ -5,7 +5,9 @@ using AeternumDB.Core.Sql;
 
 public abstract class LogicalPlan
 {
-    private LogicalPlan() { }
+    protected LogicalPlan() { }
+
+    public abstract int EstimatedRows();
 
     public sealed class Scan(string table, string? alias, List<string>? columns, Expr? filter) : LogicalPlan
     {
@@ -13,18 +15,21 @@ public abstract class LogicalPlan
         public string? Alias { get; } = alias;
         public List<string>? Columns { get; } = columns;
         public Expr? ScanFilter { get; } = filter;
+        public override int EstimatedRows() => 1000;
     }
 
     public sealed class Filter(LogicalPlan input, Expr predicate) : LogicalPlan
     {
         public LogicalPlan Input { get; } = input;
         public Expr Predicate { get; } = predicate;
+        public override int EstimatedRows() => Math.Max(1, Input.EstimatedRows() / 10);
     }
 
     public sealed class Project(LogicalPlan input, List<ProjectionItem> items) : LogicalPlan
     {
         public LogicalPlan Input { get; } = input;
         public List<ProjectionItem> Items { get; } = items;
+        public override int EstimatedRows() => Input.EstimatedRows();
     }
 
     public sealed class Join(LogicalPlan left, LogicalPlan right, JoinType joinType, Expr? condition) : LogicalPlan
@@ -33,6 +38,7 @@ public abstract class LogicalPlan
         public LogicalPlan Right { get; } = right;
         public JoinType JoinType { get; } = joinType;
         public Expr? Condition { get; } = condition;
+        public override int EstimatedRows() => Math.Max(1, (int)Math.Min(int.MaxValue, (long)Left.EstimatedRows() * Right.EstimatedRows() / 100L));
     }
 
     public sealed class Aggregate(
@@ -45,12 +51,14 @@ public abstract class LogicalPlan
         public List<Expr> GroupBy { get; } = groupBy;
         public List<AggregateExpr> Aggregates { get; } = aggregates;
         public Expr? Having { get; } = having;
+        public override int EstimatedRows() => GroupBy.Count == 0 ? 1 : Math.Max(1, Input.EstimatedRows() / 10);
     }
 
     public sealed class Sort(LogicalPlan input, List<SortExpr> orderBy) : LogicalPlan
     {
         public LogicalPlan Input { get; } = input;
         public List<SortExpr> OrderBy { get; } = orderBy;
+        public override int EstimatedRows() => Input.EstimatedRows();
     }
 
     public sealed class Limit(LogicalPlan input, int LimitCount, int Offset) : LogicalPlan
@@ -58,6 +66,7 @@ public abstract class LogicalPlan
         public LogicalPlan Input { get; } = input;
         public int LimitRows { get; } = LimitCount;
         public int OffsetRows { get; } = Offset;
+        public override int EstimatedRows() => LimitRows == int.MaxValue ? Input.EstimatedRows() : Math.Min(LimitRows, Input.EstimatedRows());
     }
 
     public sealed class Unnest(LogicalPlan input, Expr column, string? alias) : LogicalPlan
@@ -65,34 +74,21 @@ public abstract class LogicalPlan
         public LogicalPlan Input { get; } = input;
         public Expr Column { get; } = column;
         public string? Alias { get; } = alias;
+        public override int EstimatedRows() => Math.Max(1, Input.EstimatedRows() * 5);
     }
 
     public sealed class ViewAs(LogicalPlan input, List<ViewAsProjection> items) : LogicalPlan
     {
         public LogicalPlan Input { get; } = input;
         public List<ViewAsProjection> Items { get; } = items;
+        public override int EstimatedRows() => Input.EstimatedRows();
     }
 
     public sealed class Values(List<List<Expr>> rows) : LogicalPlan
     {
         public List<List<Expr>> Rows { get; } = rows;
+        public override int EstimatedRows() => Rows.Count;
     }
-
-    public int EstimatedRows() =>
-        this switch
-        {
-            Scan => 1000,
-            Filter f => Math.Max(1, f.Input.EstimatedRows() / 10),
-            Project p => p.Input.EstimatedRows(),
-            Join j => Math.Max(1, (int)Math.Min(int.MaxValue, (long)j.Left.EstimatedRows() * j.Right.EstimatedRows() / 100L)),
-            Aggregate a => a.GroupBy.Count == 0 ? 1 : Math.Max(1, a.Input.EstimatedRows() / 10),
-            Sort s => s.Input.EstimatedRows(),
-            Limit l => l.LimitRows == int.MaxValue ? l.Input.EstimatedRows() : Math.Min(l.LimitRows, l.Input.EstimatedRows()),
-            Unnest u => Math.Max(1, u.Input.EstimatedRows() * 5),
-            ViewAs v => v.Input.EstimatedRows(),
-            Values v => v.Rows.Count,
-            _ => 1000
-        };
 }
 
 public sealed class LogicalPlanBuilder(Catalog catalog)
@@ -203,7 +199,7 @@ public sealed class LogicalPlanBuilder(Catalog catalog)
         return new LogicalPlan.Project(plan, projections);
     }
 
-    private static LogicalPlan WrapSubquery(LogicalPlan inner, string alias) =>
+    private static LogicalPlan.Project WrapSubquery(LogicalPlan inner, string alias) =>
         new LogicalPlan.Project(inner, [new ProjectionItem(new Expr.Column(alias, "*"), null)]);
 
     private static bool NeedsAggregate(SelectStatement stmt) =>

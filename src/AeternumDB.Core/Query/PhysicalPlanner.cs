@@ -177,23 +177,21 @@ public sealed class PhysicalPlanner(CostModel costModel, StatisticsRegistry stat
         return ([], [], condition);
     }
 
+    private static Expr? BuildOriginalOrResidual(Expr? original, Expr? residual)
+    {
+        if (original is null) return residual;
+        if (residual is null) return original;
+        if (ReferenceEquals(original, residual)) return original;
+        return new Expr.BinaryOp(original, BinaryOperator.And, residual);
+    }
+
     private static Expr? ReassembleCondition(Expr? original, List<Expr> lk, List<Expr> rk, Expr? residual)
     {
         if (lk.Count == 0)
-        {
-            if (original is null) return residual;
-            if (residual is null) return original;
-            if (ReferenceEquals(original, residual)) return original;
-            return new Expr.BinaryOp(original, BinaryOperator.And, residual);
-        }
+            return BuildOriginalOrResidual(original, residual);
 
         if (rk.Count != lk.Count)
-        {
-            if (original is null) return residual;
-            if (residual is null) return original;
-            if (ReferenceEquals(original, residual)) return original;
-            return new Expr.BinaryOp(original, BinaryOperator.And, residual);
-        }
+            return BuildOriginalOrResidual(original, residual);
 
         var equi = new Expr.BinaryOp(lk[0], BinaryOperator.Eq, rk[0]);
         for (var i = 1; i < lk.Count; i++)

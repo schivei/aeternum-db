@@ -12,6 +12,8 @@ public sealed class BTree<TKey, TValue> : IBTree<TKey, TValue>
     private const int MetaSize = 8 + 4 + 4 + 4; // root, height, count, fanout
     private const string InternalNodeOutOfRange = "internal node child index out of range";
 
+    private readonly record struct BTreeState(PageId MetaPageId, PageId RootPageId, int Height, int Count, int Fanout);
+
     private readonly IStorageEngine _storage;
     private readonly IIndexCodec<TKey> _keyCodec;
     private readonly IIndexCodec<TValue> _valueCodec;
@@ -28,20 +30,16 @@ public sealed class BTree<TKey, TValue> : IBTree<TKey, TValue>
         IStorageEngine storage,
         IIndexCodec<TKey> keyCodec,
         IIndexCodec<TValue> valueCodec,
-        PageId metaPageId,
-        PageId rootPageId,
-        int height,
-        int count,
-        int fanout)
+        BTreeState state)
     {
         _storage = storage;
         _keyCodec = keyCodec;
         _valueCodec = valueCodec;
-        _metaPageId = metaPageId;
-        _rootPageId = rootPageId;
-        _height = height;
-        _count = count;
-        _fanout = fanout;
+        _metaPageId = state.MetaPageId;
+        _rootPageId = state.RootPageId;
+        _height = state.Height;
+        _count = state.Count;
+        _fanout = state.Fanout;
         _pagePayloadSize = storage.Config.PageSize - PageHeader.Size;
     }
 
@@ -64,11 +62,7 @@ public sealed class BTree<TKey, TValue> : IBTree<TKey, TValue>
             storage,
             keyCodec ?? IndexCodec.Default<TKey>(),
             valueCodec ?? IndexCodec.Default<TValue>(),
-            metaPageId,
-            rootPageId,
-            height: 1,
-            count: 0,
-            fanout: config.Fanout);
+            new BTreeState(metaPageId, rootPageId, Height: 1, Count: 0, Fanout: config.Fanout));
 
         await tree.WriteLeafAsync(rootPageId, new LeafNode());
         await tree.WriteMetaAsync();
@@ -104,11 +98,7 @@ public sealed class BTree<TKey, TValue> : IBTree<TKey, TValue>
             storage,
             keyCodec ?? IndexCodec.Default<TKey>(),
             valueCodec ?? IndexCodec.Default<TValue>(),
-            metaPageId,
-            root,
-            height,
-            Math.Max(0, count),
-            fanout);
+            new BTreeState(metaPageId, root, height, Math.Max(0, count), fanout));
     }
 
     public async ValueTask<PageId> MetaPageIdAsync()
@@ -170,7 +160,7 @@ public sealed class BTree<TKey, TValue> : IBTree<TKey, TValue>
             var startBytes = _keyCodec.Serialize(from);
             var endKey = to;
 
-            var (leafPageId, leaf) = await FindLeafAsync(_rootPageId, _height, startBytes);
+            var (_, leaf) = await FindLeafAsync(_rootPageId, _height, startBytes);
             var startPos = leaf.FindKeyIndex(startBytes, CompareKeyBytes, out _);
             var list = new List<(TKey Key, TValue Value)>();
 

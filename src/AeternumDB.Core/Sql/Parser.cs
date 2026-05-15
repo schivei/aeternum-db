@@ -270,13 +270,8 @@ internal sealed class Tokenizer
             '!' => _pos < _src.Length && _src[_pos] == '='
                   ? AdvanceAndReturn(new Token(TokenKind.NotEq, "!=", line))
                   : throw new SqlException(SqlErrorKind.ParseError, $"Unexpected character '!' at line {line}; did you mean '!='?"),
-            '<' => _pos < _src.Length && _src[_pos] == '=' ? AdvanceAndReturn(new Token(TokenKind.LtEq, "<=", line))
-                  : _pos < _src.Length && _src[_pos] == '>' ? AdvanceAndReturn(new Token(TokenKind.NotEq, "<>", line))
-                  : _pos < _src.Length && _src[_pos] == '<' ? AdvanceAndReturn(new Token(TokenKind.ShiftLeft, "<<", line))
-                  : new Token(TokenKind.Lt, "<", line),
-            '>' => _pos < _src.Length && _src[_pos] == '=' ? AdvanceAndReturn(new Token(TokenKind.GtEq, ">=", line))
-                  : _pos < _src.Length && _src[_pos] == '>' ? AdvanceAndReturn(new Token(TokenKind.ShiftRight, ">>", line))
-                  : new Token(TokenKind.Gt, ">", line),
+            '<' => ReadLtToken(line),
+            '>' => ReadGtToken(line),
             '&' => new Token(TokenKind.Ampersand, "&", line),
             '|' => _pos < _src.Length && _src[_pos] == '|' ? AdvanceAndReturn(new Token(TokenKind.PipePipe, "||", line))
                   : new Token(TokenKind.Pipe, "|", line),
@@ -285,6 +280,21 @@ internal sealed class Tokenizer
     }
 
     private Token AdvanceAndReturn(Token t) { _pos++; return t; }
+
+    private Token ReadLtToken(int line)
+    {
+        if (_pos < _src.Length && _src[_pos] == '=') return AdvanceAndReturn(new Token(TokenKind.LtEq, "<=", line));
+        if (_pos < _src.Length && _src[_pos] == '>') return AdvanceAndReturn(new Token(TokenKind.NotEq, "<>", line));
+        if (_pos < _src.Length && _src[_pos] == '<') return AdvanceAndReturn(new Token(TokenKind.ShiftLeft, "<<", line));
+        return new Token(TokenKind.Lt, "<", line);
+    }
+
+    private Token ReadGtToken(int line)
+    {
+        if (_pos < _src.Length && _src[_pos] == '=') return AdvanceAndReturn(new Token(TokenKind.GtEq, ">=", line));
+        if (_pos < _src.Length && _src[_pos] == '>') return AdvanceAndReturn(new Token(TokenKind.ShiftRight, ">>", line));
+        return new Token(TokenKind.Gt, ">", line);
+    }
 }
 
 // ── Recursive-descent parser ──────────────────────────────────────────────────
@@ -293,6 +303,17 @@ internal sealed class Parser
 {
     private readonly List<Token> _tokens;
     private int _pos;
+
+    private const string KwSelect = "SELECT";
+    private const string KwDelete = "DELETE";
+    private const string KwSavepoint = "SAVEPOINT";
+    private const string KwWhere = "WHERE";
+    private const string KwTable = "TABLE";
+    private const string KwUnique = "UNIQUE";
+    private const string KwExists = "EXISTS";
+    private const string KwPrimary = "PRIMARY";
+    private const string KwCheck = "CHECK";
+    private const string KwTransaction = "TRANSACTION";
 
     public Parser(List<Token> tokens) { _tokens = tokens; }
 
@@ -359,10 +380,10 @@ internal sealed class Parser
             var kw = Current.Text.ToUpperInvariant();
             return kw switch
             {
-                "SELECT" or "WITH" => new Statement.Select(ParseSelect()),
+                KwSelect or "WITH" => new Statement.Select(ParseSelect()),
                 "INSERT" => ParseInsert(),
                 "UPDATE" => ParseUpdate(),
-                "DELETE" => ParseDelete(),
+                KwDelete => ParseDelete(),
                 "CREATE" => ParseCreate(),
                 "DROP" => ParseDrop(),
                 "ALTER" => ParseAlterTable(),
@@ -371,7 +392,7 @@ internal sealed class Parser
                 "BEGIN" or "START" => ParseBeginTransaction(),
                 "COMMIT" => ParseCommit(),
                 "ROLLBACK" => ParseRollback(),
-                "SAVEPOINT" => ParseSavepoint(),
+                KwSavepoint => ParseSavepoint(),
                 "RELEASE" => ParseReleaseSavepoint(),
                 "USE" => ParseUseDatabase(),
                 "EXPLAIN" => ParseExplain(),
@@ -390,7 +411,7 @@ internal sealed class Parser
         if (TryConsumeKeyword("WITH"))
             withClause = ParseWithClause();
 
-        ExpectKeyword("SELECT");
+        ExpectKeyword(KwSelect);
         bool distinct = TryConsumeKeyword("DISTINCT");
 
         var columns = ParseSelectList();
@@ -400,7 +421,7 @@ internal sealed class Parser
             from = ParseTableReference();
 
         Expr? where = null;
-        if (TryConsumeKeyword("WHERE"))
+        if (TryConsumeKeyword(KwWhere))
             where = ParseExpr();
 
         List<Expr> groupBy = [];
@@ -511,7 +532,7 @@ internal sealed class Parser
         string? al = null;
         if (TryConsumeKeyword("AS"))
             al = ParseIdent();
-        else if (Current.Kind == TokenKind.Ident || (Current.Kind == TokenKind.Keyword && !IsKeywordAny("FROM", "WHERE", "GROUP", "HAVING", "ORDER", "LIMIT", "OFFSET", "UNION", "EXCEPT", "INTERSECT", "JOIN", "INNER", "LEFT", "RIGHT", "FULL", "CROSS", "ON", "AND", "OR", "NOT", "WHEN", "THEN", "ELSE", "END", "IN", "BETWEEN", "LIKE", "IS", "AS", "INTO", "SET", "VALUES", "COMMA")))
+        else if (Current.Kind == TokenKind.Ident || (Current.Kind == TokenKind.Keyword && !IsKeywordAny("FROM", KwWhere, "GROUP", "HAVING", "ORDER", "LIMIT", "OFFSET", "UNION", "EXCEPT", "INTERSECT", "JOIN", "INNER", "LEFT", "RIGHT", "FULL", "CROSS", "ON", "AND", "OR", "NOT", "WHEN", "THEN", "ELSE", "END", "IN", "BETWEEN", "LIKE", "IS", "AS", "INTO", "SET", "VALUES", "COMMA")))
             al = Consume().Text; // implicit alias
 
         return new SelectItem.ExprItem(expr, al);
@@ -533,7 +554,7 @@ internal sealed class Parser
 
     // ── INSERT ───────────────────────────────────────────────────────────────
 
-    private Statement ParseInsert()
+    private Statement.Insert ParseInsert()
     {
         ExpectKeyword("INSERT");
         ExpectKeyword("INTO");
@@ -566,7 +587,7 @@ internal sealed class Parser
         var saved = _pos;
         _pos++;
         SkipParens();
-        bool result = IsKeyword("SELECT") || IsKeyword("WITH");
+        bool result = IsKeyword(KwSelect) || IsKeyword("WITH");
         _pos = saved;
         return result;
     }
@@ -584,7 +605,7 @@ internal sealed class Parser
 
     // ── UPDATE ───────────────────────────────────────────────────────────────
 
-    private Statement ParseUpdate()
+    private Statement.Update ParseUpdate()
     {
         ExpectKeyword("UPDATE");
         var table = ParseIdent();
@@ -599,20 +620,20 @@ internal sealed class Parser
         } while (Current.Kind == TokenKind.Comma && (Consume() != null));
 
         Expr? where = null;
-        if (TryConsumeKeyword("WHERE")) where = ParseExpr();
+        if (TryConsumeKeyword(KwWhere)) where = ParseExpr();
 
         return new Statement.Update(new UpdateStatement(table, assignments, where));
     }
 
     // ── DELETE ───────────────────────────────────────────────────────────────
 
-    private Statement ParseDelete()
+    private Statement.Delete ParseDelete()
     {
-        ExpectKeyword("DELETE");
+        ExpectKeyword(KwDelete);
         ExpectKeyword("FROM");
         var table = ParseIdent();
         Expr? where = null;
-        if (TryConsumeKeyword("WHERE")) where = ParseExpr();
+        if (TryConsumeKeyword(KwWhere)) where = ParseExpr();
         return new Statement.Delete(new DeleteStatement(table, where));
     }
 
@@ -621,9 +642,9 @@ internal sealed class Parser
     private Statement ParseCreate()
     {
         ExpectKeyword("CREATE");
-        if (IsKeyword("TABLE") || IsKeyword("TEMPORARY") || IsKeyword("TEMP"))
+        if (IsKeyword(KwTable) || IsKeyword("TEMPORARY") || IsKeyword("TEMP"))
             return ParseCreateTable();
-        if (IsKeyword("INDEX") || IsKeyword("UNIQUE"))
+        if (IsKeyword("INDEX") || IsKeyword(KwUnique))
             return ParseCreateIndex();
         if (IsKeyword("MATERIALIZED"))
         {
@@ -639,14 +660,14 @@ internal sealed class Parser
         if (IsKeyword("DATABASE"))
         {
             Consume();
-            bool ifne = TryConsumeKeyword("IF") && ExpectKeyword("NOT") != null && ExpectKeyword("EXISTS") != null;
+            bool ifne = TryConsumeKeyword("IF") && ExpectKeyword("NOT") != null && ExpectKeyword(KwExists) != null;
             var dbname = ParseIdent();
             return new Statement.CreateDatabase(new CreateDatabaseStatement(dbname, ifne));
         }
         if (IsKeyword("SCHEMA"))
         {
             Consume();
-            bool ifne = TryConsumeKeyword("IF") && ExpectKeyword("NOT") != null && ExpectKeyword("EXISTS") != null;
+            bool ifne = TryConsumeKeyword("IF") && ExpectKeyword("NOT") != null && ExpectKeyword(KwExists) != null;
             var schname = ParseIdent();
             return new Statement.CreateSchema(new CreateSchemaStatement(null, schname, ifne));
         }
@@ -659,14 +680,14 @@ internal sealed class Parser
         throw ParseError($"unexpected CREATE subtype '{Current.Text}'");
     }
 
-    private Statement ParseCreateTable()
+    private Statement.CreateTable ParseCreateTable()
     {
         bool temp = false;
         if (TryConsumeKeyword("TEMPORARY") || TryConsumeKeyword("TEMP")) temp = true;
         bool flat = TryConsumeKeyword("FLAT");
-        ExpectKeyword("TABLE");
+        ExpectKeyword(KwTable);
         bool ifne = false;
-        if (TryConsumeKeyword("IF")) { ExpectKeyword("NOT"); ExpectKeyword("EXISTS"); ifne = true; }
+        if (TryConsumeKeyword("IF")) { ExpectKeyword("NOT"); ExpectKeyword(KwExists); ifne = true; }
 
         var (db, schema, table) = ParseQualifiedName();
 
@@ -697,7 +718,7 @@ internal sealed class Parser
             {
                 ExpectKeyword("COMMIT");
                 if (TryConsumeKeyword("PRESERVE")) { ExpectKeyword("ROWS"); onCommit = OnCommitBehavior.PreserveRows; }
-                else if (TryConsumeKeyword("DELETE")) { ExpectKeyword("ROWS"); onCommit = OnCommitBehavior.DeleteRows; }
+                else if (TryConsumeKeyword(KwDelete)) { ExpectKeyword("ROWS"); onCommit = OnCommitBehavior.DeleteRows; }
                 else if (TryConsumeKeyword("DROP")) onCommit = OnCommitBehavior.Drop;
             }
         }
@@ -722,7 +743,7 @@ internal sealed class Parser
     {
         while (Current.Kind != TokenKind.RightParen && Current.Kind != TokenKind.Eof)
         {
-            if (IsKeyword("PRIMARY"))
+            if (IsKeyword(KwPrimary))
             {
                 Consume(); ExpectKeyword("KEY");
                 Expect(TokenKind.LeftParen, "(");
@@ -730,7 +751,7 @@ internal sealed class Parser
                 Expect(TokenKind.RightParen, ")");
                 constraints.Add(new TableConstraint.PrimaryKey(null, pkCols));
             }
-            else if (IsKeyword("UNIQUE"))
+            else if (IsKeyword(KwUnique))
             {
                 Consume();
                 Expect(TokenKind.LeftParen, "(");
@@ -738,7 +759,7 @@ internal sealed class Parser
                 Expect(TokenKind.RightParen, ")");
                 constraints.Add(new TableConstraint.Unique(null, uCols));
             }
-            else if (IsKeyword("CHECK"))
+            else if (IsKeyword(KwCheck))
             {
                 Consume();
                 Expect(TokenKind.LeftParen, "(");
@@ -750,9 +771,9 @@ internal sealed class Parser
             {
                 Consume();
                 var cname = ParseIdent();
-                if (IsKeyword("PRIMARY")) { Consume(); ExpectKeyword("KEY"); Expect(TokenKind.LeftParen, "("); constraints.Add(new TableConstraint.PrimaryKey(cname, ParseIdentList())); Expect(TokenKind.RightParen, ")"); }
-                else if (IsKeyword("UNIQUE")) { Consume(); Expect(TokenKind.LeftParen, "("); constraints.Add(new TableConstraint.Unique(cname, ParseIdentList())); Expect(TokenKind.RightParen, ")"); }
-                else if (IsKeyword("CHECK")) { Consume(); Expect(TokenKind.LeftParen, "("); constraints.Add(new TableConstraint.Check(cname, ParseExpr())); Expect(TokenKind.RightParen, ")"); }
+                if (IsKeyword(KwPrimary)) { Consume(); ExpectKeyword("KEY"); Expect(TokenKind.LeftParen, "("); constraints.Add(new TableConstraint.PrimaryKey(cname, ParseIdentList())); Expect(TokenKind.RightParen, ")"); }
+                else if (IsKeyword(KwUnique)) { Consume(); Expect(TokenKind.LeftParen, "("); constraints.Add(new TableConstraint.Unique(cname, ParseIdentList())); Expect(TokenKind.RightParen, ")"); }
+                else if (IsKeyword(KwCheck)) { Consume(); Expect(TokenKind.LeftParen, "("); constraints.Add(new TableConstraint.Check(cname, ParseExpr())); Expect(TokenKind.RightParen, ")"); }
             }
             else
             {
@@ -783,16 +804,16 @@ internal sealed class Parser
                 Consume(); ExpectKeyword("NULL"); nullable = false;
             }
             else if (IsKeyword("NULL")) { Consume(); nullable = true; }
-            else if (IsKeyword("PRIMARY")) { Consume(); ExpectKeyword("KEY"); pk = true; }
-            else if (IsKeyword("UNIQUE")) { Consume(); unique = true; }
+            else if (IsKeyword(KwPrimary)) { Consume(); ExpectKeyword("KEY"); pk = true; }
+            else if (IsKeyword(KwUnique)) { Consume(); unique = true; }
             else if (IsKeyword("AUTO_INCREMENT") || IsKeyword("AUTOINCREMENT")) { Consume(); autoInc = true; }
             else if (IsKeyword("DEFAULT")) { Consume(); defaultExpr = ParsePrimaryExpr(); }
-            else if (IsKeyword("CHECK")) { Consume(); Expect(TokenKind.LeftParen, "("); check = ParseExpr(); Expect(TokenKind.RightParen, ")"); }
+            else if (IsKeyword(KwCheck)) { Consume(); Expect(TokenKind.LeftParen, "("); check = ParseExpr(); Expect(TokenKind.RightParen, ")"); }
             else if (IsKeyword("ON"))
             {
                 Consume();
                 if (IsKeyword("UPDATE")) { Consume(); onUpdate = ParseReferentialAction(); }
-                else if (IsKeyword("DELETE")) { Consume(); onDelete = ParseReferentialAction(); }
+                else if (IsKeyword(KwDelete)) { Consume(); onDelete = ParseReferentialAction(); }
             }
             else if (IsKeyword("UNIQUES")) { Consume(); uniques = true; }
             else if (IsKeyword("MIN_LENGTH")) { Consume(); Expect(TokenKind.Eq, "="); minLen = ParseUInt64(); }
@@ -820,7 +841,7 @@ internal sealed class Parser
 
     private bool IsColumnDefEnd() =>
         Current.Kind is TokenKind.Comma or TokenKind.RightParen or TokenKind.Eof
-        || IsKeywordAny("CONSTRAINT", "PRIMARY", "UNIQUE", "CHECK");
+        || IsKeywordAny("CONSTRAINT", KwPrimary, KwUnique, KwCheck);
 
     private ReferentialAction ParseReferentialAction()
     {
@@ -892,13 +913,13 @@ internal sealed class Parser
         return withTz;
     }
 
-    private DataType ParseDoubleType()
+    private DataType.Double ParseDoubleType()
     {
         TryConsumeKeyword("PRECISION");
         return DataType.Double.Instance;
     }
 
-    private DataType ParseDecimalType()
+    private DataType.Decimal ParseDecimalType()
     {
         if (Current.Kind != TokenKind.LeftParen) return new DataType.Decimal(null, null);
         Consume();
@@ -920,12 +941,12 @@ internal sealed class Parser
 
     // ── CREATE INDEX ─────────────────────────────────────────────────────────
 
-    private Statement ParseCreateIndex()
+    private Statement.CreateIndex ParseCreateIndex()
     {
-        bool unique = TryConsumeKeyword("UNIQUE");
+        bool unique = TryConsumeKeyword(KwUnique);
         ExpectKeyword("INDEX");
         bool ifne = false;
-        if (TryConsumeKeyword("IF")) { ExpectKeyword("NOT"); ExpectKeyword("EXISTS"); ifne = true; }
+        if (TryConsumeKeyword("IF")) { ExpectKeyword("NOT"); ExpectKeyword(KwExists); ifne = true; }
         string? idxName = null;
         if (Current.Kind == TokenKind.Ident || (Current.Kind == TokenKind.Keyword && !IsKeyword("ON")))
             idxName = Consume().Text;
@@ -978,11 +999,11 @@ internal sealed class Parser
 
     // ── CREATE MATERIALIZED VIEW ──────────────────────────────────────────────
 
-    private Statement ParseCreateMaterializedView()
+    private Statement.CreateMaterializedView ParseCreateMaterializedView()
     {
         if (IsKeyword("VIEW")) Consume();
         bool ifne = false;
-        if (TryConsumeKeyword("IF")) { ExpectKeyword("NOT"); ExpectKeyword("EXISTS"); ifne = true; }
+        if (TryConsumeKeyword("IF")) { ExpectKeyword("NOT"); ExpectKeyword(KwExists); ifne = true; }
         bool orReplace = false;
         if (TryConsumeKeyword("OR")) { ExpectKeyword("REPLACE"); orReplace = true; }
         var name = ParseIdent();
@@ -999,7 +1020,7 @@ internal sealed class Parser
     {
         ExpectKeyword("TYPE");
         bool ifne = false;
-        if (TryConsumeKeyword("IF")) { ExpectKeyword("NOT"); ExpectKeyword("EXISTS"); ifne = true; }
+        if (TryConsumeKeyword("IF")) { ExpectKeyword("NOT"); ExpectKeyword(KwExists); ifne = true; }
         var typeName = ParseIdent();
         ExpectKeyword("AS");
         if (IsKeyword("ENUM") || IsKeyword("FLAG"))
@@ -1020,12 +1041,12 @@ internal sealed class Parser
         }
     }
 
-    private Statement ParseCreateEnum()
+    private Statement.CreateEnum ParseCreateEnum()
     {
         bool flag = TryConsumeKeyword("FLAG");
         if (IsKeyword("ENUM")) Consume();
         bool ifne = false;
-        if (TryConsumeKeyword("IF")) { ExpectKeyword("NOT"); ExpectKeyword("EXISTS"); ifne = true; }
+        if (TryConsumeKeyword("IF")) { ExpectKeyword("NOT"); ExpectKeyword(KwExists); ifne = true; }
         var name = ParseIdent();
         Expect(TokenKind.LeftParen, "(");
         var variants = ParseEnumVariants();
@@ -1072,52 +1093,52 @@ internal sealed class Parser
         ExpectKeyword("DROP");
         bool ifex = false;
 
-        if (IsKeyword("TABLE"))
+        if (IsKeyword(KwTable))
         {
             Consume();
-            if (TryConsumeKeyword("IF")) { ExpectKeyword("EXISTS"); ifex = true; }
+            if (TryConsumeKeyword("IF")) { ExpectKeyword(KwExists); ifex = true; }
             var tables = ParseIdentList();
             return new Statement.DropTable(new DropTableStatement(tables, ifex));
         }
         if (IsKeyword("INDEX"))
         {
             Consume();
-            if (TryConsumeKeyword("IF")) { ExpectKeyword("EXISTS"); ifex = true; }
+            if (TryConsumeKeyword("IF")) { ExpectKeyword(KwExists); ifex = true; }
             var names = ParseIdentList();
             return new Statement.DropIndex(new DropIndexStatement(names, ifex));
         }
         if (IsKeyword("TYPE"))
         {
             Consume();
-            if (TryConsumeKeyword("IF")) { ExpectKeyword("EXISTS"); ifex = true; }
+            if (TryConsumeKeyword("IF")) { ExpectKeyword(KwExists); ifex = true; }
             var name = ParseIdent();
             return new Statement.DropType(new DropTypeStatement(name, ifex));
         }
         if (IsKeyword("ENUM"))
         {
             Consume();
-            if (TryConsumeKeyword("IF")) { ExpectKeyword("EXISTS"); ifex = true; }
+            if (TryConsumeKeyword("IF")) { ExpectKeyword(KwExists); ifex = true; }
             var name = ParseIdent();
             return new Statement.DropEnum(new DropEnumStatement(name, ifex));
         }
         if (IsKeyword("DATABASE"))
         {
             Consume();
-            if (TryConsumeKeyword("IF")) { ExpectKeyword("EXISTS"); ifex = true; }
+            if (TryConsumeKeyword("IF")) { ExpectKeyword(KwExists); ifex = true; }
             var name = ParseIdent();
             return new Statement.DropDatabase(new DropDatabaseStatement(name, ifex));
         }
         if (IsKeyword("SCHEMA"))
         {
             Consume();
-            if (TryConsumeKeyword("IF")) { ExpectKeyword("EXISTS"); ifex = true; }
+            if (TryConsumeKeyword("IF")) { ExpectKeyword(KwExists); ifex = true; }
             var name = ParseIdent();
             return new Statement.DropSchema(new DropSchemaStatement(null, name, ifex));
         }
         if (IsKeyword("USER"))
         {
             Consume();
-            if (TryConsumeKeyword("IF")) { ExpectKeyword("EXISTS"); ifex = true; }
+            if (TryConsumeKeyword("IF")) { ExpectKeyword(KwExists); ifex = true; }
             var names = ParseIdentList();
             return new Statement.DropUser(new DropUserStatement(names, ifex));
         }
@@ -1126,10 +1147,10 @@ internal sealed class Parser
 
     // ── ALTER TABLE ────────────────────────────────────────────────────────────
 
-    private Statement ParseAlterTable()
+    private Statement.AlterTable ParseAlterTable()
     {
         ExpectKeyword("ALTER");
-        ExpectKeyword("TABLE");
+        ExpectKeyword(KwTable);
         var table = ParseIdent();
         var ops = new List<AlterTableOperation>();
         do
@@ -1143,7 +1164,7 @@ internal sealed class Parser
             {
                 TryConsumeKeyword("COLUMN");
                 bool ifex = false;
-                if (TryConsumeKeyword("IF")) { ExpectKeyword("EXISTS"); ifex = true; }
+                if (TryConsumeKeyword("IF")) { ExpectKeyword(KwExists); ifex = true; }
                 ops.Add(new AlterTableOperation.DropColumn(ParseIdent(), ifex));
             }
             else if (TryConsumeKeyword("RENAME"))
@@ -1167,7 +1188,7 @@ internal sealed class Parser
 
     // ── GRANT / REVOKE ────────────────────────────────────────────────────────
 
-    private Statement ParseGrant()
+    private Statement.Grant ParseGrant()
     {
         ExpectKeyword("GRANT");
         var privs = ParseIdentList();
@@ -1178,7 +1199,7 @@ internal sealed class Parser
         return new Statement.Grant(new GrantStatement(privs, [], on, to));
     }
 
-    private Statement ParseRevoke()
+    private Statement.Revoke ParseRevoke()
     {
         ExpectKeyword("REVOKE");
         var privs = ParseIdentList();
@@ -1191,10 +1212,10 @@ internal sealed class Parser
 
     // ── Transaction control ───────────────────────────────────────────────────
 
-    private Statement ParseBeginTransaction()
+    private Statement.BeginTransaction ParseBeginTransaction()
     {
-        if (IsKeyword("START")) { Consume(); ExpectKeyword("TRANSACTION"); }
-        else { ExpectKeyword("BEGIN"); TryConsumeKeyword("TRANSACTION"); }
+        if (IsKeyword("START")) { Consume(); ExpectKeyword(KwTransaction); }
+        else { ExpectKeyword("BEGIN"); TryConsumeKeyword(KwTransaction); }
         string? txName = null;
         if (Current.Kind == TokenKind.Ident) txName = Consume().Text;
         IsolationLevel? iso = null;
@@ -1220,10 +1241,10 @@ internal sealed class Parser
         return IsolationLevel.ReadCommitted;
     }
 
-    private Statement ParseCommit()
+    private Statement.Commit ParseCommit()
     {
         ExpectKeyword("COMMIT");
-        TryConsumeKeyword("TRANSACTION");
+        TryConsumeKeyword(KwTransaction);
         bool chain = TryConsumeKeyword("AND") && TryConsumeKeyword("CHAIN");
         CommitScope scope = CommitScope.Current.Instance;
         if (TryConsumeKeyword("ALL")) scope = CommitScope.All.Instance;
@@ -1231,36 +1252,36 @@ internal sealed class Parser
         return new Statement.Commit(new CommitStatement(scope, chain));
     }
 
-    private Statement ParseRollback()
+    private Statement.Rollback ParseRollback()
     {
         ExpectKeyword("ROLLBACK");
-        TryConsumeKeyword("TRANSACTION");
+        TryConsumeKeyword(KwTransaction);
         bool chain = TryConsumeKeyword("AND") && TryConsumeKeyword("CHAIN");
         RollbackScope scope = RollbackScope.Current.Instance;
         if (TryConsumeKeyword("ALL")) scope = RollbackScope.All.Instance;
         else if (TryConsumeKeyword("TO"))
         {
-            TryConsumeKeyword("SAVEPOINT");
+            TryConsumeKeyword(KwSavepoint);
             scope = new RollbackScope.ToSavepoint(ParseIdent());
         }
         else if (Current.Kind == TokenKind.Ident) scope = new RollbackScope.Named(Consume().Text);
         return new Statement.Rollback(new RollbackStatement(scope, chain));
     }
 
-    private Statement ParseSavepoint()
+    private Statement.Savepoint ParseSavepoint()
     {
-        ExpectKeyword("SAVEPOINT");
+        ExpectKeyword(KwSavepoint);
         return new Statement.Savepoint(new SavepointStatement(ParseIdent()));
     }
 
-    private Statement ParseReleaseSavepoint()
+    private Statement.ReleaseSavepoint ParseReleaseSavepoint()
     {
         ExpectKeyword("RELEASE");
-        TryConsumeKeyword("SAVEPOINT");
+        TryConsumeKeyword(KwSavepoint);
         return new Statement.ReleaseSavepoint(new ReleaseSavepointStatement(ParseIdent()));
     }
 
-    private Statement ParseUseDatabase()
+    private Statement.UseDatabase ParseUseDatabase()
     {
         ExpectKeyword("USE");
         TryConsumeKeyword("DATABASE");
@@ -1321,7 +1342,7 @@ internal sealed class Parser
         var (db, schema, name) = ParseQualifiedName();
         string? alias = null;
         if (TryConsumeKeyword("AS")) alias = ParseIdent();
-        else if (Current.Kind == TokenKind.Ident && !IsJoinKeyword() && !IsKeywordAny("WHERE", "GROUP", "HAVING", "ORDER", "LIMIT", "OFFSET", "ON", "FILTER"))
+        else if (Current.Kind == TokenKind.Ident && !IsJoinKeyword() && !IsKeywordAny(KwWhere, "GROUP", "HAVING", "ORDER", "LIMIT", "OFFSET", "ON", "FILTER"))
             alias = Consume().Text;
         return new TableReference.Named(db, schema, name, alias);
     }
@@ -1413,7 +1434,7 @@ internal sealed class Parser
         {
             Consume();
             // Check if it's a subquery
-            if (IsKeyword("SELECT") || IsKeyword("WITH"))
+            if (IsKeyword(KwSelect) || IsKeyword("WITH"))
             {
                 var sub = ParseSelect();
                 Expect(TokenKind.RightParen, ")");
@@ -1500,7 +1521,7 @@ internal sealed class Parser
         if (IsKeyword("CASE")) return ParseCaseExpr();
 
         // EXISTS
-        if (IsKeyword("EXISTS"))
+        if (IsKeyword(KwExists))
         {
             Consume();
             Expect(TokenKind.LeftParen, "(");
@@ -1560,7 +1581,7 @@ internal sealed class Parser
         if (Current.Kind == TokenKind.LeftParen)
         {
             Consume();
-            if (IsKeyword("SELECT") || IsKeyword("WITH"))
+            if (IsKeyword(KwSelect) || IsKeyword("WITH"))
             {
                 var sub = ParseSelect();
                 Expect(TokenKind.RightParen, ")");
@@ -1581,7 +1602,7 @@ internal sealed class Parser
         throw ParseError($"unexpected token in expression: '{Current.Text}'");
     }
 
-    private Expr ParseCastExpr()
+    private Expr.Cast ParseCastExpr()
     {
         Consume();
         Expect(TokenKind.LeftParen, "(");
@@ -1592,7 +1613,7 @@ internal sealed class Parser
         return new Expr.Cast(castExpr, castType);
     }
 
-    private Expr ParseCaseExpr()
+    private Expr.Case ParseCaseExpr()
     {
         Consume();
         Expr? operand = null;
@@ -1612,7 +1633,7 @@ internal sealed class Parser
         return new Expr.Case(operand, conditions, elseRes);
     }
 
-    private Expr ParseSubstringExpr()
+    private Expr.Substring ParseSubstringExpr()
     {
         Consume();
         Expect(TokenKind.LeftParen, "(");
@@ -1632,7 +1653,7 @@ internal sealed class Parser
         return new Expr.Substring(sub, from, len);
     }
 
-    private Expr ParseTrimExpr()
+    private Expr.Trim ParseTrimExpr()
     {
         Consume();
         Expect(TokenKind.LeftParen, "(");
@@ -1731,7 +1752,7 @@ internal sealed class Parser
 /// </summary>
 public sealed class SqlParser
 {
-    public SqlParser() { }
+    private SqlParser() { }
 
     /// <summary>Parse one or more semicolon-separated SQL statements.</summary>
     public static List<Statement> Parse(string sql)

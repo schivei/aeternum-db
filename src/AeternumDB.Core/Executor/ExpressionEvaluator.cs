@@ -212,12 +212,12 @@ public static class ExpressionEvaluator
             _ => throw TypeMismatch("integer", lv, rv)
         };
 
-    private static DbValue EvalConcat(DbValue lv, DbValue rv) =>
+    private static DbValue.Text EvalConcat(DbValue lv, DbValue rv) =>
         new DbValue.Text((lv.AsString() ?? lv.ToString()!) + (rv.AsString() ?? rv.ToString()!));
 
     // ── LIKE / ILIKE ──────────────────────────────────────────────────────────
 
-    private static DbValue EvalLikeOp(DbValue lv, DbValue rv, bool caseInsensitive, bool negated)
+    private static DbValue.Boolean EvalLikeOp(DbValue lv, DbValue rv, bool caseInsensitive, bool negated)
     {
         if (lv is not DbValue.Text lText || rv is not DbValue.Text rText)
             throw new ExecutorException(ExecutorErrorKind.TypeMismatch,

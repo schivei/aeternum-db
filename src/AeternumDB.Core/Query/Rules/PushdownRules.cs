@@ -55,7 +55,7 @@ public sealed class PredicatePushdownRule : IOptimizationRule
                         j.JoinType,
                         j.Condition);
 
-                if (refsLeft && refsRight && j.JoinType == JoinType.Inner)
+                if (refsLeft && j.JoinType == JoinType.Inner)
                 {
                     var merged = j.Condition is null
                         ? predicate

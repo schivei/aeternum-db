@@ -27,6 +27,7 @@ public abstract class DbValue : IEquatable<DbValue>
         public override bool Equals(object? obj) => obj is Null;
         public override int GetHashCode() => 0;
         public override string? AsString() => null;
+        public override bool IsNull => true;
     }
 
     public sealed class Boolean(bool value) : DbValue
@@ -115,7 +116,7 @@ public abstract class DbValue : IEquatable<DbValue>
         public override int GetHashCode() => Value.GetHashCode(StringComparison.Ordinal);
     }
 
-    public bool IsNull => this is Null;
+    public virtual bool IsNull => false;
     public abstract bool Equals(DbValue? other);
     public abstract override bool Equals(object? obj);
     public abstract override int GetHashCode();

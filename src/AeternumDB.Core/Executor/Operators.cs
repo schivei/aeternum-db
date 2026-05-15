@@ -294,8 +294,9 @@ public sealed class ProjectExec(IExecutionPlan input, IReadOnlyList<ProjectionIt
     public IExecutionPlan Input { get; } = input;
     public IReadOnlyList<ProjectionItem> Items { get; } = items;
 
+    private List<ColumnMeta>? _schema;
     public IReadOnlyList<ColumnMeta> Schema =>
-        Items.Select((item, i) =>
+        _schema ??= Items.Select((item, i) =>
             new ColumnMeta(item.Alias ?? $"col_{i}", "unknown")).ToList();
 
     public async IAsyncEnumerable<RecordBatch> ExecuteAsync(IExecutionContext ctx)
@@ -550,13 +551,16 @@ public sealed class NestedLoopJoinExec(
             }
 
             if (!matched && (JoinType is JoinType.Left || JoinType is JoinType.Full))
-            {
-                var outRow = new DbRow();
-                foreach (var kv in leftRow.Columns) outRow.Set(kv.Key, kv.Value);
-                foreach (var meta in rightSchema) outRow.Set(meta.Name, DbValue.Null.Instance);
-                output.Add(outRow);
-            }
+                output.Add(BuildNullPaddedRow(leftRow, rightSchema));
         }
+    }
+
+    private static DbRow BuildNullPaddedRow(DbRow leftRow, IReadOnlyList<ColumnMeta> rightSchema)
+    {
+        var outRow = new DbRow();
+        foreach (var kv in leftRow.Columns) outRow.Set(kv.Key, kv.Value);
+        foreach (var meta in rightSchema) outRow.Set(meta.Name, DbValue.Null.Instance);
+        return outRow;
     }
 
     private void ProcessUnmatchedRightRows(List<DbRow> leftRows, IReadOnlyList<ColumnMeta> leftSchema, List<DbRow> rightRows, List<DbRow> output)
