@@ -36,49 +36,26 @@
 }
 
 .heroPrimaryButton {
-  background-color: #ffffff;
-  border-color: #ffffff;
-  color: #1e1b4b;
+  background-color: var(--ifm-color-primary-lightest);
+  border-color: var(--ifm-color-primary-lightest);
+  color: var(--ifm-background-color);
 }
 
 .heroPrimaryButton:hover {
-  background-color: #ede9fe;
-  border-color: #ede9fe;
-  color: #1e1b4b;
+  background-color: var(--ifm-color-primary-lighter);
+  border-color: var(--ifm-color-primary-lighter);
+  color: var(--ifm-background-color);
 }
 
 .heroSecondaryButton {
-  border-color: rgba(255, 255, 255, 0.7);
-  color: #ffffff;
+  border-color: var(--ifm-color-primary-lightest);
+  color: var(--ifm-color-primary-lightest);
 }
 
 .heroSecondaryButton:hover {
-  border-color: #ffffff;
-  background-color: rgba(255, 255, 255, 0.14);
-  color: #ffffff;
-}
-
-[data-theme='dark'] .heroPrimaryButton {
-  background-color: #a78bfa;
-  border-color: #a78bfa;
-  color: #161b22;
-}
-
-[data-theme='dark'] .heroPrimaryButton:hover {
-  background-color: #c4b5fd;
-  border-color: #c4b5fd;
-  color: #161b22;
-}
-
-[data-theme='dark'] .heroSecondaryButton {
-  border-color: rgba(240, 240, 255, 0.75);
-  color: #f0f0ff;
-}
-
-[data-theme='dark'] .heroSecondaryButton:hover {
-  border-color: #f0f0ff;
-  background-color: rgba(240, 240, 255, 0.12);
-  color: #f0f0ff;
+  border-color: var(--ifm-color-primary-lightest);
+  background-color: var(--ifm-color-primary-darkest);
+  color: var(--ifm-color-primary-lightest);
 }
 
 .badges {
