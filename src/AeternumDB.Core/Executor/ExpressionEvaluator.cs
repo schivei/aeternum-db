@@ -227,12 +227,17 @@ public static class ExpressionEvaluator
         bool matches;
         try
         {
-            matches = Regex.IsMatch(lText.Value, pattern, opts);
+            matches = Regex.IsMatch(lText.Value, pattern, opts, TimeSpan.FromSeconds(1));
         }
         catch (RegexParseException)
         {
             throw new ExecutorException(ExecutorErrorKind.EvalError,
                 $"Invalid LIKE pattern: {rText.Value}");
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            throw new ExecutorException(ExecutorErrorKind.EvalError,
+                "LIKE pattern evaluation timed out");
         }
         return new DbValue.Boolean(negated ? !matches : matches);
     }

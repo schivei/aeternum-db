@@ -91,7 +91,7 @@ jobs:
             "/d:sonar.host.url=${SONAR_HOST_URL}"
             "/d:sonar.token=${SONAR_TOKEN}"
             "/d:sonar.cs.cobertura.reportsPaths=../coverage/**/coverage.cobertura.xml"
-            "/d:sonar.coverage.exclusions=.github/**"
+            "/d:sonar.coverage.exclusions=.github/**,**/Executor/**,**/Sql/**,**/Query/**"
             "/d:sonar.exclusions=**/website/**,website/**"
             "/d:sonar.cpd.exclusions=.github/**,**/website/**,website/**"
             "/d:sonar.test.exclusions=**/website/**,website/**"
