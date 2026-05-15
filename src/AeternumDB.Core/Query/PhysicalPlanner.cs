@@ -187,14 +187,22 @@ public sealed class PhysicalPlanner(CostModel costModel, StatisticsRegistry stat
             return new Expr.BinaryOp(original, BinaryOperator.And, residual);
         }
 
-        Expr? equi = null;
-        for (var i = 0; i < lk.Count; i++)
+        if (rk.Count != lk.Count || rk.Count == 0)
+        {
+            if (original is null) return residual;
+            if (residual is null) return original;
+            if (ReferenceEquals(original, residual)) return original;
+            return new Expr.BinaryOp(original, BinaryOperator.And, residual);
+        }
+
+        var equi = new Expr.BinaryOp(lk[0], BinaryOperator.Eq, rk[0]);
+        for (var i = 1; i < lk.Count; i++)
         {
             var eq = new Expr.BinaryOp(lk[i], BinaryOperator.Eq, rk[i]);
-            equi = equi is null ? eq : new Expr.BinaryOp(equi, BinaryOperator.And, eq);
+            equi = new Expr.BinaryOp(equi, BinaryOperator.And, eq);
         }
 
         if (residual is null) return equi;
-        return equi is null ? residual : new Expr.BinaryOp(equi, BinaryOperator.And, residual);
+        return new Expr.BinaryOp(equi, BinaryOperator.And, residual);
     }
 }

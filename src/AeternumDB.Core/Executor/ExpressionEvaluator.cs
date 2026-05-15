@@ -14,6 +14,8 @@ using AeternumDB.Core.Types;
 /// </summary>
 public static class ExpressionEvaluator
 {
+    private const double FloatingPointZeroTolerance = 1e-12;
+
     /// <summary>Evaluate an expression against a row, returning a DbValue.</summary>
     public static DbValue Eval(Expr expr, DbRow row) =>
         expr switch
@@ -189,10 +191,10 @@ public static class ExpressionEvaluator
             (DbValue.Integer a, DbValue.Integer b) when b.Value == 0
                 => throw new ExecutorException(ExecutorErrorKind.EvalError, "Division by zero"),
             (DbValue.Integer a, DbValue.Integer b) => new DbValue.Integer(a.Value / b.Value),
-            (DbValue.Float a, DbValue.Float b) when b.Value == 0.0
+            (DbValue.Float a, DbValue.Float b) when Math.Abs(b.Value) <= FloatingPointZeroTolerance
                 => throw new ExecutorException(ExecutorErrorKind.EvalError, "Division by zero"),
             (DbValue.Float a, DbValue.Float b) => new DbValue.Float(a.Value / b.Value),
-            (DbValue.Integer a, DbValue.Float b) when b.Value == 0.0
+            (DbValue.Integer a, DbValue.Float b) when Math.Abs(b.Value) <= FloatingPointZeroTolerance
                 => throw new ExecutorException(ExecutorErrorKind.EvalError, "Division by zero"),
             (DbValue.Integer a, DbValue.Float b) => new DbValue.Float(a.Value / b.Value),
             (DbValue.Float a, DbValue.Integer b) when b.Value == 0

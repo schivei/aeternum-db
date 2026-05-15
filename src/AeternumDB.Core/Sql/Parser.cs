@@ -858,7 +858,7 @@ internal sealed class Parser
             "INT" or "INTEGER" => ParseUnsignedVariant("INTEGER", DataType.Integer.Instance, DataType.UnsignedInt.Instance),
             "BIGINT" => ParseUnsignedVariant("BIGINT", DataType.BigInt.Instance, DataType.UnsignedBigInt.Instance),
             "FLOAT" or "REAL" => DataType.Float.Instance,
-            "DOUBLE" => TryConsumeKeyword("PRECISION") ? DataType.Double.Instance : DataType.Double.Instance,
+            "DOUBLE" => ParseDoubleType(),
             "DECIMAL" or "NUMERIC" => ParseDecimalType(),
             "VARCHAR" or "CHARACTER VARYING" => new DataType.Varchar(TryParseParenUInt64()),
             "TEXT" => new DataType.Varchar(null),
@@ -885,6 +885,12 @@ internal sealed class Parser
 
     private DataType ParseUnsignedVariant(string typeName, DataType signed, DataType unsigned) =>
         TryConsumeKeyword("UNSIGNED") ? unsigned : signed;
+
+    private DataType ParseDoubleType()
+    {
+        TryConsumeKeyword("PRECISION");
+        return DataType.Double.Instance;
+    }
 
     private DataType ParseDecimalType()
     {

@@ -24,6 +24,7 @@ public abstract class DbValue : IEquatable<DbValue>
         private Null() { }
         public override string ToString() => "NULL";
         public override bool Equals(DbValue? other) => other is Null;
+        public override bool Equals(object? obj) => obj is Null;
         public override int GetHashCode() => 0;
     }
 
@@ -32,6 +33,7 @@ public abstract class DbValue : IEquatable<DbValue>
         public bool Value { get; } = value;
         public override string ToString() => Value ? "TRUE" : "FALSE";
         public override bool Equals(DbValue? other) => other is Boolean b && b.Value == Value;
+        public override bool Equals(object? obj) => obj is Boolean b && b.Value == Value;
         public override int GetHashCode() => Value.GetHashCode();
     }
 
@@ -40,6 +42,7 @@ public abstract class DbValue : IEquatable<DbValue>
         public long Value { get; } = value;
         public override string ToString() => Value.ToString();
         public override bool Equals(DbValue? other) => other is Integer i && i.Value == Value;
+        public override bool Equals(object? obj) => obj is Integer i && i.Value == Value;
         public override int GetHashCode() => Value.GetHashCode();
     }
 
@@ -47,8 +50,11 @@ public abstract class DbValue : IEquatable<DbValue>
     {
         public double Value { get; } = value;
         public override string ToString() => Value.ToString("G17");
-        public override bool Equals(DbValue? other) => other is Float f && f.Value == Value;
-        public override int GetHashCode() => Value.GetHashCode();
+        public override bool Equals(DbValue? other) =>
+            other is Float f && BitConverter.DoubleToInt64Bits(f.Value) == BitConverter.DoubleToInt64Bits(Value);
+        public override bool Equals(object? obj) =>
+            obj is Float f && BitConverter.DoubleToInt64Bits(f.Value) == BitConverter.DoubleToInt64Bits(Value);
+        public override int GetHashCode() => BitConverter.DoubleToInt64Bits(Value).GetHashCode();
     }
 
     public sealed class Text(string value) : DbValue
@@ -56,6 +62,7 @@ public abstract class DbValue : IEquatable<DbValue>
         public string Value { get; } = value;
         public override string ToString() => Value;
         public override bool Equals(DbValue? other) => other is Text t && t.Value == Value;
+        public override bool Equals(object? obj) => obj is Text t && t.Value == Value;
         public override int GetHashCode() => Value.GetHashCode(StringComparison.Ordinal);
     }
 
@@ -65,6 +72,8 @@ public abstract class DbValue : IEquatable<DbValue>
         public override string ToString() => $"<{Value.Length} bytes>";
         public override bool Equals(DbValue? other) =>
             other is Bytes b && b.Value.AsSpan().SequenceEqual(Value);
+        public override bool Equals(object? obj) =>
+            obj is Bytes b && b.Value.AsSpan().SequenceEqual(Value);
         public override int GetHashCode() => Value.Length;
     }
 
@@ -74,6 +83,8 @@ public abstract class DbValue : IEquatable<DbValue>
         public override string ToString() => $"[{string.Join(", ", (IEnumerable<DbValue>)Items)}]";
         public override bool Equals(DbValue? other) =>
             other is Array a && a.Items.SequenceEqual(Items);
+        public override bool Equals(object? obj) =>
+            obj is Array a && a.Items.SequenceEqual(Items);
         public override int GetHashCode() => Items.Length;
     }
 
@@ -83,6 +94,7 @@ public abstract class DbValue : IEquatable<DbValue>
         public decimal Value { get; } = value;
         public override string ToString() => Value.ToString();
         public override bool Equals(DbValue? other) => other is Decimal d && d.Value == Value;
+        public override bool Equals(object? obj) => obj is Decimal d && d.Value == Value;
         public override int GetHashCode() => Value.GetHashCode();
     }
 
@@ -92,6 +104,7 @@ public abstract class DbValue : IEquatable<DbValue>
         public string Value { get; } = value;
         public override string ToString() => Value;
         public override bool Equals(DbValue? other) => other is Json j && j.Value == Value;
+        public override bool Equals(object? obj) => obj is Json j && j.Value == Value;
         public override int GetHashCode() => Value.GetHashCode(StringComparison.Ordinal);
     }
 

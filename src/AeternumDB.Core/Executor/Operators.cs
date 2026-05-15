@@ -764,9 +764,7 @@ public sealed class HashAggregateExec(
     }
 
     private static string FuncName(Expr expr) =>
-        expr is Expr.Function fn ? fn.Name.ToUpperInvariant() :
-        expr is Expr.Wildcard ? "COUNT" :
-        "COUNT";
+        expr is Expr.Function fn ? fn.Name.ToUpperInvariant() : "COUNT";
 
     private static DbValue EvalAggArg(Expr func, DbRow row)
     {
