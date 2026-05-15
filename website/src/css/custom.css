@@ -1,0 +1,220 @@
+/**
+ * Global CSS for AeternumDB documentation site.
+ * Based on the net-mediate theme with AeternumDB branding.
+ */
+
+:root {
+  --ifm-color-primary: #7c3aed;
+  --ifm-color-primary-dark: #6d28d9;
+  --ifm-color-primary-darker: #5b21b6;
+  --ifm-color-primary-darkest: #4c1d95;
+  --ifm-color-primary-light: #8b5cf6;
+  --ifm-color-primary-lighter: #a78bfa;
+  --ifm-color-primary-lightest: #c4b5fd;
+  --ifm-code-font-size: 95%;
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.1);
+
+  --ifm-background-color: #ffffff;
+  --ifm-navbar-background-color: #1e1b4b;
+  --ifm-footer-background-color: #1c1e21;
+  --ifm-link-color: #7c3aed;
+  --ifm-link-hover-color: #5b21b6;
+  --ifm-heading-color: #1e1b4b;
+
+  --ifm-navbar-link-color: #f0f0ff;
+  --ifm-navbar-link-hover-color: #ffffff;
+}
+
+[data-theme='dark'] {
+  --ifm-color-primary: #a78bfa;
+  --ifm-color-primary-dark: #8b5cf6;
+  --ifm-color-primary-darker: #7c3aed;
+  --ifm-color-primary-darkest: #6d28d9;
+  --ifm-color-primary-light: #c4b5fd;
+  --ifm-color-primary-lighter: #ddd6fe;
+  --ifm-color-primary-lightest: #ede9fe;
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.3);
+
+  --ifm-background-color: #0d1117;
+  --ifm-navbar-background-color: #161b22;
+  --ifm-footer-background-color: #0d1117;
+  --ifm-link-color: #a78bfa;
+  --ifm-link-hover-color: #c4b5fd;
+  --ifm-heading-color: #f0f0ff;
+}
+
+[data-theme='light'] .hero--primary {
+  background-color: #1e1b4b;
+}
+
+[data-theme='light'] .hero--primary .hero__title,
+[data-theme='light'] .hero--primary .hero__subtitle {
+  color: #ffffff;
+}
+
+[data-theme='dark'] .hero--primary {
+  background-color: #161b22;
+}
+
+[data-theme='dark'] .hero--primary .hero__title,
+[data-theme='dark'] .hero--primary .hero__subtitle {
+  color: #f0f0ff;
+}
+
+.navbar {
+  box-shadow: 0 1px 0 rgba(27, 31, 36, 0.04),
+    0 1px 0 rgba(0, 0, 0, 0.04),
+    0 1px 0 rgba(0, 0, 0, 0.04);
+}
+
+[data-theme='light'] .navbar-sidebar {
+  --ifm-navbar-link-color: #1e1b4b;
+  --ifm-navbar-link-hover-color: #7c3aed;
+}
+
+.navbar__title {
+  font-weight: 600;
+}
+
+.footer {
+  border-top: 1px solid var(--ifm-toc-border-color);
+}
+
+pre {
+  border-radius: 6px;
+}
+
+table {
+  border-collapse: collapse;
+  border-spacing: 0;
+}
+
+table thead tr {
+  background-color: var(--ifm-table-head-background);
+  border-top: 1px solid var(--ifm-table-border-color);
+}
+
+table tr {
+  border-top: 1px solid var(--ifm-table-border-color);
+}
+
+table th,
+table td {
+  padding: 6px 13px;
+  border: 1px solid var(--ifm-table-border-color);
+}
+
+.button {
+  border-radius: 6px;
+  font-weight: 500;
+}
+
+.button--primary {
+  background-color: var(--ifm-color-primary);
+  border-color: var(--ifm-color-primary);
+}
+
+.button--primary:hover {
+  background-color: var(--ifm-color-primary-dark);
+  border-color: var(--ifm-color-primary-dark);
+}
+
+[data-theme='dark'] .button--primary {
+  background-color: #7c3aed;
+  border-color: #7c3aed;
+}
+
+[data-theme='dark'] .button--primary:hover {
+  background-color: #6d28d9;
+  border-color: #6d28d9;
+}
+
+.hero:not(.hero--primary) {
+  background-color: var(--ifm-background-surface-color);
+  border-bottom: 1px solid var(--ifm-toc-border-color);
+}
+
+.hero--primary {
+  border-bottom: 1px solid var(--ifm-toc-border-color);
+}
+
+.navbar__link:focus,
+.menu__link:focus,
+.button:focus {
+  outline: 2px solid var(--ifm-color-primary);
+  outline-offset: 2px;
+}
+
+@media (max-width: 996px) {
+  .hero {
+    padding: 2rem 0;
+  }
+}
+
+.features {
+  display: flex;
+  align-items: center;
+  padding: 2rem 0;
+  width: 100%;
+}
+
+.feature {
+  text-align: center;
+  padding: 0 2rem;
+}
+
+.feature h3 {
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+}
+
+.hero__title,
+h1,
+h2,
+h3 {
+  color: var(--ifm-heading-color);
+}
+
+.announcement {
+  background-color: var(--ifm-color-primary);
+  color: white;
+  font-weight: 500;
+  text-align: center;
+  padding: 0.75rem;
+}
+
+.announcement a {
+  color: white;
+  text-decoration: underline;
+}
+
+.badge {
+  display: inline-block;
+  padding: 0.25em 0.6em;
+  font-size: 75%;
+  font-weight: 600;
+  line-height: 1;
+  text-align: center;
+  white-space: nowrap;
+  vertical-align: baseline;
+  border-radius: 6px;
+}
+
+.badge--primary {
+  background-color: var(--ifm-color-primary);
+  color: white;
+}
+
+[data-theme='dark'] .badge--primary {
+  background-color: #7c3aed;
+}
+
+.badge--success {
+  background-color: #1a7f37;
+  color: white;
+}
+
+.badge--warning {
+  background-color: #7d5900;
+  color: white;
+}

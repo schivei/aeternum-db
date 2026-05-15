@@ -131,7 +131,7 @@ A good vulnerability report should include:
 
 ### Additional Helpful Information
 
-- Environment details (OS, Rust version, configuration)
+- Environment details (OS, .NET SDK version, configuration)
 - Logs or error messages
 - Network captures (if applicable)
 - Exploitability assessment
@@ -295,21 +295,26 @@ docker pull aeternumdb:latest
 
 #### Secure Coding Practices
 
-```rust
+```csharp
 // ✅ Good: Input validation
-pub fn execute_query(sql: &str) -> Result<ResultSet, Error> {
-    if sql.len() > MAX_QUERY_LENGTH {
-        return Err(Error::QueryTooLong);
+public static Result<ResultSet> ExecuteQuery(string sql)
+{
+    if (sql.Length > MaxQueryLength)
+    {
+        return Result<ResultSet>.Failure("QueryTooLong");
     }
-    // Validate and sanitize input
-    let validated = validate_sql(sql)?;
-    // ... execute
+
+    var validated = ValidateSql(sql);
+    return validated.IsFailure
+        ? Result<ResultSet>.Failure(validated.Error)
+        : ExecuteValidated(validated.Value);
 }
 
 // ❌ Bad: No validation
-pub fn execute_query(sql: &str) -> ResultSet {
+public static ResultSet ExecuteQueryUnsafe(string sql)
+{
     // Direct execution without checks - SQL injection risk!
-    unsafe_execute(sql)
+    return ExecuteRaw(sql);
 }
 ```
 
@@ -349,7 +354,7 @@ We recognize and thank security researchers who help keep AeternumDB secure:
 
 - [OWASP Top 10](https://owasp.org/www-project-top-ten/)
 - [CWE Top 25](https://cwe.mitre.org/top25/)
-- [Rust Security Guidelines](https://anssi-fr.github.io/rust-guide/)
+- [.NET Security Guidelines](https://learn.microsoft.com/dotnet/standard/security/)
 
 ### Compliance
 

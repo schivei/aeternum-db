@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="AeternumDB.Core/AeternumDB.Core.csproj" />
+  <Project Path="AeternumDB.Core.Tests/AeternumDB.Core.Tests.csproj" />
+</Solution>

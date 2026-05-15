@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+    <IsAotCompatible>true</IsAotCompatible>
+    <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
+    <AssemblyName>AeternumDB.PoC.Shared</AssemblyName>
+    <RootNamespace>AeternumDB.PoC.Shared</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="GenDI" Version="26.*" />
+    <PackageReference Include="GenDI.SourceGenerator" Version="26.*">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>contentfiles; compile; runtime</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+</Project>

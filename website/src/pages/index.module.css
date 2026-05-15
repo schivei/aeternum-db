@@ -1,0 +1,155 @@
+.heroBanner {
+  padding: 5rem 0 3rem;
+  text-align: center;
+  position: relative;
+  overflow: hidden;
+}
+
+@media screen and (max-width: 996px) {
+  .heroBanner {
+    padding: 2rem;
+  }
+}
+
+.logoRow {
+  margin-bottom: 0.5rem;
+}
+
+.logoEmoji {
+  font-size: 4rem;
+  line-height: 1;
+}
+
+.heroDescription {
+  font-size: 1rem;
+  opacity: 0.85;
+  margin-top: 0.75rem;
+}
+
+.buttons {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 2rem;
+}
+
+.badges {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  margin-top: 1.5rem;
+  flex-wrap: wrap;
+}
+
+.badges img {
+  height: 20px;
+}
+
+/* Stats bar */
+.statsSection {
+  padding: 2.5rem 0;
+  background-color: var(--ifm-color-primary);
+  text-align: center;
+}
+
+.statItem {
+  padding: 0 1.5rem;
+}
+
+.statValue {
+  font-size: 2.5rem;
+  font-weight: 800;
+  color: #ffffff;
+  line-height: 1.1;
+}
+
+.statLabel {
+  font-size: 0.9rem;
+  color: rgba(255, 255, 255, 0.85);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-top: 0.25rem;
+}
+
+[data-theme='dark'] .statsSection {
+  background-color: #1e1b4b;
+}
+
+/* Features */
+.features {
+  padding: 4rem 0;
+  background-color: var(--ifm-background-surface-color);
+}
+
+.featureEmoji {
+  font-size: 3.5rem;
+  margin-bottom: 0.75rem;
+}
+
+/* Quick Example */
+.quickExample {
+  padding: 4rem 0;
+  background-color: var(--ifm-background-color);
+}
+
+.quickExample pre {
+  background-color: var(--ifm-code-background);
+  border-radius: 6px;
+  padding: 1rem;
+  overflow-x: auto;
+}
+
+.quickExample code {
+  font-family: 'Monaco', 'Consolas', 'Courier New', monospace;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.quickLinks {
+  padding-left: 2rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.linkList {
+  list-style: none;
+  padding: 0;
+  margin: 1rem 0 1.5rem;
+}
+
+.linkList li {
+  padding: 0.4rem 0;
+  font-size: 1rem;
+}
+
+.ctaBlock {
+  margin-top: 1.5rem;
+}
+
+@media screen and (max-width: 996px) {
+  .statsSection {
+    padding: 1.5rem 0;
+  }
+
+  .statValue {
+    font-size: 2rem;
+  }
+
+  .features,
+  .quickExample {
+    padding: 2rem 0;
+  }
+
+  .featureEmoji {
+    font-size: 3rem;
+  }
+
+  .quickLinks {
+    padding-left: 0;
+    margin-top: 2rem;
+  }
+}

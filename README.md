@@ -5,10 +5,10 @@
 **High-Performance, Extensible Database Management System**
 
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL%203.0-blue.svg)](LICENSE.md)
-[![Rust](https://img.shields.io/badge/Rust-1.70%2B-orange.svg)](https://www.rust-lang.org)
+[![.NET](https://img.shields.io/badge/.NET-10.0-purple.svg)](https://dotnet.microsoft.com)
 [![Status](https://img.shields.io/badge/Status-In%20Development-yellow.svg)]()
 
-*A modular DBMS written in Rust, supporting multiple data paradigms and modern execution environments*
+*A modular DBMS written in C#/.NET, supporting multiple data paradigms and modern execution environments*
 
 [Features](#-key-features) •
 [Installation](#-installation-and-usage) •
@@ -29,7 +29,7 @@ AeternumDB is a high-performance, extensible, and modular Database Management Sy
 ### Why AeternumDB?
 
 - **Multi-paradigm Support:** Relationships, objects, graphs (GraphQL), JSON/JSON2
-- **Production-Ready:** Built with Rust for memory safety and performance
+- **Production-Ready:** Built with modern C# for memory safety and performance
 - **Cloud-Native:** Designed for modern distributed architectures
 - **Extensible:** WASM-based plugin system for custom functionality
 - **Open Source:** Community-driven with hybrid licensing model
@@ -89,7 +89,7 @@ AeternumDB is a high-performance, extensible, and modular Database Management Sy
 |----------|--------|---------|
 | **ODBC** (32/64-bit) | 🚧 Planned | Apache 2.0 |
 | **JDBC** | 🚧 Planned | Apache 2.0 |
-| **Rust SDK** | 🚧 Planned | Apache 2.0 |
+| **C#/.NET SDK** | 🚧 Planned | Apache 2.0 |
 | **Python SDK** | 🚧 Planned | Apache 2.0 |
 | **JavaScript/TypeScript** | 🚧 Planned | Apache 2.0 |
 | **Go SDK** | 🚧 Planned | Apache 2.0 |
@@ -103,9 +103,9 @@ AeternumDB is a high-performance, extensible, and modular Database Management Sy
 
 ```plaintext
 aeternumdb/
-├── core/               # Main database engine (Rust, AGPLv3.0)
-│   ├── src/           # Source code
-│   └── tests/         # Unit tests
+├── src/                # Main database engine (C#, AGPLv3.0)
+│   ├── AeternumDB.Core/       # Source code
+│   └── AeternumDB.Core.Tests/ # Unit tests
 ├── extensions/         # WASM plugins (MIT)
 ├── drivers/           # Database drivers (Apache 2.0)
 │   ├── odbc/         # ODBC driver
@@ -113,7 +113,7 @@ aeternumdb/
 │   ├── grpc/         # gRPC protocol
 │   └── binary/       # Binary protocol
 ├── sdks/              # Client SDKs (Apache 2.0)
-│   ├── rust/
+│   ├── dotnet/
 │   ├── python/
 │   ├── javascript/
 │   ├── go/
@@ -136,8 +136,7 @@ aeternumdb/
 
 Before you begin, ensure you have the following installed:
 
-- **Rust** (latest stable version)
-- **Cargo** for package management
+- **.NET SDK 10.0+**
 - **Docker** (optional, for containerized deployment)
 - **Kubernetes** (optional, for orchestration)
 
@@ -153,16 +152,14 @@ cd aeternum-db
 #### 2. Build the Core Engine
 
 ```bash
-cd core
-cargo build --release
+cd src
+dotnet build AeternumDB.slnx -c Release
 ```
 
-#### 3. Run in Lite Mode
-
-Start a single local instance:
+#### 3. Run the Test Suite
 
 ```bash
-./target/release/aeternumdb --lite
+dotnet test AeternumDB.slnx -c Release --no-build
 ```
 
 ### Docker Deployment
@@ -295,7 +292,7 @@ We welcome contributions from the community! AeternumDB is an ambitious project 
 
 - [ ] ODBC driver (cross-platform)
 - [ ] JDBC driver
-- [ ] Native SDKs (Rust, Python, JS, Go, Java, .NET, C++)
+- [ ] Native SDKs (Python, JS, Go, Java, .NET, C++)
 - [ ] Connection pooling
 - [ ] Async/await support
 
@@ -320,7 +317,7 @@ AeternumDB is inspired by:
 - **CockroachDB** - Distributed architecture patterns
 - **PostgreSQL** - SQL standards and reliability
 - **MongoDB** - Flexible licensing model
-- **Rust Community** - Memory safety and performance
+- **.NET Community** - Runtime and tooling ecosystem
 
 ---
 

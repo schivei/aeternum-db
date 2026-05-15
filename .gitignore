@@ -37,6 +37,7 @@ build/
 # .NET
 bin/
 obj/
+TestResults/
 *.dll
 *.exe
 *.pdb

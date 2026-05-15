@@ -26,13 +26,14 @@ The repository is organized into modular components with different licenses:
 ```plaintext
 aeternum-db/
 │
-├── core/               # Main engine in Rust (AGPLv3.0)
-│   ├── src/
-│   │   ├── acid.rs           # Transaction management
-│   │   ├── decimal.rs        # Decimal arithmetic
-│   │   ├── json_engine.rs    # JSON/JSON2 support
-│   │   └── versioning.rs     # Data versioning
-│   └── tests/
+├── src/                # Main engine in C# (AGPLv3.0)
+│   ├── AeternumDB.Core/
+│   │   ├── Storage/          # Storage engine
+│   │   ├── Sql/              # SQL parser/validator
+│   │   ├── Executor/         # Execution engine
+│   │   ├── Query/            # Planner/optimizer
+│   │   └── Index/            # Disk-backed BTree
+│   └── AeternumDB.Core.Tests/
 │
 ├── extensions/         # WASM plugins (MIT)
 │   └── README.md
@@ -44,7 +45,7 @@ aeternum-db/
 │   └── binary/        # Binary protocol
 │
 ├── sdks/              # Client SDKs (Apache 2.0)
-│   ├── rust/
+│   ├── dotnet/
 │   ├── python/
 │   ├── javascript/
 │   ├── go/
@@ -127,15 +128,12 @@ AeternumDB uses a **hybrid licensing model** to balance open-source community gr
 git clone https://github.com/schivei/aeternum-db.git
 cd aeternum-db
 
-# Install Rust (if not already installed)
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-
 # Build the project
-cd core
-cargo build
+cd src
+dotnet build AeternumDB.slnx -c Release
 
 # Run tests
-cargo test
+dotnet test AeternumDB.slnx -c Release --no-build
 ```
 
 ### Step 3: Create Your Feature Branch
@@ -155,7 +153,7 @@ Branch naming conventions:
 Follow the guidelines in our [PR Development Guide](docs/PR_GUIDE.md):
 - Write clean, documented code
 - Add tests for new functionality
-- Follow Rust conventions (cargo fmt, cargo clippy)
+- Follow C# conventions (`dotnet format`, analyzers)
 - Update documentation as needed
 
 ### Step 5: Submit a Pull Request
@@ -207,16 +205,16 @@ git fetch origin
 git rebase origin/main
 
 # Run formatting
-cargo fmt
+dotnet format AeternumDB.slnx
 
-# Check for common mistakes
-cargo clippy -- -D warnings
+# Check for common mistakes (build + analyzers)
+dotnet build AeternumDB.slnx -c Release
 
 # Run tests frequently
-cargo test
+dotnet test AeternumDB.slnx -c Release --no-build
 
 # Build in release mode
-cargo build --release
+dotnet build AeternumDB.slnx -c Release
 ```
 
 ### Code Review Process
@@ -230,24 +228,13 @@ cargo build --release
 
 ## 📐 Code Standards
 
-### Rust Code Style
+### C# Code Style
 
-```rust
-// ✅ Good: Well-documented, follows conventions
-/// Calculates the sum of two decimal numbers.
-///
-/// # Arguments
-/// * `a` - First decimal number
-/// * `b` - Second decimal number
-///
-/// # Examples
-/// ```
-/// use aeternumdb::decimal::add;
-/// let result = add(Decimal::new(1, 0), Decimal::new(2, 0));
-/// assert_eq!(result, Decimal::new(3, 0));
-/// ```
-pub fn add(a: Decimal, b: Decimal) -> Decimal {
-    a + b
+```csharp
+// ✅ Good: explicit API + focused responsibility
+public static decimal Add(decimal a, decimal b)
+{
+    return a + b;
 }
 ```
 
@@ -258,20 +245,14 @@ pub fn add(a: Decimal, b: Decimal) -> Decimal {
 - **Coverage:** Aim for >80% code coverage
 - **Documentation tests:** Examples in doc comments should compile
 
-```rust
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_addition() {
-        let result = add(Decimal::new(1, 0), Decimal::new(2, 0));
-        assert_eq!(result, Decimal::new(3, 0));
-    }
-
-    #[tokio::test]
-    async fn test_async_operation() {
-        // Async test example
+```csharp
+public sealed class ArithmeticTests
+{
+    [Fact]
+    public void Add_ShouldSumValues()
+    {
+        var result = 1m + 2m;
+        Assert.Equal(3m, result);
     }
 }
 ```
