@@ -16,6 +16,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="System.IO.Hashing" Version="9.*" />
     <PackageReference Include="GenDI" Version="26.*" />
     <PackageReference Include="GenDI.SourceGenerator" Version="26.*">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
