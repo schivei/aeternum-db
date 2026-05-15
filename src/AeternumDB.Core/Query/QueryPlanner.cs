@@ -16,7 +16,7 @@ public sealed class PlannerContext(Catalog catalog)
     public IReadOnlyCollection<string> FlatTables => _flatTables;
 }
 
-public sealed class QueryPlanner
+public static class QueryPlanner
 {
     public static LogicalPlan CreateLogicalPlan(Statement stmt, PlannerContext ctx)
     {

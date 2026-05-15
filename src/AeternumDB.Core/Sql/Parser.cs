@@ -110,71 +110,69 @@ internal sealed class Tokenizer
         {
             SkipWhitespaceAndComments();
             if (_pos >= _src.Length) break;
-
-            var startLine = _line;
-            var ch = _src[_pos];
-
-            // String literals
-            if (ch == '\'' || ch == '"')
-            {
-                tokens.Add(ReadStringLiteral(startLine));
-                continue;
-            }
-
-            // Backtick-quoted identifier
-            if (ch == '`')
-            {
-                tokens.Add(ReadBacktickIdent(startLine));
-                continue;
-            }
-
-            // Numbers
-            if (char.IsAsciiDigit(ch) || (ch == '.' && _pos + 1 < _src.Length && char.IsAsciiDigit(_src[_pos + 1])))
-            {
-                tokens.Add(ReadNumber(startLine));
-                continue;
-            }
-
-            // Identifiers / keywords
-            if (char.IsLetter(ch) || ch == '_')
-            {
-                tokens.Add(ReadIdentOrKeyword(startLine));
-                continue;
-            }
-
-            // Operators and punctuation
-            var t = ReadOperator(startLine);
-            if (t != null) tokens.Add(t);
+            var token = ReadNextToken(_line);
+            if (token != null) tokens.Add(token);
         }
         tokens.Add(new Token(TokenKind.Eof, "", _line));
         return tokens;
     }
+
+    private Token? ReadNextToken(int line)
+    {
+        var ch = _src[_pos];
+        if (ch == '\'' || ch == '"') return ReadStringLiteral(line);
+        if (ch == '`') return ReadBacktickIdent(line);
+        if (IsNumberStart(ch)) return ReadNumber(line);
+        if (char.IsLetter(ch) || ch == '_') return ReadIdentOrKeyword(line);
+        return ReadOperator(line);
+    }
+
+    private bool IsNumberStart(char ch) =>
+        char.IsAsciiDigit(ch) || (ch == '.' && _pos + 1 < _src.Length && char.IsAsciiDigit(_src[_pos + 1]));
 
     private void SkipWhitespaceAndComments()
     {
         while (_pos < _src.Length)
         {
             var ch = _src[_pos];
-            if (ch == '\n') { _line++; _pos++; }
-            else if (char.IsWhiteSpace(ch)) { _pos++; }
-            else if (ch == '-' && _pos + 1 < _src.Length && _src[_pos + 1] == '-')
-            {
-                // Line comment
-                while (_pos < _src.Length && _src[_pos] != '\n') _pos++;
-            }
-            else if (ch == '/' && _pos + 1 < _src.Length && _src[_pos + 1] == '*')
-            {
-                // Block comment
-                _pos += 2;
-                while (_pos + 1 < _src.Length && !(_src[_pos] == '*' && _src[_pos + 1] == '/'))
-                {
-                    if (_src[_pos] == '\n') _line++;
-                    _pos++;
-                }
-                _pos += 2;
-            }
-            else break;
+            if (TrySkipWhitespace(ch) || TrySkipLineComment(ch) || TrySkipBlockComment(ch)) continue;
+            break;
         }
+    }
+
+    private bool TrySkipWhitespace(char ch)
+    {
+        if (ch == '\n')
+        {
+            _line++;
+            _pos++;
+            return true;
+        }
+
+        if (!char.IsWhiteSpace(ch)) return false;
+        _pos++;
+        return true;
+    }
+
+    private bool TrySkipLineComment(char ch)
+    {
+        if (ch != '-' || _pos + 1 >= _src.Length || _src[_pos + 1] != '-') return false;
+        while (_pos < _src.Length && _src[_pos] != '\n') _pos++;
+        return true;
+    }
+
+    private bool TrySkipBlockComment(char ch)
+    {
+        if (ch != '/' || _pos + 1 >= _src.Length || _src[_pos + 1] != '*') return false;
+        _pos += 2;
+        while (_pos + 1 < _src.Length && !(_src[_pos] == '*' && _src[_pos + 1] == '/'))
+        {
+            if (_src[_pos] == '\n') _line++;
+            _pos++;
+        }
+
+        if (_pos + 1 < _src.Length) _pos += 2;
+        return true;
     }
 
     private Token ReadStringLiteral(int line)
@@ -184,27 +182,41 @@ internal sealed class Tokenizer
         while (_pos < _src.Length)
         {
             var ch = _src[_pos];
-            if (ch == quote)
-            {
-                _pos++;
-                // Check for doubled quote (escape)
-                if (_pos < _src.Length && _src[_pos] == quote) { sb.Append(quote); _pos++; }
-                else break;
-            }
-            else if (ch == '\\' && _pos + 1 < _src.Length)
-            {
-                _pos++;
-                sb.Append(_src[_pos] switch { 'n' => '\n', 't' => '\t', 'r' => '\r', var x => x });
-                _pos++;
-            }
-            else
-            {
-                if (ch == '\n') _line++;
-                sb.Append(ch);
-                _pos++;
-            }
+            if (TryReadEscapedQuote(sb, quote)) continue;
+            if (TryReadEscapedCharacter(sb)) continue;
+            AppendStringCharacter(sb, ch);
         }
         return new Token(TokenKind.StringLiteral, sb.ToString(), line);
+    }
+
+    private bool TryReadEscapedQuote(StringBuilder sb, char quote)
+    {
+        if (_src[_pos] != quote) return false;
+        _pos++;
+        if (_pos < _src.Length && _src[_pos] == quote)
+        {
+            sb.Append(quote);
+            _pos++;
+            return true;
+        }
+
+        return false;
+    }
+
+    private bool TryReadEscapedCharacter(StringBuilder sb)
+    {
+        if (_src[_pos] != '\\' || _pos + 1 >= _src.Length) return false;
+        _pos++;
+        sb.Append(_src[_pos] switch { 'n' => '\n', 't' => '\t', 'r' => '\r', var x => x });
+        _pos++;
+        return true;
+    }
+
+    private void AppendStringCharacter(StringBuilder sb, char ch)
+    {
+        if (ch == '\n') _line++;
+        sb.Append(ch);
+        _pos++;
     }
 
     private Token ReadBacktickIdent(int line)
@@ -222,20 +234,26 @@ internal sealed class Tokenizer
         var start = _pos;
         bool isFloat = false;
         while (_pos < _src.Length && char.IsAsciiDigit(_src[_pos])) _pos++;
-        if (_pos < _src.Length && _src[_pos] == '.')
-        {
-            isFloat = true;
-            _pos++;
-            while (_pos < _src.Length && char.IsAsciiDigit(_src[_pos])) _pos++;
-        }
-        if (_pos < _src.Length && (_src[_pos] == 'e' || _src[_pos] == 'E'))
-        {
-            isFloat = true;
-            _pos++;
-            if (_pos < _src.Length && (_src[_pos] == '+' || _src[_pos] == '-')) _pos++;
-            while (_pos < _src.Length && char.IsAsciiDigit(_src[_pos])) _pos++;
-        }
+        ReadFraction(ref isFloat);
+        ReadExponent(ref isFloat);
         return new Token(isFloat ? TokenKind.FloatLiteral : TokenKind.IntLiteral, _src[start.._pos], line);
+    }
+
+    private void ReadFraction(ref bool isFloat)
+    {
+        if (_pos >= _src.Length || _src[_pos] != '.') return;
+        isFloat = true;
+        _pos++;
+        while (_pos < _src.Length && char.IsAsciiDigit(_src[_pos])) _pos++;
+    }
+
+    private void ReadExponent(ref bool isFloat)
+    {
+        if (_pos >= _src.Length || (_src[_pos] != 'e' && _src[_pos] != 'E')) return;
+        isFloat = true;
+        _pos++;
+        if (_pos < _src.Length && (_src[_pos] == '+' || _src[_pos] == '-')) _pos++;
+        while (_pos < _src.Length && char.IsAsciiDigit(_src[_pos])) _pos++;
     }
 
     private Token ReadIdentOrKeyword(int line)
@@ -314,6 +332,21 @@ internal sealed class Parser
     private const string KwPrimary = "PRIMARY";
     private const string KwCheck = "CHECK";
     private const string KwTransaction = "TRANSACTION";
+
+    private sealed class ColumnOptions
+    {
+        public bool Nullable { get; set; } = true;
+        public bool PrimaryKey { get; set; }
+        public bool Unique { get; set; }
+        public bool AutoIncrement { get; set; }
+        public Expr? Default { get; set; }
+        public Expr? Check { get; set; }
+        public ReferentialAction? OnUpdate { get; set; }
+        public ReferentialAction? OnDelete { get; set; }
+        public ulong? MinLength { get; set; }
+        public ulong? MaxLength { get; set; }
+        public bool Uniques { get; set; }
+    }
 
     public Parser(List<Token> tokens) { _tokens = tokens; }
 
@@ -743,39 +776,7 @@ internal sealed class Parser
     {
         while (Current.Kind != TokenKind.RightParen && Current.Kind != TokenKind.Eof)
         {
-            if (IsKeyword(KwPrimary))
-            {
-                Consume(); ExpectKeyword("KEY");
-                Expect(TokenKind.LeftParen, "(");
-                var pkCols = ParseIdentList();
-                Expect(TokenKind.RightParen, ")");
-                constraints.Add(new TableConstraint.PrimaryKey(null, pkCols));
-            }
-            else if (IsKeyword(KwUnique))
-            {
-                Consume();
-                Expect(TokenKind.LeftParen, "(");
-                var uCols = ParseIdentList();
-                Expect(TokenKind.RightParen, ")");
-                constraints.Add(new TableConstraint.Unique(null, uCols));
-            }
-            else if (IsKeyword(KwCheck))
-            {
-                Consume();
-                Expect(TokenKind.LeftParen, "(");
-                var checkExpr = ParseExpr();
-                Expect(TokenKind.RightParen, ")");
-                constraints.Add(new TableConstraint.Check(null, checkExpr));
-            }
-            else if (IsKeyword("CONSTRAINT"))
-            {
-                Consume();
-                var cname = ParseIdent();
-                if (IsKeyword(KwPrimary)) { Consume(); ExpectKeyword("KEY"); Expect(TokenKind.LeftParen, "("); constraints.Add(new TableConstraint.PrimaryKey(cname, ParseIdentList())); Expect(TokenKind.RightParen, ")"); }
-                else if (IsKeyword(KwUnique)) { Consume(); Expect(TokenKind.LeftParen, "("); constraints.Add(new TableConstraint.Unique(cname, ParseIdentList())); Expect(TokenKind.RightParen, ")"); }
-                else if (IsKeyword(KwCheck)) { Consume(); Expect(TokenKind.LeftParen, "("); constraints.Add(new TableConstraint.Check(cname, ParseExpr())); Expect(TokenKind.RightParen, ")"); }
-            }
-            else
+            if (!TryParseTableConstraint(constraints))
             {
                 cols.Add(ParseColumnDef());
             }
@@ -785,58 +786,220 @@ internal sealed class Parser
         }
     }
 
+    private bool TryParseTableConstraint(List<TableConstraint> constraints)
+    {
+        if (TryParseUnnamedTableConstraint(constraints)) return true;
+        return TryParseNamedTableConstraint(constraints);
+    }
+
+    private bool TryParseUnnamedTableConstraint(List<TableConstraint> constraints)
+    {
+        if (IsKeyword(KwPrimary))
+        {
+            constraints.Add(ParsePrimaryKeyConstraint(null));
+            return true;
+        }
+
+        if (IsKeyword(KwUnique))
+        {
+            constraints.Add(ParseUniqueConstraint(null));
+            return true;
+        }
+
+        if (!IsKeyword(KwCheck)) return false;
+        constraints.Add(ParseCheckConstraint(null));
+        return true;
+    }
+
+    private bool TryParseNamedTableConstraint(List<TableConstraint> constraints)
+    {
+        if (!TryConsumeKeyword("CONSTRAINT")) return false;
+        var name = ParseIdent();
+        if (IsKeyword(KwPrimary))
+        {
+            constraints.Add(ParsePrimaryKeyConstraint(name));
+            return true;
+        }
+
+        if (IsKeyword(KwUnique))
+        {
+            constraints.Add(ParseUniqueConstraint(name));
+            return true;
+        }
+
+        if (IsKeyword(KwCheck))
+        {
+            constraints.Add(ParseCheckConstraint(name));
+            return true;
+        }
+
+        throw ParseError($"unexpected CONSTRAINT subtype '{Current.Text}'");
+    }
+
+    private TableConstraint.PrimaryKey ParsePrimaryKeyConstraint(string? name)
+    {
+        Consume();
+        ExpectKeyword("KEY");
+        Expect(TokenKind.LeftParen, "(");
+        var columns = ParseIdentList();
+        Expect(TokenKind.RightParen, ")");
+        return new TableConstraint.PrimaryKey(name, columns);
+    }
+
+    private TableConstraint.Unique ParseUniqueConstraint(string? name)
+    {
+        Consume();
+        Expect(TokenKind.LeftParen, "(");
+        var columns = ParseIdentList();
+        Expect(TokenKind.RightParen, ")");
+        return new TableConstraint.Unique(name, columns);
+    }
+
+    private TableConstraint.Check ParseCheckConstraint(string? name)
+    {
+        Consume();
+        Expect(TokenKind.LeftParen, "(");
+        var expr = ParseExpr();
+        Expect(TokenKind.RightParen, ")");
+        return new TableConstraint.Check(name, expr);
+    }
+
     private ColumnDef ParseColumnDef()
     {
         var name = ParseIdent();
         var dt = ParseDataType();
-        bool nullable = true;
-        bool pk = false, unique = false, autoInc = false;
-        Expr? defaultExpr = null;
-        Expr? check = null;
-        ReferentialAction? onUpdate = null, onDelete = null;
-        ulong? minLen = null, maxLen = null;
-        bool uniques = false;
-
-        while (!IsColumnDefEnd())
-        {
-            if (IsKeyword("NOT"))
-            {
-                Consume(); ExpectKeyword("NULL"); nullable = false;
-            }
-            else if (IsKeyword("NULL")) { Consume(); nullable = true; }
-            else if (IsKeyword(KwPrimary)) { Consume(); ExpectKeyword("KEY"); pk = true; }
-            else if (IsKeyword(KwUnique)) { Consume(); unique = true; }
-            else if (IsKeyword("AUTO_INCREMENT") || IsKeyword("AUTOINCREMENT")) { Consume(); autoInc = true; }
-            else if (IsKeyword("DEFAULT")) { Consume(); defaultExpr = ParsePrimaryExpr(); }
-            else if (IsKeyword(KwCheck)) { Consume(); Expect(TokenKind.LeftParen, "("); check = ParseExpr(); Expect(TokenKind.RightParen, ")"); }
-            else if (IsKeyword("ON"))
-            {
-                Consume();
-                if (IsKeyword("UPDATE")) { Consume(); onUpdate = ParseReferentialAction(); }
-                else if (IsKeyword(KwDelete)) { Consume(); onDelete = ParseReferentialAction(); }
-            }
-            else if (IsKeyword("UNIQUES")) { Consume(); uniques = true; }
-            else if (IsKeyword("MIN_LENGTH")) { Consume(); Expect(TokenKind.Eq, "="); minLen = ParseUInt64(); }
-            else if (IsKeyword("MAX_LENGTH")) { Consume(); Expect(TokenKind.Eq, "="); maxLen = ParseUInt64(); }
-            else break;
-        }
+        var options = ParseColumnOptions();
 
         return new ColumnDef
         {
             Name = name,
             DataType = dt,
-            Nullable = nullable,
-            PrimaryKey = pk,
-            Unique = unique,
-            AutoIncrement = autoInc,
-            Default = defaultExpr,
-            Check = check,
-            OnUpdate = onUpdate,
-            OnDelete = onDelete,
-            MinLength = minLen,
-            MaxLength = maxLen,
-            Uniques = uniques,
+            Nullable = options.Nullable,
+            PrimaryKey = options.PrimaryKey,
+            Unique = options.Unique,
+            AutoIncrement = options.AutoIncrement,
+            Default = options.Default,
+            Check = options.Check,
+            OnUpdate = options.OnUpdate,
+            OnDelete = options.OnDelete,
+            MinLength = options.MinLength,
+            MaxLength = options.MaxLength,
+            Uniques = options.Uniques,
         };
+    }
+
+    private ColumnOptions ParseColumnOptions()
+    {
+        var options = new ColumnOptions();
+        while (!IsColumnDefEnd())
+        {
+            if (!TryParseColumnOption(options)) break;
+        }
+
+        return options;
+    }
+
+    private bool TryParseColumnOption(ColumnOptions options)
+    {
+        if (TryParseColumnNullability(options)) return true;
+        if (TryParseColumnKeyOptions(options)) return true;
+        if (TryParseColumnDefaultOrCheck(options)) return true;
+        if (TryParseColumnReferentialAction(options)) return true;
+        if (TryParseColumnLengthOption(options)) return true;
+        if (!IsKeyword("UNIQUES")) return false;
+        Consume();
+        options.Uniques = true;
+        return true;
+    }
+
+    private bool TryParseColumnNullability(ColumnOptions options)
+    {
+        if (IsKeyword("NOT"))
+        {
+            Consume();
+            ExpectKeyword("NULL");
+            options.Nullable = false;
+            return true;
+        }
+
+        if (!IsKeyword("NULL")) return false;
+        Consume();
+        options.Nullable = true;
+        return true;
+    }
+
+    private bool TryParseColumnKeyOptions(ColumnOptions options)
+    {
+        if (IsKeyword(KwPrimary))
+        {
+            Consume();
+            ExpectKeyword("KEY");
+            options.PrimaryKey = true;
+            return true;
+        }
+
+        if (IsKeyword(KwUnique))
+        {
+            Consume();
+            options.Unique = true;
+            return true;
+        }
+
+        if (!IsKeyword("AUTO_INCREMENT") && !IsKeyword("AUTOINCREMENT")) return false;
+        Consume();
+        options.AutoIncrement = true;
+        return true;
+    }
+
+    private bool TryParseColumnDefaultOrCheck(ColumnOptions options)
+    {
+        if (IsKeyword("DEFAULT"))
+        {
+            Consume();
+            options.Default = ParsePrimaryExpr();
+            return true;
+        }
+
+        if (!IsKeyword(KwCheck)) return false;
+        Consume();
+        Expect(TokenKind.LeftParen, "(");
+        options.Check = ParseExpr();
+        Expect(TokenKind.RightParen, ")");
+        return true;
+    }
+
+    private bool TryParseColumnReferentialAction(ColumnOptions options)
+    {
+        if (!IsKeyword("ON")) return false;
+        Consume();
+        if (IsKeyword("UPDATE"))
+        {
+            Consume();
+            options.OnUpdate = ParseReferentialAction();
+            return true;
+        }
+
+        if (!IsKeyword(KwDelete)) return false;
+        Consume();
+        options.OnDelete = ParseReferentialAction();
+        return true;
+    }
+
+    private bool TryParseColumnLengthOption(ColumnOptions options)
+    {
+        if (IsKeyword("MIN_LENGTH"))
+        {
+            Consume();
+            Expect(TokenKind.Eq, "=");
+            options.MinLength = ParseUInt64();
+            return true;
+        }
+
+        if (!IsKeyword("MAX_LENGTH")) return false;
+        Consume();
+        Expect(TokenKind.Eq, "=");
+        options.MaxLength = ParseUInt64();
+        return true;
     }
 
     private bool IsColumnDefEnd() =>
@@ -1091,58 +1254,112 @@ internal sealed class Parser
     private Statement ParseDrop()
     {
         ExpectKeyword("DROP");
-        bool ifex = false;
-
-        if (IsKeyword(KwTable))
-        {
-            Consume();
-            if (TryConsumeKeyword("IF")) { ExpectKeyword(KwExists); ifex = true; }
-            var tables = ParseIdentList();
-            return new Statement.DropTable(new DropTableStatement(tables, ifex));
-        }
-        if (IsKeyword("INDEX"))
-        {
-            Consume();
-            if (TryConsumeKeyword("IF")) { ExpectKeyword(KwExists); ifex = true; }
-            var names = ParseIdentList();
-            return new Statement.DropIndex(new DropIndexStatement(names, ifex));
-        }
-        if (IsKeyword("TYPE"))
-        {
-            Consume();
-            if (TryConsumeKeyword("IF")) { ExpectKeyword(KwExists); ifex = true; }
-            var name = ParseIdent();
-            return new Statement.DropType(new DropTypeStatement(name, ifex));
-        }
-        if (IsKeyword("ENUM"))
-        {
-            Consume();
-            if (TryConsumeKeyword("IF")) { ExpectKeyword(KwExists); ifex = true; }
-            var name = ParseIdent();
-            return new Statement.DropEnum(new DropEnumStatement(name, ifex));
-        }
-        if (IsKeyword("DATABASE"))
-        {
-            Consume();
-            if (TryConsumeKeyword("IF")) { ExpectKeyword(KwExists); ifex = true; }
-            var name = ParseIdent();
-            return new Statement.DropDatabase(new DropDatabaseStatement(name, ifex));
-        }
-        if (IsKeyword("SCHEMA"))
-        {
-            Consume();
-            if (TryConsumeKeyword("IF")) { ExpectKeyword(KwExists); ifex = true; }
-            var name = ParseIdent();
-            return new Statement.DropSchema(new DropSchemaStatement(null, name, ifex));
-        }
-        if (IsKeyword("USER"))
-        {
-            Consume();
-            if (TryConsumeKeyword("IF")) { ExpectKeyword(KwExists); ifex = true; }
-            var names = ParseIdentList();
-            return new Statement.DropUser(new DropUserStatement(names, ifex));
-        }
+        if (TryParseDropTable(out var dropTable)) return dropTable;
+        if (TryParseDropIndex(out var dropIndex)) return dropIndex;
+        if (TryParseDropType(out var dropType)) return dropType;
+        if (TryParseDropEnum(out var dropEnum)) return dropEnum;
+        if (TryParseDropDatabase(out var dropDatabase)) return dropDatabase;
+        if (TryParseDropSchema(out var dropSchema)) return dropSchema;
+        if (TryParseDropUser(out var dropUser)) return dropUser;
         throw ParseError($"unexpected DROP subtype '{Current.Text}'");
+    }
+
+    private bool TryParseDropTable(out Statement statement)
+    {
+        if (!TryConsumeKeyword(KwTable))
+        {
+            statement = null!;
+            return false;
+        }
+
+        var ifExists = TryParseIfExists();
+        statement = new Statement.DropTable(new DropTableStatement(ParseIdentList(), ifExists));
+        return true;
+    }
+
+    private bool TryParseDropIndex(out Statement statement)
+    {
+        if (!TryConsumeKeyword("INDEX"))
+        {
+            statement = null!;
+            return false;
+        }
+
+        var ifExists = TryParseIfExists();
+        statement = new Statement.DropIndex(new DropIndexStatement(ParseIdentList(), ifExists));
+        return true;
+    }
+
+    private bool TryParseDropType(out Statement statement)
+    {
+        if (!TryConsumeKeyword("TYPE"))
+        {
+            statement = null!;
+            return false;
+        }
+
+        var ifExists = TryParseIfExists();
+        statement = new Statement.DropType(new DropTypeStatement(ParseIdent(), ifExists));
+        return true;
+    }
+
+    private bool TryParseDropEnum(out Statement statement)
+    {
+        if (!TryConsumeKeyword("ENUM"))
+        {
+            statement = null!;
+            return false;
+        }
+
+        var ifExists = TryParseIfExists();
+        statement = new Statement.DropEnum(new DropEnumStatement(ParseIdent(), ifExists));
+        return true;
+    }
+
+    private bool TryParseDropDatabase(out Statement statement)
+    {
+        if (!TryConsumeKeyword("DATABASE"))
+        {
+            statement = null!;
+            return false;
+        }
+
+        var ifExists = TryParseIfExists();
+        statement = new Statement.DropDatabase(new DropDatabaseStatement(ParseIdent(), ifExists));
+        return true;
+    }
+
+    private bool TryParseDropSchema(out Statement statement)
+    {
+        if (!TryConsumeKeyword("SCHEMA"))
+        {
+            statement = null!;
+            return false;
+        }
+
+        var ifExists = TryParseIfExists();
+        statement = new Statement.DropSchema(new DropSchemaStatement(null, ParseIdent(), ifExists));
+        return true;
+    }
+
+    private bool TryParseDropUser(out Statement statement)
+    {
+        if (!TryConsumeKeyword("USER"))
+        {
+            statement = null!;
+            return false;
+        }
+
+        var ifExists = TryParseIfExists();
+        statement = new Statement.DropUser(new DropUserStatement(ParseIdentList(), ifExists));
+        return true;
+    }
+
+    private bool TryParseIfExists()
+    {
+        if (!TryConsumeKeyword("IF")) return false;
+        ExpectKeyword(KwExists);
+        return true;
     }
 
     // ── ALTER TABLE ────────────────────────────────────────────────────────────
@@ -1383,43 +1600,129 @@ internal sealed class Parser
     private Expr ParseComparison()
     {
         var left = ParseBitOr();
-        while (true)
-        {
-            if (Current.Kind == TokenKind.Eq) { Consume(); left = new Expr.BinaryOp(left, BinaryOperator.Eq, ParseBitOr()); }
-            else if (Current.Kind == TokenKind.NotEq) { Consume(); left = new Expr.BinaryOp(left, BinaryOperator.NotEq, ParseBitOr()); }
-            else if (Current.Kind == TokenKind.Lt) { Consume(); left = new Expr.BinaryOp(left, BinaryOperator.Lt, ParseBitOr()); }
-            else if (Current.Kind == TokenKind.LtEq) { Consume(); left = new Expr.BinaryOp(left, BinaryOperator.LtEq, ParseBitOr()); }
-            else if (Current.Kind == TokenKind.Gt) { Consume(); left = new Expr.BinaryOp(left, BinaryOperator.Gt, ParseBitOr()); }
-            else if (Current.Kind == TokenKind.GtEq) { Consume(); left = new Expr.BinaryOp(left, BinaryOperator.GtEq, ParseBitOr()); }
-            else if (IsKeyword("IS")) { Consume(); bool neg = TryConsumeKeyword("NOT"); ExpectKeyword("NULL"); left = new Expr.IsNull(left, neg); }
-            else if (IsKeyword("BETWEEN"))
-            {
-                bool neg = false;
-                Consume();
-                var lo = ParseBitOr();
-                ExpectKeyword("AND");
-                var hi = ParseBitOr();
-                left = new Expr.Between(left, lo, hi, neg);
-            }
-            else if (IsKeyword("NOT") && PeekKeyword("BETWEEN", 1))
-            {
-                Consume(); Consume();
-                var lo = ParseBitOr();
-                ExpectKeyword("AND");
-                var hi = ParseBitOr();
-                left = new Expr.Between(left, lo, hi, true);
-            }
-            else if (IsKeyword("IN")) { Consume(); left = ParseInExpr(left, false); }
-            else if (IsKeyword("NOT") && PeekKeyword("IN", 1)) { Consume(); Consume(); left = ParseInExpr(left, true); }
-            else if (IsKeyword("LIKE")) { Consume(); left = new Expr.BinaryOp(left, BinaryOperator.Like, ParseBitOr()); }
-            else if (IsKeyword("ILIKE")) { Consume(); left = new Expr.BinaryOp(left, BinaryOperator.ILike, ParseBitOr()); }
-            else if (IsKeyword("REGEXP") || IsKeyword("RLIKE")) { Consume(); left = new Expr.BinaryOp(left, BinaryOperator.Regexp, ParseBitOr()); }
-            else if (IsKeyword("NOT") && PeekKeyword("LIKE", 1)) { Consume(); Consume(); left = new Expr.BinaryOp(left, BinaryOperator.NotLike, ParseBitOr()); }
-            else if (IsKeyword("NOT") && PeekKeyword("ILIKE", 1)) { Consume(); Consume(); left = new Expr.BinaryOp(left, BinaryOperator.NotILike, ParseBitOr()); }
-            else if (IsKeyword("SIMILAR") && PeekKeyword("TO", 1)) { Consume(); Consume(); left = new Expr.BinaryOp(left, BinaryOperator.SimilarTo, ParseBitOr()); }
-            else break;
-        }
+        while (TryParseComparisonContinuation(ref left)) { }
         return left;
+    }
+
+    private bool TryParseComparisonContinuation(ref Expr left)
+    {
+        if (TryParseSimpleComparison(ref left)) return true;
+        if (TryParseNullComparison(ref left)) return true;
+        if (TryParseBetweenComparison(ref left)) return true;
+        if (TryParseInComparison(ref left)) return true;
+        return TryParsePatternComparison(ref left);
+    }
+
+    private bool TryParseSimpleComparison(ref Expr left)
+    {
+        BinaryOperator? op = Current.Kind switch
+        {
+            TokenKind.Eq => BinaryOperator.Eq,
+            TokenKind.NotEq => BinaryOperator.NotEq,
+            TokenKind.Lt => BinaryOperator.Lt,
+            TokenKind.LtEq => BinaryOperator.LtEq,
+            TokenKind.Gt => BinaryOperator.Gt,
+            TokenKind.GtEq => BinaryOperator.GtEq,
+            _ => null,
+        };
+
+        if (op is null) return false;
+        Consume();
+        left = new Expr.BinaryOp(left, op.Value, ParseBitOr());
+        return true;
+    }
+
+    private bool TryParseNullComparison(ref Expr left)
+    {
+        if (!TryConsumeKeyword("IS")) return false;
+        bool negated = TryConsumeKeyword("NOT");
+        ExpectKeyword("NULL");
+        left = new Expr.IsNull(left, negated);
+        return true;
+    }
+
+    private bool TryParseBetweenComparison(ref Expr left)
+    {
+        if (TryConsumeKeyword("BETWEEN"))
+        {
+            left = BuildBetweenExpr(left, false);
+            return true;
+        }
+
+        if (!IsKeyword("NOT") || !PeekKeyword("BETWEEN", 1)) return false;
+        Consume();
+        Consume();
+        left = BuildBetweenExpr(left, true);
+        return true;
+    }
+
+    private Expr BuildBetweenExpr(Expr left, bool negated)
+    {
+        var lower = ParseBitOr();
+        ExpectKeyword("AND");
+        var upper = ParseBitOr();
+        return new Expr.Between(left, lower, upper, negated);
+    }
+
+    private bool TryParseInComparison(ref Expr left)
+    {
+        if (TryConsumeKeyword("IN"))
+        {
+            left = ParseInExpr(left, false);
+            return true;
+        }
+
+        if (!IsKeyword("NOT") || !PeekKeyword("IN", 1)) return false;
+        Consume();
+        Consume();
+        left = ParseInExpr(left, true);
+        return true;
+    }
+
+    private bool TryParsePatternComparison(ref Expr left)
+    {
+        if (TryParseDirectPatternComparison(ref left)) return true;
+        return TryParseNegatedPatternComparison(ref left);
+    }
+
+    private bool TryParseDirectPatternComparison(ref Expr left)
+    {
+        if (TryParseBinaryKeywordOperator(ref left, "LIKE", BinaryOperator.Like)) return true;
+        if (TryParseBinaryKeywordOperator(ref left, "ILIKE", BinaryOperator.ILike)) return true;
+        if (IsKeyword("REGEXP") || IsKeyword("RLIKE"))
+        {
+            Consume();
+            left = new Expr.BinaryOp(left, BinaryOperator.Regexp, ParseBitOr());
+            return true;
+        }
+
+        if (!IsKeyword("SIMILAR") || !PeekKeyword("TO", 1)) return false;
+        Consume();
+        Consume();
+        left = new Expr.BinaryOp(left, BinaryOperator.SimilarTo, ParseBitOr());
+        return true;
+    }
+
+    private bool TryParseNegatedPatternComparison(ref Expr left)
+    {
+        if (TryParseCompoundKeywordOperator(ref left, "LIKE", BinaryOperator.NotLike)) return true;
+        return TryParseCompoundKeywordOperator(ref left, "ILIKE", BinaryOperator.NotILike);
+    }
+
+    private bool TryParseBinaryKeywordOperator(ref Expr left, string keyword, BinaryOperator op)
+    {
+        if (!TryConsumeKeyword(keyword)) return false;
+        left = new Expr.BinaryOp(left, op, ParseBitOr());
+        return true;
+    }
+
+    private bool TryParseCompoundKeywordOperator(ref Expr left, string keyword, BinaryOperator op)
+    {
+        if (!IsKeyword("NOT") || !PeekKeyword(keyword, 1)) return false;
+        Consume();
+        Consume();
+        left = new Expr.BinaryOp(left, op, ParseBitOr());
+        return true;
     }
 
     private bool PeekKeyword(string kw, int offset)
@@ -1514,92 +1817,155 @@ internal sealed class Parser
 
     private Expr ParsePrimaryExpr()
     {
-        // CAST
-        if (IsKeyword("CAST")) return ParseCastExpr();
-
-        // CASE
-        if (IsKeyword("CASE")) return ParseCaseExpr();
-
-        // EXISTS
-        if (IsKeyword(KwExists))
-        {
-            Consume();
-            Expect(TokenKind.LeftParen, "(");
-            var subq = ParseSelect();
-            Expect(TokenKind.RightParen, ")");
-            return new Expr.Function("EXISTS", [new Expr.Subquery(subq)], false);
-        }
-
-        // SUBSTRING
-        if (IsKeyword("SUBSTRING") || IsKeyword("SUBSTR")) return ParseSubstringExpr();
-
-        // TRIM
-        if (IsKeyword("TRIM")) return ParseTrimExpr();
-
-        // POSITION
-        if (IsKeyword("POSITION"))
-        {
-            Consume();
-            Expect(TokenKind.LeftParen, "(");
-            var substrExpr = ParseExpr();
-            ExpectKeyword("IN");
-            var inExpr = ParseExpr();
-            Expect(TokenKind.RightParen, ")");
-            return new Expr.Position(substrExpr, inExpr);
-        }
-
-        // NULL literal
-        if (IsKeyword("NULL")) { Consume(); return new Expr.Literal(SqlValue.Null.Instance); }
-        // TRUE / FALSE
-        if (IsKeyword("TRUE")) { Consume(); return new Expr.Literal(new SqlValue.Boolean(true)); }
-        if (IsKeyword("FALSE")) { Consume(); return new Expr.Literal(new SqlValue.Boolean(false)); }
-
-        // Integer literal
-        if (Current.Kind == TokenKind.IntLiteral)
-        {
-            var val = long.Parse(Current.Text, CultureInfo.InvariantCulture);
-            Consume();
-            return new Expr.Literal(new SqlValue.Integer(val));
-        }
-
-        // Float literal
-        if (Current.Kind == TokenKind.FloatLiteral)
-        {
-            var val = double.Parse(Current.Text, CultureInfo.InvariantCulture);
-            Consume();
-            return new Expr.Literal(new SqlValue.Float(val));
-        }
-
-        // String literal
-        if (Current.Kind == TokenKind.StringLiteral)
-        {
-            var val = Consume().Text;
-            return new Expr.Literal(new SqlValue.SqlString(val));
-        }
-
-        // Subquery
-        if (Current.Kind == TokenKind.LeftParen)
-        {
-            Consume();
-            if (IsKeyword(KwSelect) || IsKeyword("WITH"))
-            {
-                var sub = ParseSelect();
-                Expect(TokenKind.RightParen, ")");
-                return new Expr.Subquery(sub);
-            }
-            var grouped = ParseExpr();
-            Expect(TokenKind.RightParen, ")");
-            return grouped;
-        }
-
-        // Star (wildcard)
-        if (Current.Kind == TokenKind.Star) { Consume(); return Expr.Wildcard.Instance; }
-
-        // Function call or identifier
-        if (Current.Kind == TokenKind.Ident || Current.Kind == TokenKind.Keyword)
-            return ParseFunctionOrIdent();
+        if (TryParseKeywordPrimaryExpr(out var expr)) return expr;
+        if (TryParseLiteralPrimaryExpr(out expr)) return expr;
+        if (TryParseGroupedPrimaryExpr(out expr)) return expr;
+        if (TryParseIdentifierPrimaryExpr(out expr)) return expr;
 
         throw ParseError($"unexpected token in expression: '{Current.Text}'");
+    }
+
+    private bool TryParseKeywordPrimaryExpr(out Expr expr)
+    {
+        if (IsKeyword("CAST")) { expr = ParseCastExpr(); return true; }
+        if (IsKeyword("CASE")) { expr = ParseCaseExpr(); return true; }
+        if (TryParseExistsExpr(out expr)) return true;
+        if (IsKeyword("SUBSTRING") || IsKeyword("SUBSTR")) { expr = ParseSubstringExpr(); return true; }
+        if (IsKeyword("TRIM")) { expr = ParseTrimExpr(); return true; }
+        if (TryParsePositionExpr(out expr)) return true;
+        expr = null!;
+        return false;
+    }
+
+    private bool TryParseExistsExpr(out Expr expr)
+    {
+        if (!TryConsumeKeyword(KwExists))
+        {
+            expr = null!;
+            return false;
+        }
+
+        Expect(TokenKind.LeftParen, "(");
+        var subquery = ParseSelect();
+        Expect(TokenKind.RightParen, ")");
+        expr = new Expr.Function("EXISTS", [new Expr.Subquery(subquery)], false);
+        return true;
+    }
+
+    private bool TryParsePositionExpr(out Expr expr)
+    {
+        if (!TryConsumeKeyword("POSITION"))
+        {
+            expr = null!;
+            return false;
+        }
+
+        Expect(TokenKind.LeftParen, "(");
+        var substring = ParseExpr();
+        ExpectKeyword("IN");
+        var input = ParseExpr();
+        Expect(TokenKind.RightParen, ")");
+        expr = new Expr.Position(substring, input);
+        return true;
+    }
+
+    private bool TryParseLiteralPrimaryExpr(out Expr expr)
+    {
+        if (TryParseKeywordLiteral(out expr)) return true;
+        if (TryParseNumericLiteral(out expr)) return true;
+        if (Current.Kind == TokenKind.StringLiteral)
+        {
+            expr = new Expr.Literal(new SqlValue.SqlString(Consume().Text));
+            return true;
+        }
+
+        expr = null!;
+        return false;
+    }
+
+    private bool TryParseKeywordLiteral(out Expr expr)
+    {
+        if (TryConsumeKeyword("NULL"))
+        {
+            expr = new Expr.Literal(SqlValue.Null.Instance);
+            return true;
+        }
+
+        if (TryConsumeKeyword("TRUE"))
+        {
+            expr = new Expr.Literal(new SqlValue.Boolean(true));
+            return true;
+        }
+
+        if (!TryConsumeKeyword("FALSE"))
+        {
+            expr = null!;
+            return false;
+        }
+
+        expr = new Expr.Literal(new SqlValue.Boolean(false));
+        return true;
+    }
+
+    private bool TryParseNumericLiteral(out Expr expr)
+    {
+        if (Current.Kind == TokenKind.IntLiteral)
+        {
+            expr = new Expr.Literal(new SqlValue.Integer(long.Parse(Current.Text, CultureInfo.InvariantCulture)));
+            Consume();
+            return true;
+        }
+
+        if (Current.Kind != TokenKind.FloatLiteral)
+        {
+            expr = null!;
+            return false;
+        }
+
+        expr = new Expr.Literal(new SqlValue.Float(double.Parse(Current.Text, CultureInfo.InvariantCulture)));
+        Consume();
+        return true;
+    }
+
+    private bool TryParseGroupedPrimaryExpr(out Expr expr)
+    {
+        if (Current.Kind != TokenKind.LeftParen)
+        {
+            expr = null!;
+            return false;
+        }
+
+        Consume();
+        if (IsKeyword(KwSelect) || IsKeyword("WITH"))
+        {
+            var subquery = ParseSelect();
+            Expect(TokenKind.RightParen, ")");
+            expr = new Expr.Subquery(subquery);
+            return true;
+        }
+
+        expr = ParseExpr();
+        Expect(TokenKind.RightParen, ")");
+        return true;
+    }
+
+    private bool TryParseIdentifierPrimaryExpr(out Expr expr)
+    {
+        if (Current.Kind == TokenKind.Star)
+        {
+            Consume();
+            expr = Expr.Wildcard.Instance;
+            return true;
+        }
+
+        if (Current.Kind != TokenKind.Ident && Current.Kind != TokenKind.Keyword)
+        {
+            expr = null!;
+            return false;
+        }
+
+        expr = ParseFunctionOrIdent();
+        return true;
     }
 
     private Expr.Cast ParseCastExpr()
