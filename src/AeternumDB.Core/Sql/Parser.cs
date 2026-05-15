@@ -267,7 +267,9 @@ internal sealed class Tokenizer
             '~' => new Token(TokenKind.Tilde, "~", line),
             '^' => new Token(TokenKind.Caret, "^", line),
             '=' => new Token(TokenKind.Eq, "=", line),
-            '!' => _pos < _src.Length && _src[_pos] == '=' ? AdvanceAndReturn(new Token(TokenKind.NotEq, "!=", line)) : new Token(TokenKind.NotEq, "!=", line),
+            '!' => _pos < _src.Length && _src[_pos] == '='
+                  ? AdvanceAndReturn(new Token(TokenKind.NotEq, "!=", line))
+                  : throw new SqlError(SqlErrorKind.ParseError, $"Unexpected character '!' at line {line}; did you mean '!='?"),
             '<' => _pos < _src.Length && _src[_pos] == '=' ? AdvanceAndReturn(new Token(TokenKind.LtEq, "<=", line))
                   : _pos < _src.Length && _src[_pos] == '>' ? AdvanceAndReturn(new Token(TokenKind.NotEq, "<>", line))
                   : _pos < _src.Length && _src[_pos] == '<' ? AdvanceAndReturn(new Token(TokenKind.ShiftLeft, "<<", line))
