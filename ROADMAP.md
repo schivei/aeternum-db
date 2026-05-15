@@ -8,7 +8,7 @@ This document describes the development phases and main milestones of AeternumDB
 
 Objective: Create the fundamental database engine.
 
-• Implement ACID engine in Rust
+• Implement ACID engine in C#/.NET
 • Initial support for SQL-like queries
 • Decimal Engine for numeric precision
 • JSON/JSON2 with fixed schema
@@ -50,7 +50,7 @@ Objective: Expand integration with different languages and platforms.
 
 • ODBC drivers (32/64 bits, cross-platform)
 • JDBC driver
-• Rust SDK
+• .NET SDK
 • Python SDK
 • Java/Kotlin SDK
 • .NET Core SDK
