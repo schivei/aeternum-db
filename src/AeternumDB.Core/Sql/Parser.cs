@@ -1262,28 +1262,16 @@ internal sealed class Parser
     private Statement ParseDrop()
     {
         ExpectKeyword("DROP");
+        var statement =
+            (Statement?)TryParseDropTable() ??
+            (Statement?)TryParseDropIndex() ??
+            (Statement?)TryParseDropType() ??
+            (Statement?)TryParseDropEnum() ??
+            (Statement?)TryParseDropDatabase() ??
+            (Statement?)TryParseDropSchema() ??
+            (Statement?)TryParseDropUser();
 
-        var dropTable = TryParseDropTable();
-        if (dropTable is not null) return dropTable;
-
-        var dropIndex = TryParseDropIndex();
-        if (dropIndex is not null) return dropIndex;
-
-        var dropType = TryParseDropType();
-        if (dropType is not null) return dropType;
-
-        var dropEnum = TryParseDropEnum();
-        if (dropEnum is not null) return dropEnum;
-
-        var dropDatabase = TryParseDropDatabase();
-        if (dropDatabase is not null) return dropDatabase;
-
-        var dropSchema = TryParseDropSchema();
-        if (dropSchema is not null) return dropSchema;
-
-        var dropUser = TryParseDropUser();
-        if (dropUser is not null) return dropUser;
-
+        if (statement is not null) return statement;
         throw ParseError($"unexpected DROP subtype '{Current.Text}'");
     }
 
@@ -1588,13 +1576,7 @@ internal sealed class Parser
     private Expr ParseComparison()
     {
         var left = ParseBitOr();
-        while (true)
-        {
-            if (!TryParseComparisonContinuation(ref left))
-            {
-                break;
-            }
-        }
+        while (TryParseComparisonContinuation(ref left)) continue;
         return left;
     }
 
