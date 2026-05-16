@@ -120,21 +120,27 @@ public sealed class SqlValidator
         Dictionary<string, string> aliases
     )
     {
-        switch (item)
+        if (item is null)
+            return;
+
+        if (item is SelectItem.Wildcard)
+            return;
+
+        if (item is SelectItem.QualifiedWildcard qw)
         {
-            case SelectItem.Wildcard:
-                break;
-            case SelectItem.QualifiedWildcard qw:
-                var tableName = aliases.GetValueOrDefault(qw.Table, qw.Table);
-                RequireTable(tableName);
-                break;
-            case SelectItem.ExprItem ei:
-                ValidateSelectExpr(ei.Expr, defaultTable, aliases);
-                break;
-            case SelectItem.Expand ex:
-                ValidateSelectExpr(ex.Expr, defaultTable, aliases);
-                break;
+            var tableName = aliases.GetValueOrDefault(qw.Table, qw.Table);
+            RequireTable(tableName);
+            return;
         }
+
+        if (item is SelectItem.ExprItem ei)
+        {
+            ValidateSelectExpr(ei.Expr, defaultTable, aliases);
+            return;
+        }
+
+        if (item is SelectItem.Expand ex)
+            ValidateSelectExpr(ex.Expr, defaultTable, aliases);
     }
 
     private void ValidateTableReference(

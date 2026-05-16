@@ -339,6 +339,68 @@ public sealed class SqlCoverageTests
         );
         Assert.Null(nullSelectItemException);
 
+        var trimWithoutTrimWhatException = Record.Exception(
+            () =>
+                validator.Validate(
+                    new Statement.Select(
+                        new SelectStatement
+                        {
+                            Columns =
+                            [
+                                new SelectItem.ExprItem(
+                                    new Expr.Trim(
+                                        new Expr.Column("u", "name"),
+                                        TrimWhereField.Both,
+                                        null
+                                    ),
+                                    "trimmed_name"
+                                ),
+                            ],
+                            From = new TableReference.Named(null, null, "users", alias: "u"),
+                        }
+                    )
+                )
+        );
+        Assert.Null(trimWithoutTrimWhatException);
+
+        var whereTrimWithoutTrimWhatException = Record.Exception(
+            () =>
+                validator.Validate(
+                    new Statement.Select(
+                        new SelectStatement
+                        {
+                            Columns = [new SelectItem.ExprItem(new Expr.Column("u", "id2"), "id2")],
+                            From = new TableReference.Named(null, null, "users", alias: "u"),
+                            WhereClause = new Expr.Trim(
+                                new Expr.Column(null, "name"),
+                                TrimWhereField.Both,
+                                null
+                            ),
+                        }
+                    )
+                )
+        );
+        Assert.Null(whereTrimWithoutTrimWhatException);
+
+        var whereTrimWithTrimWhatException = Record.Exception(
+            () =>
+                validator.Validate(
+                    new Statement.Select(
+                        new SelectStatement
+                        {
+                            Columns = [new SelectItem.ExprItem(new Expr.Column("u", "id2"), "id2")],
+                            From = new TableReference.Named(null, null, "users", alias: "u"),
+                            WhereClause = new Expr.Trim(
+                                new Expr.Column(null, "name"),
+                                TrimWhereField.Both,
+                                new Expr.Literal(new SqlValue.SqlString(" "))
+                            ),
+                        }
+                    )
+                )
+        );
+        Assert.Null(whereTrimWithTrimWhatException);
+
         var emptyAlterOperationsException = Record.Exception(
             () =>
                 validator.Validate(
@@ -408,6 +470,18 @@ public sealed class SqlCoverageTests
                         new Statement.BeginTransaction(new BeginTransactionStatement { Name = "tx" }),
                         new Statement.Commit(
                             new CommitStatement(new CommitScope.Named("missing"), chain: false)
+                        ),
+                    ]
+                )
+        );
+
+        Assert.Throws<ValidationException.TransactionNotFoundException>(
+            () =>
+                validator.ValidateSequence(
+                    [
+                        new Statement.BeginTransaction(new BeginTransactionStatement { Name = "tx" }),
+                        new Statement.Rollback(
+                            new RollbackStatement(new RollbackScope.Named("missing"), chain: false)
                         ),
                     ]
                 )
