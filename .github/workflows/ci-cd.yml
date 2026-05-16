@@ -91,9 +91,9 @@ jobs:
             "/d:sonar.host.url=${SONAR_HOST_URL}"
             "/d:sonar.token=${SONAR_TOKEN}"
             "/d:sonar.cs.cobertura.reportsPaths=../coverage/**/coverage.cobertura.xml"
-            "/d:sonar.exclusions=.config/**,.github/**,.husky/**,deployment/**,docs/**,drivers/**,extensions/**,poc/**,sdks/**,tests/**,website/**"
-            "/d:sonar.cpd.exclusions=.config/**,.github/**,.husky/**,deployment/**,docs/**,drivers/**,extensions/**,poc/**,sdks/**,tests/**,website/**"
-            "/d:sonar.test.exclusions=.config/**,.github/**,.husky/**,deployment/**,docs/**,drivers/**,extensions/**,poc/**,sdks/**,tests/**,website/**"
+            "/d:sonar.exclusions=.config/**,.github/**,.husky/**,deployment/**,docs/**,poc/**,website/**"
+            "/d:sonar.cpd.exclusions=.config/**,.github/**,.husky/**,deployment/**,docs/**,poc/**,website/**"
+            "/d:sonar.test.exclusions=.config/**,.github/**,.husky/**,deployment/**,docs/**,poc/**,website/**"
           )
 
           if [ "${{ github.event_name }}" = "pull_request" ]; then
