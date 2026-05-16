@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using AeternumDB.Core.Errors;
 
 namespace AeternumDB.Core.Sql;
@@ -32,11 +33,6 @@ public sealed class IndexSchema
 
 public sealed partial class Catalog
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        WriteIndented = true
-    };
-
     private readonly object _syncRoot = new();
     private readonly Dictionary<string, IndexSchema> _indexes = new(StringComparer.OrdinalIgnoreCase);
     private readonly string? _persistencePath;
@@ -333,7 +329,7 @@ public sealed partial class Catalog
             return;
 
         var state = SnapshotStateUnsafe();
-        var json = JsonSerializer.Serialize(state, JsonOptions);
+        var json = JsonSerializer.Serialize(state, CatalogJsonContext.Default.CatalogStateSnapshot);
 
         var dir = Path.GetDirectoryName(_persistencePath);
         if (!string.IsNullOrWhiteSpace(dir))
@@ -359,7 +355,7 @@ public sealed partial class Catalog
             return;
 
         var json = File.ReadAllText(source);
-        var state = JsonSerializer.Deserialize<CatalogStateSnapshot>(json, JsonOptions)
+        var state = JsonSerializer.Deserialize(json, CatalogJsonContext.Default.CatalogStateSnapshot)
             ?? new CatalogStateSnapshot();
 
         _tables.Clear();
@@ -424,7 +420,7 @@ public sealed partial class Catalog
                 Columns = t.Columns.Select(c => new ColumnSnapshot
                 {
                     Name = c.Name,
-                    DataTypeText = c.DataType.ToString(),
+                    DataTypeText = c.DataType.ToString() ?? "UNKNOWN",
                     Nullable = c.Nullable,
                     UserDefinedTypeName = c.UserDefinedTypeName
                 }).ToList()
@@ -452,7 +448,7 @@ public sealed partial class Catalog
                         Fields = c.Fields.Select(f => new TypeFieldSnapshot
                         {
                             Name = f.Name,
-                            DataTypeText = f.Type.ToString()
+                            DataTypeText = f.Type.ToString() ?? "UNKNOWN"
                         }).ToList()
                     };
                 }
@@ -572,5 +568,11 @@ public sealed partial class Catalog
         public bool Unique { get; set; }
         public string IndexType { get; set; } = "BTREE";
         public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+    }
+
+    [JsonSourceGenerationOptions(WriteIndented = true)]
+    [JsonSerializable(typeof(CatalogStateSnapshot))]
+    private sealed partial class CatalogJsonContext : JsonSerializerContext
+    {
     }
 }
