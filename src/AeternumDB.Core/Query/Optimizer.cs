@@ -2,6 +2,7 @@ namespace AeternumDB.Core.Query;
 
 using AeternumDB.Core.Query.Rules;
 using AeternumDB.Core.Sql;
+using AeternumDB.Core.Sql.Ast;
 
 public sealed class ConstantFoldingRule : IOptimizationRule
 {

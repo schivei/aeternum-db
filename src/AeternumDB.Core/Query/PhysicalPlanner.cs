@@ -1,6 +1,7 @@
 namespace AeternumDB.Core.Query;
 
 using AeternumDB.Core.Sql;
+using AeternumDB.Core.Sql.Ast;
 
 public sealed class PhysicalPlanner(CostModel costModel, StatisticsRegistry stats)
 {

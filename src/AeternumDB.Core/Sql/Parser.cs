@@ -6,6 +6,7 @@
 
 using System.Globalization;
 using System.Text;
+using AeternumDB.Core.Sql.Ast;
 
 namespace AeternumDB.Core.Sql;
 

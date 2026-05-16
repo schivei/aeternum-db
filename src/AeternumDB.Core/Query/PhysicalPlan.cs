@@ -4,6 +4,7 @@
 namespace AeternumDB.Core.Query;
 
 using AeternumDB.Core.Sql;
+using AeternumDB.Core.Sql.Ast;
 
 // ── Supporting types ──────────────────────────────────────────────────────────
 
