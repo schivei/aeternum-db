@@ -280,7 +280,7 @@ public abstract class DataType
         public override string ToString() => Length.HasValue ? $"CHAR({Length})" : "CHAR";
     }
 
-    /// <summary>Variable-length character string with optional maximum length.</summary>
+    /// <summary>Variable-length character string with optional maximum length; when null, represents TEXT.</summary>
     public sealed class Varchar(ulong? length) : DataType
     {
         /// <summary>Optional maximum character length.</summary>
