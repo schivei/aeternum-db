@@ -303,8 +303,8 @@ public sealed class SqlValidator
     private void ValidateInsert(InsertStatement ins)
     {
         RequireTable(ins.Table);
-        var schema = _catalog.GetTable(ins.Table);
-        if (schema == null || ins.Columns.Count == 0)
+        var schema = _catalog.GetTable(ins.Table)!;
+        if (ins.Columns.Count == 0)
             return;
 
         foreach (var col in ins.Columns)
@@ -326,9 +326,7 @@ public sealed class SqlValidator
     private void ValidateUpdate(UpdateStatement upd)
     {
         RequireTable(upd.Table);
-        var schema = _catalog.GetTable(upd.Table);
-        if (schema == null)
-            return;
+        var schema = _catalog.GetTable(upd.Table)!;
 
         foreach (var (col, val) in upd.Assignments)
         {
@@ -365,9 +363,7 @@ public sealed class SqlValidator
     private void ValidateAlterTable(AlterTableStatement alt)
     {
         RequireTable(alt.Table);
-        var schema = _catalog.GetTable(alt.Table);
-        if (schema == null)
-            return;
+        var schema = _catalog.GetTable(alt.Table)!;
 
         foreach (var op in alt.Operations)
         {
