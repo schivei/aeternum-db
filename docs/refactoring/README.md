@@ -11,7 +11,7 @@ This folder contains practical guidance and reusable prompts to scale refactorin
 
 ## Documents
 
-- [REFRACTORING_ROADMAP.md](./REFRACTORING_ROADMAP.md) - staged execution model and PR sizing rules.
+- [REFACTORING_ROADMAP.md](./REFACTORING_ROADMAP.md) - staged execution model and PR sizing rules.
 - [PROMPT_TEMPLATES.md](./PROMPT_TEMPLATES.md) - copy/paste prompts for planning and executing small refactoring PRs.
 
 ## How to Use
@@ -20,4 +20,3 @@ This folder contains practical guidance and reusable prompts to scale refactorin
 2. Pick the appropriate prompt template for the PR type.
 3. Keep scope limited to one context per PR.
 4. Validate acceptance criteria before opening the PR.
-
