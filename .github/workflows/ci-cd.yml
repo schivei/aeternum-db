@@ -85,7 +85,7 @@ jobs:
           PR_BASE: ${{ github.base_ref }}
           REF_NAME: ${{ github.ref_name }}
         run: |
-          SONAR_NON_CSHARP_EXCLUSIONS="**/.config/**,.config/**,**/.github/**,.github/**,**/.husky/**,.husky/**,**/deployment/**,deployment/**,**/docs/**,docs/**,**/poc/**,poc/**,**/website/**,website/**"
+          SONAR_NON_CSHARP_EXCLUSIONS="**/.config/**,.config/**,**/.github/scripts/**,.github/scripts/**,**/.husky/**,.husky/**,**/deployment/**,deployment/**,**/docs/**,docs/**,**/poc/**,poc/**,**/website/**,website/**"
           SONAR_ARGS=(
             "/k:${SONAR_PROJECT_KEY}"
             "/o:${SONAR_ORGANIZATION}"
