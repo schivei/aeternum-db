@@ -352,8 +352,6 @@ public sealed class StorageTests
         await se.DisposeAsync();
         await se.DisposeAsync();
         Assert.True(File.Exists(path));
-
-        if (File.Exists(path))
-            File.Delete(path);
+        File.Delete(path);
     }
 }
