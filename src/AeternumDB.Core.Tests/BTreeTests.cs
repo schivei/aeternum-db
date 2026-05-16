@@ -297,17 +297,17 @@ public sealed class BTreeTests
         try
         {
             await using var storage = new StorageEngine(MakeStorageConfig(path));
-            var tree = await BTree<int, int>.CreateAsync(storage, new BTreeConfig { Fanout = 4 });
+            var tree = await BTree<int, string>.CreateAsync(storage, new BTreeConfig { Fanout = 4 });
 
             for (var i = 1; i <= 40; i++)
-                await tree.InsertAsync(i, i * 10);
+                await tree.InsertAsync(i, $"v{i}");
 
             for (var i = 1; i <= 39; i++)
                 Assert.True(await tree.DeleteAsync(i));
 
             Assert.Equal(1, tree.Count);
-            Assert.Equal(400, await tree.SearchAsync(40));
-            Assert.Equal(0, await tree.SearchAsync(1));
+            Assert.Equal("v40", await tree.SearchAsync(40));
+            Assert.Null(await tree.SearchAsync(1));
         }
         finally
         {
