@@ -222,4 +222,122 @@ public sealed class CatalogTests
 
         Assert.True(catalog.IndexExists("users_id_idx"));
     }
+
+    [Fact]
+    public void CatalogPersistence_DataTypeRoundtrip_RestoresJsonBackedTypes()
+    {
+        var fileName = $"aeternum-catalog-datatype-json-{Guid.NewGuid():N}.json";
+        var path = Path.GetFullPath(fileName, Path.GetTempPath());
+        try
+        {
+            var catalog = new Catalog(path);
+            catalog.CreateTable(new TableSchema(
+                "events",
+                [
+                    new ColumnSchema("owner_ref", new DataType.Reference("users"), nullable: true),
+                    new ColumnSchema("owner_refs", new DataType.ReferenceArray("users"), nullable: true),
+                    new ColumnSchema("profile_ref", new DataType.VirtualReference("profiles", "id"), nullable: true),
+                    new ColumnSchema("profile_refs", new DataType.VirtualReferenceArray("profiles", "id"), nullable: true),
+                    new ColumnSchema("flags", new DataType.Vector(DataType.Integer.Instance), nullable: true),
+                    new ColumnSchema("payload", new DataType.Binary(64), nullable: true)
+                ]));
+
+            var reloaded = new Catalog(path);
+            var table = reloaded.GetTable("events");
+            Assert.NotNull(table);
+
+            var ownerRef = Assert.IsType<DataType.Reference>(table!.GetColumn("owner_ref")!.DataType);
+            Assert.Equal("users", ownerRef.Table);
+
+            var ownerRefs = Assert.IsType<DataType.ReferenceArray>(table.GetColumn("owner_refs")!.DataType);
+            Assert.Equal("users", ownerRefs.Table);
+
+            var profileRef = Assert.IsType<DataType.VirtualReference>(table.GetColumn("profile_ref")!.DataType);
+            Assert.Equal("profiles", profileRef.Table);
+            Assert.Equal("id", profileRef.Column);
+
+            var profileRefs = Assert.IsType<DataType.VirtualReferenceArray>(table.GetColumn("profile_refs")!.DataType);
+            Assert.Equal("profiles", profileRefs.Table);
+            Assert.Equal("id", profileRefs.Column);
+
+            var flags = Assert.IsType<DataType.Vector>(table.GetColumn("flags")!.DataType);
+            Assert.IsType<DataType.Integer>(flags.ElementType);
+
+            var payload = Assert.IsType<DataType.Binary>(table.GetColumn("payload")!.DataType);
+            Assert.Equal((ulong)64, payload.Length);
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+            if (File.Exists($"{path}.tmp"))
+                File.Delete($"{path}.tmp");
+        }
+    }
+
+    [Fact]
+    public void CatalogPersistence_LoadsLegacyDataTypeTextFormats()
+    {
+        var fileName = $"aeternum-catalog-datatype-legacy-{Guid.NewGuid():N}.json";
+        var path = Path.GetFullPath(fileName, Path.GetTempPath());
+        try
+        {
+            const string state = """
+            {
+              "Tables": [
+                {
+                  "Name": "legacy_events",
+                  "SchemaVersion": 1,
+                  "CreatedAt": "2026-01-01T00:00:00+00:00",
+                  "ModifiedAt": "2026-01-01T00:00:00+00:00",
+                  "RowCount": 0,
+                  "Columns": [
+                    { "Name": "title", "DataTypeText": "VARCHAR(120)", "Nullable": false },
+                    { "Name": "ratio", "DataTypeText": "DECIMAL(10,2)", "Nullable": true },
+                    { "Name": "tags", "DataTypeText": "[INTEGER]", "Nullable": true },
+                    { "Name": "owner_ref", "DataTypeText": "~users(id)", "Nullable": true },
+                    { "Name": "owner_refs", "DataTypeText": "~[users](id)", "Nullable": true }
+                  ]
+                }
+              ],
+              "Types": [],
+              "Indexes": [],
+              "NextObjectId": 3
+            }
+            """;
+
+            File.WriteAllText(path, state);
+
+            var reloaded = new Catalog(path);
+            var table = reloaded.GetTable("legacy_events");
+            Assert.NotNull(table);
+
+            var title = Assert.IsType<DataType.Varchar>(table!.GetColumn("title")!.DataType);
+            Assert.Equal((ulong)120, title.Length);
+
+            var ratio = Assert.IsType<DataType.Decimal>(table.GetColumn("ratio")!.DataType);
+            Assert.Equal((ulong)10, ratio.Precision);
+            Assert.Equal((ulong)2, ratio.Scale);
+
+            var tags = Assert.IsType<DataType.Vector>(table.GetColumn("tags")!.DataType);
+            Assert.IsType<DataType.Integer>(tags.ElementType);
+
+            var ownerRef = Assert.IsType<DataType.VirtualReference>(table.GetColumn("owner_ref")!.DataType);
+            Assert.Equal("users", ownerRef.Table);
+            Assert.Equal("id", ownerRef.Column);
+
+            var ownerRefs = Assert.IsType<DataType.VirtualReferenceArray>(table.GetColumn("owner_refs")!.DataType);
+            Assert.Equal("users", ownerRefs.Table);
+            Assert.Equal("id", ownerRefs.Column);
+
+            Assert.Equal(3, reloaded.NextObjectId());
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+            if (File.Exists($"{path}.tmp"))
+                File.Delete($"{path}.tmp");
+        }
+    }
 }
