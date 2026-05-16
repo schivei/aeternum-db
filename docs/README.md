@@ -10,6 +10,7 @@ Technical documentation, specifications, and implementation guides for AeternumD
 ### 📋 Planning Documents
 - **[IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md)** - High-level implementation plan (7 phases, 74 PRs)
 - **[PR_GUIDE.md](./PR_GUIDE.md)** - General PR submission guide and best practices
+- **[refactoring/README.md](./refactoring/README.md)** - Staged refactoring playbook and prompt templates for small PRs
 
 ### 📖 Phase Overviews
 - **[phase1-prs.md](./phase1-prs.md)** - Phase 1: Core Foundation (14 PRs)
@@ -84,6 +85,10 @@ docs/
 ├── phase1-prs.md                  # Phase 1 overview
 ├── phase2-prs.md                  # Phase 2 overview
 ├── phases-overview.md             # Phases 3-7 overview
+├── refactoring/                   # Refactoring guidance and prompts
+│   ├── README.md
+│   ├── REFACTORING_ROADMAP.md
+│   └── PROMPT_TEMPLATES.md
 └── prs/                           # Individual PR specifications
     ├── README.md                  # PR directory index
     ├── PR-1.1-storage-engine.md
