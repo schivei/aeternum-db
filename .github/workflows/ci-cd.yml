@@ -143,19 +143,11 @@ jobs:
         run: |
           python3 << 'PYEOF'
           import xml.etree.ElementTree as ET, os, sys
+          sys.path.insert(0, os.path.abspath('.github/scripts'))
+          from coverage_helpers import is_trackable
 
           LINE_THRESHOLD = 90.0
           BRANCH_THRESHOLD = 90.0
-
-          def is_trackable(filename: str) -> bool:
-              norm = filename.replace('\\', '/').lstrip('./')
-              if not norm.endswith('.cs'):
-                  return False
-              if norm.startswith('obj/') or '/obj/' in norm:
-                  return False
-              if norm.endswith('Tests.cs') or '.Tests/' in norm or '/Tests/' in norm:
-                  return False
-              return True
 
           xml_files = [
               os.path.join(r, f)
@@ -224,16 +216,8 @@ jobs:
         run: |
           python3 << 'PYEOF'
           import xml.etree.ElementTree as ET, os, sys
-
-          def is_trackable(filename: str) -> bool:
-              norm = filename.replace('\\', '/').lstrip('./')
-              if not norm.endswith('.cs'):
-                  return False
-              if norm.startswith('obj/') or '/obj/' in norm:
-                  return False
-              if norm.endswith('Tests.cs') or '.Tests/' in norm or '/Tests/' in norm:
-                  return False
-              return True
+          sys.path.insert(0, os.path.abspath('.github/scripts'))
+          from coverage_helpers import is_trackable
 
           xml_files = [
               os.path.join(r, f)
@@ -308,16 +292,8 @@ jobs:
           import xml.etree.ElementTree as ET, os, subprocess, sys
 
           MARKER = "<!-- aeternumdb-coverage-report -->"
-
-          def is_trackable(filename: str) -> bool:
-              norm = filename.replace('\\', '/').lstrip('./')
-              if not norm.endswith('.cs'):
-                  return False
-              if norm.startswith('obj/') or '/obj/' in norm:
-                  return False
-              if norm.endswith('Tests.cs') or '.Tests/' in norm or '/Tests/' in norm:
-                  return False
-              return True
+          sys.path.insert(0, os.path.abspath('.github/scripts'))
+          from coverage_helpers import is_trackable
 
           xml_files = [
               os.path.join(r, f)
