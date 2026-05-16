@@ -7,6 +7,17 @@
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL%203.0-blue.svg)](LICENSE.md)
 [![.NET](https://img.shields.io/badge/.NET-10.0-purple.svg)](https://dotnet.microsoft.com)
 [![Status](https://img.shields.io/badge/Status-In%20Development-yellow.svg)]()
+[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=schivei_aeternum-db&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=schivei_aeternum-db)
+[![Bugs](https://sonarcloud.io/api/project_badges/measure?project=schivei_aeternum-db&metric=bugs)](https://sonarcloud.io/summary/new_code?id=schivei_aeternum-db)
+[![Code Smells](https://sonarcloud.io/api/project_badges/measure?project=schivei_aeternum-db&metric=code_smells)](https://sonarcloud.io/summary/new_code?id=schivei_aeternum-db)
+[![Coverage](https://sonarcloud.io/api/project_badges/measure?project=schivei_aeternum-db&metric=coverage)](https://sonarcloud.io/summary/new_code?id=schivei_aeternum-db)
+[![Duplicated Lines (%)](https://sonarcloud.io/api/project_badges/measure?project=schivei_aeternum-db&metric=duplicated_lines_density)](https://sonarcloud.io/summary/new_code?id=schivei_aeternum-db)
+[![Lines of Code](https://sonarcloud.io/api/project_badges/measure?project=schivei_aeternum-db&metric=ncloc)](https://sonarcloud.io/summary/new_code?id=schivei_aeternum-db)
+[![Reliability Rating](https://sonarcloud.io/api/project_badges/measure?project=schivei_aeternum-db&metric=reliability_rating)](https://sonarcloud.io/summary/new_code?id=schivei_aeternum-db)
+[![Security Rating](https://sonarcloud.io/api/project_badges/measure?project=schivei_aeternum-db&metric=security_rating)](https://sonarcloud.io/summary/new_code?id=schivei_aeternum-db)
+[![Technical Debt](https://sonarcloud.io/api/project_badges/measure?project=schivei_aeternum-db&metric=sqale_index)](https://sonarcloud.io/summary/new_code?id=schivei_aeternum-db)
+[![Maintainability Rating](https://sonarcloud.io/api/project_badges/measure?project=schivei_aeternum-db&metric=sqale_rating)](https://sonarcloud.io/summary/new_code?id=schivei_aeternum-db)
+[![Vulnerabilities](https://sonarcloud.io/api/project_badges/measure?project=schivei_aeternum-db&metric=vulnerabilities)](https://sonarcloud.io/summary/new_code?id=schivei_aeternum-db)
 
 *A modular DBMS written in C#/.NET, supporting multiple data paradigms and modern execution environments*
 
