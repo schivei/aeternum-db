@@ -125,12 +125,13 @@ public sealed partial class Catalog
             if (!_tables.TryGetValue(key, out var schema))
                 throw new PlannerException(PlannerErrorKind.CatalogError, $"table '{stmt.Table}' does not exist");
 
+            var originalTableName = schema.Name;
             var tableName = schema.Name;
             var columns = schema.Columns.ToList();
 
             foreach (var op in stmt.Operations)
             {
-                ApplyAlterOperationUnsafe(op, ref tableName, columns);
+                ApplyAlterOperationUnsafe(op, originalTableName, ref tableName, columns);
             }
 
             var updated = new TableSchema(
@@ -143,7 +144,7 @@ public sealed partial class Catalog
 
             _tables.Remove(key);
             _tables[tableName.ToLowerInvariant()] = updated;
-            RenameTableInIndexesUnsafe(schema.Name, tableName);
+            RenameTableInIndexesUnsafe(originalTableName, tableName);
             PersistIfConfiguredUnsafe();
         }
     }
@@ -328,9 +329,17 @@ public sealed partial class Catalog
         if (source is null)
             return;
 
-        var json = File.ReadAllText(source);
-        var state = JsonSerializer.Deserialize(json, CatalogJsonContext.Default.CatalogStateSnapshot)
-            ?? new CatalogStateSnapshot();
+        CatalogStateSnapshot state;
+        try
+        {
+            var json = File.ReadAllText(source);
+            state = JsonSerializer.Deserialize(json, CatalogJsonContext.Default.CatalogStateSnapshot)
+                ?? new CatalogStateSnapshot();
+        }
+        catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
+        {
+            throw new PlannerException(PlannerErrorKind.CatalogError, $"failed to load catalog metadata from '{source}': {ex.Message}");
+        }
 
         _tables.Clear();
         _types.Clear();
@@ -359,7 +368,7 @@ public sealed partial class Catalog
                     t.Variants.Select(v => new EnumVariant(v.Name, v.IsNone)).ToList(),
                     t.ResolvedValues),
                 CompositeKind => new UserTypeKind.Composite(
-                    t.Fields.Select(f => (f.Name, ParseDataType(f.DataTypeText, null))).ToList()),
+                    t.Fields.Select(f => (f.Name, ParseDataType(f.DataTypeText, f.UserDefinedTypeName))).ToList()),
                 _ => new UserTypeKind.Composite([])
             };
 
@@ -394,7 +403,7 @@ public sealed partial class Catalog
                 Columns = t.Columns.Select(c => new ColumnSnapshot
                 {
                     Name = c.Name,
-                    DataTypeText = c.DataType.ToString() ?? UnknownTypeName,
+                    DataTypeText = SerializeDataType(c.DataType),
                     Nullable = c.Nullable,
                     UserDefinedTypeName = c.UserDefinedTypeName
                 }).ToList()
@@ -422,7 +431,8 @@ public sealed partial class Catalog
                         Fields = c.Fields.Select(f => new TypeFieldSnapshot
                         {
                             Name = f.Name,
-                            DataTypeText = f.Type.ToString() ?? UnknownTypeName
+                            DataTypeText = SerializeDataType(f.Type),
+                            UserDefinedTypeName = f.Type is DataType.EnumRef enumRef ? enumRef.Name : null
                         }).ToList()
                     };
                 }
@@ -445,14 +455,336 @@ public sealed partial class Catalog
         if (!string.IsNullOrWhiteSpace(userDefinedTypeName))
             return new DataType.EnumRef(userDefinedTypeName);
 
-        return text.ToUpperInvariant() switch
+        if (TryParseJsonDataType(text, out var jsonType))
+            return jsonType;
+
+        return ParseDataTypeText(text);
+    }
+
+    private static string SerializeDataType(DataType dataType)
+    {
+        PersistedDataTypeSnapshot? payload = dataType switch
         {
-            "BOOLEAN" => DataType.Boolean.Instance,
-            "INTEGER" => DataType.Integer.Instance,
-            "BIGINT" => DataType.BigInt.Instance,
-            "TIMESTAMP" => DataType.Timestamp.Instance,
-            _ => new DataType.Other(text)
+            DataType.Vector vector => new PersistedDataTypeSnapshot
+            {
+                Kind = "array",
+                ElementTypeText = SerializeDataType(vector.ElementType)
+            },
+            DataType.Reference reference => new PersistedDataTypeSnapshot
+            {
+                Kind = "reference",
+                Table = reference.Table,
+                DataId = reference.Table.ToLowerInvariant()
+            },
+            DataType.ReferenceArray referenceArray => new PersistedDataTypeSnapshot
+            {
+                Kind = "reference_array",
+                Table = referenceArray.Table,
+                DataId = referenceArray.Table.ToLowerInvariant()
+            },
+            DataType.VirtualReference virtualReference => new PersistedDataTypeSnapshot
+            {
+                Kind = "virtual_reference",
+                Table = virtualReference.Table,
+                Column = virtualReference.Column,
+                DataId = $"{virtualReference.Table.ToLowerInvariant()}.{virtualReference.Column.ToLowerInvariant()}"
+            },
+            DataType.VirtualReferenceArray virtualReferenceArray => new PersistedDataTypeSnapshot
+            {
+                Kind = "virtual_reference_array",
+                Table = virtualReferenceArray.Table,
+                Column = virtualReferenceArray.Column,
+                DataId = $"{virtualReferenceArray.Table.ToLowerInvariant()}.{virtualReferenceArray.Column.ToLowerInvariant()}"
+            },
+            DataType.EnumRef enumRef => new PersistedDataTypeSnapshot
+            {
+                Kind = "user_defined",
+                Name = enumRef.Name,
+                DataId = enumRef.Name.ToLowerInvariant()
+            },
+            _ => null
         };
+
+        if (payload is null)
+            return dataType.ToString() ?? UnknownTypeName;
+
+        return JsonSerializer.Serialize(payload, CatalogJsonContext.Default.PersistedDataTypeSnapshot);
+    }
+
+    private static bool TryParseJsonDataType(string text, out DataType type)
+    {
+        type = default!;
+        if (string.IsNullOrWhiteSpace(text) || text.TrimStart()[0] != '{')
+            return false;
+
+        try
+        {
+            var payload = JsonSerializer.Deserialize(text, CatalogJsonContext.Default.PersistedDataTypeSnapshot);
+            if (payload?.Kind is null)
+                return false;
+
+            type = payload.Kind switch
+            {
+                "array" => new DataType.Vector(ParseDataType(payload.ElementTypeText ?? UnknownTypeName, null)),
+                "reference" => new DataType.Reference(payload.Table ?? payload.DataId ?? UnknownTypeName),
+                "reference_array" => new DataType.ReferenceArray(payload.Table ?? payload.DataId ?? UnknownTypeName),
+                "virtual_reference" => new DataType.VirtualReference(
+                    payload.Table ?? UnknownTypeName,
+                    payload.Column ?? UnknownTypeName),
+                "virtual_reference_array" => new DataType.VirtualReferenceArray(
+                    payload.Table ?? UnknownTypeName,
+                    payload.Column ?? UnknownTypeName),
+                "user_defined" => new DataType.EnumRef(payload.Name ?? payload.DataId ?? UnknownTypeName),
+                _ => default!
+            };
+
+            return type is not null;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static DataType ParseDataTypeText(string text)
+    {
+        if (TryParseKnownDataTypeText(text, out var known))
+            return known;
+
+        if (TryParseVirtualReferenceArrayText(text, out var virtualRefArray))
+            return virtualRefArray;
+        if (TryParseVirtualReferenceText(text, out var virtualRef))
+            return virtualRef;
+
+        if (text.StartsWith('[') && text.EndsWith(']') && text.Length > 2)
+        {
+            var inner = text[1..^1];
+            if (TryParseKnownDataTypeText(inner, out var element))
+                return new DataType.Vector(element);
+            return new DataType.ReferenceArray(inner);
+        }
+
+        return new DataType.Other(text);
+    }
+
+    private static bool TryParseKnownDataTypeText(string text, out DataType type)
+    {
+        var normalized = text.Trim();
+        var upper = normalized.ToUpperInvariant();
+        switch (upper)
+        {
+            case "BOOLEAN":
+                type = DataType.Boolean.Instance;
+                return true;
+            case "INTEGER":
+                type = DataType.Integer.Instance;
+                return true;
+            case "INTEGER UNSIGNED":
+                type = DataType.UnsignedInt.Instance;
+                return true;
+            case "FLOAT":
+                type = DataType.Float.Instance;
+                return true;
+            case "DOUBLE":
+                type = DataType.Double.Instance;
+                return true;
+            case "TEXT":
+                type = new DataType.Varchar(null);
+                return true;
+            case "DATE":
+                type = DataType.Date.Instance;
+                return true;
+            case "TIMESTAMP":
+                type = DataType.Timestamp.Instance;
+                return true;
+            case "DECIMAL":
+                type = new DataType.Decimal(null, null);
+                return true;
+            case "TINYINT":
+                type = DataType.TinyInt.Instance;
+                return true;
+            case "TINYINT UNSIGNED":
+                type = DataType.UnsignedTinyInt.Instance;
+                return true;
+            case "SMALLINT":
+                type = DataType.SmallInt.Instance;
+                return true;
+            case "SMALLINT UNSIGNED":
+                type = DataType.UnsignedSmallInt.Instance;
+                return true;
+            case "MEDIUMINT":
+                type = DataType.MediumInt.Instance;
+                return true;
+            case "MEDIUMINT UNSIGNED":
+                type = DataType.UnsignedMediumInt.Instance;
+                return true;
+            case "BIGINT":
+                type = DataType.BigInt.Instance;
+                return true;
+            case "BIGINT UNSIGNED":
+                type = DataType.UnsignedBigInt.Instance;
+                return true;
+            case "CHAR":
+                type = new DataType.Char(null);
+                return true;
+            case "TINYTEXT":
+                type = DataType.TinyText.Instance;
+                return true;
+            case "MEDIUMTEXT":
+                type = DataType.MediumText.Instance;
+                return true;
+            case "LONGTEXT":
+                type = DataType.LongText.Instance;
+                return true;
+            case "TIME":
+                type = DataType.Time.Instance;
+                return true;
+            case "TIME WITH TIME ZONE":
+                type = DataType.TimeTz.Instance;
+                return true;
+            case "DATETIME":
+                type = DataType.DateTime.Instance;
+                return true;
+            case "TIMESTAMP WITH TIME ZONE":
+                type = DataType.TimestampTz.Instance;
+                return true;
+            case "UUID":
+                type = DataType.Uuid.Instance;
+                return true;
+            case "BINARY":
+                type = new DataType.Binary(null);
+                return true;
+            case "VARBINARY":
+                type = new DataType.Varbinary(null);
+                return true;
+            case "BLOB":
+                type = new DataType.Blob(null);
+                return true;
+            case "TINYBLOB":
+                type = DataType.TinyBlob.Instance;
+                return true;
+            case "MEDIUMBLOB":
+                type = DataType.MediumBlob.Instance;
+                return true;
+            case "LONGBLOB":
+                type = DataType.LongBlob.Instance;
+                return true;
+        }
+
+        if (TryParseSingleUnsignedParameter(upper, "VARCHAR(", out var varcharLength))
+        {
+            type = new DataType.Varchar(varcharLength);
+            return true;
+        }
+        if (TryParseSingleUnsignedParameter(upper, "CHAR(", out var charLength))
+        {
+            type = new DataType.Char(charLength);
+            return true;
+        }
+        if (TryParseSingleUnsignedParameter(upper, "BINARY(", out var binaryLength))
+        {
+            type = new DataType.Binary(binaryLength);
+            return true;
+        }
+        if (TryParseSingleUnsignedParameter(upper, "VARBINARY(", out var varbinaryLength))
+        {
+            type = new DataType.Varbinary(varbinaryLength);
+            return true;
+        }
+        if (TryParseSingleUnsignedParameter(upper, "BLOB(", out var blobLength))
+        {
+            type = new DataType.Blob(blobLength);
+            return true;
+        }
+        if (TryParseDecimal(upper, out var precision, out var scale))
+        {
+            type = new DataType.Decimal(precision, scale);
+            return true;
+        }
+
+        type = default!;
+        return false;
+    }
+
+    private static bool TryParseSingleUnsignedParameter(string upperText, string prefix, out ulong? value)
+    {
+        value = null;
+        if (!upperText.StartsWith(prefix, StringComparison.Ordinal) || !upperText.EndsWith(')'))
+            return false;
+
+        var inside = upperText[prefix.Length..^1].Trim();
+        if (!ulong.TryParse(inside, out var parsed))
+            return false;
+
+        value = parsed;
+        return true;
+    }
+
+    private static bool TryParseDecimal(string upperText, out ulong? precision, out ulong? scale)
+    {
+        precision = null;
+        scale = null;
+        if (!upperText.StartsWith("DECIMAL(", StringComparison.Ordinal) || !upperText.EndsWith(')'))
+            return false;
+
+        var inside = upperText["DECIMAL(".Length..^1].Trim();
+        if (inside.Length == 0)
+            return true;
+
+        var parts = inside.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length is < 1 or > 2)
+            return false;
+        if (!ulong.TryParse(parts[0], out var parsedPrecision))
+            return false;
+
+        precision = parsedPrecision;
+        if (parts.Length == 2)
+        {
+            if (!ulong.TryParse(parts[1], out var parsedScale))
+                return false;
+            scale = parsedScale;
+        }
+
+        return true;
+    }
+
+    private static bool TryParseVirtualReferenceText(string text, out DataType type)
+    {
+        type = default!;
+        if (!text.StartsWith('~') || text.StartsWith("~[", StringComparison.Ordinal))
+            return false;
+
+        var open = text.IndexOf('(');
+        if (open <= 1 || !text.EndsWith(')'))
+            return false;
+
+        var table = text[1..open];
+        var column = text[(open + 1)..^1];
+        if (table.Length == 0 || column.Length == 0)
+            return false;
+
+        type = new DataType.VirtualReference(table, column);
+        return true;
+    }
+
+    private static bool TryParseVirtualReferenceArrayText(string text, out DataType type)
+    {
+        type = default!;
+        if (!text.StartsWith("~[", StringComparison.Ordinal))
+            return false;
+
+        var close = text.IndexOf(']');
+        var open = text.IndexOf('(');
+        if (close < 2 || open <= close + 1 || !text.EndsWith(')'))
+            return false;
+
+        var table = text[2..close];
+        var column = text[(open + 1)..^1];
+        if (table.Length == 0 || column.Length == 0)
+            return false;
+
+        type = new DataType.VirtualReferenceArray(table, column);
+        return true;
     }
 
     private static string IndexTypeName(IndexType type) =>
@@ -532,6 +864,17 @@ public sealed partial class Catalog
     {
         public string Name { get; set; } = "";
         public string DataTypeText { get; set; } = UnknownTypeName;
+        public string? UserDefinedTypeName { get; set; }
+    }
+
+    private sealed class PersistedDataTypeSnapshot
+    {
+        public string? Kind { get; set; }
+        public string? Name { get; set; }
+        public string? Table { get; set; }
+        public string? Column { get; set; }
+        public string? DataId { get; set; }
+        public string? ElementTypeText { get; set; }
     }
 
     private sealed class IndexSnapshot
@@ -544,7 +887,7 @@ public sealed partial class Catalog
         public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     }
 
-    private void ApplyAlterOperationUnsafe(AlterTableOperation op, ref string tableName, List<ColumnSchema> columns)
+    private void ApplyAlterOperationUnsafe(AlterTableOperation op, string indexTableName, ref string tableName, List<ColumnSchema> columns)
     {
         switch (op)
         {
@@ -555,7 +898,7 @@ public sealed partial class Catalog
                 DropColumnUnsafe(drop, columns);
                 break;
             case AlterTableOperation.RenameColumn rename:
-                RenameColumnUnsafe(rename, tableName, columns);
+                RenameColumnUnsafe(rename, indexTableName, columns);
                 break;
             case AlterTableOperation.RenameTable rename:
                 tableName = RenameTableUnsafe(rename);
@@ -600,6 +943,7 @@ public sealed partial class Catalog
 
     [JsonSourceGenerationOptions(WriteIndented = true)]
     [JsonSerializable(typeof(CatalogStateSnapshot))]
+    [JsonSerializable(typeof(PersistedDataTypeSnapshot))]
     private sealed partial class CatalogJsonContext : JsonSerializerContext
     {
     }

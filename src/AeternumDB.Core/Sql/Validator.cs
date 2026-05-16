@@ -45,11 +45,12 @@ public sealed class TableSchema
         DateTimeOffset? modifiedAt = null,
         long rowCount = 0)
     {
+        var now = DateTimeOffset.UtcNow;
         Name = name;
         Columns = columns;
         SchemaVersion = schemaVersion;
-        CreatedAt = createdAt ?? DateTimeOffset.UtcNow;
-        ModifiedAt = modifiedAt ?? DateTimeOffset.UtcNow;
+        CreatedAt = createdAt ?? now;
+        ModifiedAt = modifiedAt ?? CreatedAt;
         RowCount = rowCount;
     }
 
@@ -93,7 +94,7 @@ public sealed class UserTypeSchema
 
 // ── Catalog ───────────────────────────────────────────────────────────────────
 
-/// <summary>Simple in-memory schema catalog used for semantic validation.</summary>
+/// <summary>Catalog with schema metadata, DDL/index mutations, and optional persistence for semantic validation.</summary>
 public sealed partial class Catalog
 {
     private readonly Dictionary<string, TableSchema> _tables = new(StringComparer.OrdinalIgnoreCase);
@@ -116,7 +117,10 @@ public sealed partial class Catalog
     {
         lock (SyncRoot)
         {
-            _tables.Remove(name.ToLowerInvariant());
+            var removed = _tables.Remove(name.ToLowerInvariant());
+            if (!removed)
+                return;
+
             RemoveIndexesForTableUnsafe(name);
             PersistIfConfiguredUnsafe();
         }
