@@ -211,4 +211,57 @@ public class DbValueTests
         Assert.Null(t.AsArray());
         Assert.Null(DbValue.Null.Instance.AsArray());
     }
+
+    [Fact]
+    public void DbValue_EqualsAndToString_FalseBranches_AreCovered()
+    {
+        var boolean = new DbValue.Boolean(false);
+        Assert.Equal("FALSE", boolean.ToString());
+        Assert.False(boolean.Equals((DbValue)new DbValue.Boolean(true)));
+        Assert.False(boolean.Equals((DbValue)new DbValue.Integer(0)));
+        Assert.False(boolean.Equals((object)new DbValue.Boolean(true)));
+        Assert.False(boolean.Equals((object)new DbValue.Integer(0)));
+
+        var integer = new DbValue.Integer(10);
+        Assert.False(integer.Equals((DbValue)new DbValue.Integer(11)));
+        Assert.False(integer.Equals((DbValue)new DbValue.Boolean(true)));
+        Assert.False(integer.Equals((object)new DbValue.Integer(11)));
+        Assert.False(integer.Equals((object)new DbValue.Text("10")));
+
+        var floating = new DbValue.Float(2.5);
+        Assert.False(floating.Equals((DbValue)new DbValue.Float(2.75)));
+        Assert.False(floating.Equals((DbValue)new DbValue.Text("2.5")));
+        Assert.False(floating.Equals((object)new DbValue.Float(2.75)));
+        Assert.False(floating.Equals((object)new DbValue.Integer(2)));
+
+        var text = new DbValue.Text("abc");
+        Assert.False(text.Equals((DbValue)new DbValue.Text("xyz")));
+        Assert.False(text.Equals((DbValue)new DbValue.Bytes([97, 98, 99])));
+        Assert.False(text.Equals((object)new DbValue.Text("xyz")));
+        Assert.False(text.Equals((object)new DbValue.Json("\"abc\"")));
+
+        var bytes = new DbValue.Bytes([1, 2, 3]);
+        Assert.False(bytes.Equals((DbValue)new DbValue.Bytes([1, 2, 4])));
+        Assert.False(bytes.Equals((DbValue)new DbValue.Integer(1)));
+        Assert.False(bytes.Equals((object)new DbValue.Bytes([1, 2, 4])));
+        Assert.False(bytes.Equals((object)new DbValue.Array([new DbValue.Integer(1)])));
+
+        var array = new DbValue.Array([new DbValue.Integer(1)]);
+        Assert.False(array.Equals((DbValue)new DbValue.Array([new DbValue.Integer(2)])));
+        Assert.False(array.Equals((DbValue)new DbValue.Text("1")));
+        Assert.False(array.Equals((object)new DbValue.Array([new DbValue.Integer(2)])));
+        Assert.False(array.Equals((object)new DbValue.Bytes([1])));
+
+        var decimalValue = new DbValue.Decimal(10.1m);
+        Assert.False(decimalValue.Equals((DbValue)new DbValue.Decimal(11.1m)));
+        Assert.False(decimalValue.Equals((DbValue)new DbValue.Boolean(true)));
+        Assert.False(decimalValue.Equals((object)new DbValue.Decimal(11.1m)));
+        Assert.False(decimalValue.Equals((object)new DbValue.Integer(10)));
+
+        var json = new DbValue.Json("{\"a\":1}");
+        Assert.False(json.Equals((DbValue)new DbValue.Json("{\"a\":2}")));
+        Assert.False(json.Equals((DbValue)new DbValue.Decimal(1)));
+        Assert.False(json.Equals((object)new DbValue.Json("{\"a\":2}")));
+        Assert.False(json.Equals((object)new DbValue.Text("{\"a\":1}")));
+    }
 }

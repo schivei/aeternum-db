@@ -138,5 +138,92 @@ public sealed class BTreeNodeTests
         Assert.False(found3);
         Assert.Equal(0, idx3);
     }
-}
 
+    [Fact]
+    public void InternalNode_Deserialize_NegativeKeyCount_Throws()
+    {
+        var bytes = new byte[] { BTreeNodeConstants.InternalType, 255, 255, 255, 255 };
+        var ex = Assert.Throws<IndexException>(() => InternalNode.Deserialize(bytes));
+        Assert.Equal(IndexErrorKind.Serialization, ex.Kind);
+    }
+
+    [Fact]
+    public void InternalNode_Deserialize_KeyPayloadAndChildrenTruncated_Throws()
+    {
+        var keyPayloadTruncated = new byte[]
+        {
+            BTreeNodeConstants.InternalType,
+            1, 0, 0, 0,
+            3, 0, 0, 0,
+            1, 2
+        };
+        var ex1 = Assert.Throws<IndexException>(() => InternalNode.Deserialize(keyPayloadTruncated));
+        Assert.Equal(IndexErrorKind.Serialization, ex1.Kind);
+
+        var childrenTruncated = new byte[]
+        {
+            BTreeNodeConstants.InternalType,
+            1, 0, 0, 0,
+            1, 0, 0, 0,
+            9,
+            1, 2, 3, 4
+        };
+        var ex2 = Assert.Throws<IndexException>(() => InternalNode.Deserialize(childrenTruncated));
+        Assert.Equal(IndexErrorKind.Serialization, ex2.Kind);
+    }
+
+    [Fact]
+    public void LeafNode_Deserialize_NegativeCount_Throws()
+    {
+        var bytes = new byte[] { BTreeNodeConstants.LeafType, 255, 255, 255, 255 };
+        var ex = Assert.Throws<IndexException>(() => LeafNode.Deserialize(bytes));
+        Assert.Equal(IndexErrorKind.Serialization, ex.Kind);
+    }
+
+    [Fact]
+    public void LeafNode_Deserialize_EntryAndPointerTruncation_Throws()
+    {
+        var keyPayloadTruncated = new byte[]
+        {
+            BTreeNodeConstants.LeafType,
+            1, 0, 0, 0,
+            3, 0, 0, 0,
+            1, 2
+        };
+        var ex1 = Assert.Throws<IndexException>(() => LeafNode.Deserialize(keyPayloadTruncated));
+        Assert.Equal(IndexErrorKind.Serialization, ex1.Kind);
+
+        var valuePayloadTruncated = new byte[]
+        {
+            BTreeNodeConstants.LeafType,
+            1, 0, 0, 0,
+            1, 0, 0, 0,
+            7,
+            3, 0, 0, 0,
+            1, 2
+        };
+        var ex2 = Assert.Throws<IndexException>(() => LeafNode.Deserialize(valuePayloadTruncated));
+        Assert.Equal(IndexErrorKind.Serialization, ex2.Kind);
+
+        var nextPointerTruncated = new byte[]
+        {
+            BTreeNodeConstants.LeafType,
+            0, 0, 0, 0,
+            1,
+            1, 2, 3
+        };
+        var ex3 = Assert.Throws<IndexException>(() => LeafNode.Deserialize(nextPointerTruncated));
+        Assert.Equal(IndexErrorKind.Serialization, ex3.Kind);
+
+        var prevPointerTruncated = new byte[]
+        {
+            BTreeNodeConstants.LeafType,
+            0, 0, 0, 0,
+            0,
+            1,
+            1, 2, 3
+        };
+        var ex4 = Assert.Throws<IndexException>(() => LeafNode.Deserialize(prevPointerTruncated));
+        Assert.Equal(IndexErrorKind.Serialization, ex4.Kind);
+    }
+}

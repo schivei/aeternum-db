@@ -19,7 +19,7 @@ public sealed class BTreeTests
     [Fact]
     public async Task Create_InvalidFanout_Throws()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"aeternum-index-{Guid.NewGuid():N}.db");
+        var path = Path.Join(Path.GetTempPath(), $"aeternum-index-{Guid.NewGuid():N}.db");
         try
         {
             await using var storage = new StorageEngine(MakeStorageConfig(path));
@@ -37,7 +37,7 @@ public sealed class BTreeTests
     [Fact]
     public async Task InsertSearch_AndReopen_Works()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"aeternum-index-{Guid.NewGuid():N}.db");
+        var path = Path.Join(Path.GetTempPath(), $"aeternum-index-{Guid.NewGuid():N}.db");
         try
         {
             await using (var storage = new StorageEngine(MakeStorageConfig(path)))
@@ -68,7 +68,7 @@ public sealed class BTreeTests
     [Fact]
     public async Task Insert_SameKey_DoesNotIncreaseCount_AndUpdatesValue()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"aeternum-index-{Guid.NewGuid():N}.db");
+        var path = Path.Join(Path.GetTempPath(), $"aeternum-index-{Guid.NewGuid():N}.db");
         try
         {
             await using var storage = new StorageEngine(MakeStorageConfig(path));
