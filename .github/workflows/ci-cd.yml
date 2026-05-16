@@ -85,15 +85,16 @@ jobs:
           PR_BASE: ${{ github.base_ref }}
           REF_NAME: ${{ github.ref_name }}
         run: |
+          SONAR_NON_CSHARP_EXCLUSIONS=".config/**,.github/**,.husky/**,deployment/**,docs/**,poc/**,website/**"
           SONAR_ARGS=(
             "/k:${SONAR_PROJECT_KEY}"
             "/o:${SONAR_ORGANIZATION}"
             "/d:sonar.host.url=${SONAR_HOST_URL}"
             "/d:sonar.token=${SONAR_TOKEN}"
             "/d:sonar.cs.cobertura.reportsPaths=../coverage/**/coverage.cobertura.xml"
-            "/d:sonar.exclusions=.config/**,.github/**,.husky/**,deployment/**,docs/**,poc/**,website/**"
-            "/d:sonar.cpd.exclusions=.config/**,.github/**,.husky/**,deployment/**,docs/**,poc/**,website/**"
-            "/d:sonar.test.exclusions=.config/**,.github/**,.husky/**,deployment/**,docs/**,poc/**,website/**"
+            "/d:sonar.exclusions=${SONAR_NON_CSHARP_EXCLUSIONS}"
+            "/d:sonar.cpd.exclusions=${SONAR_NON_CSHARP_EXCLUSIONS}"
+            "/d:sonar.test.exclusions=${SONAR_NON_CSHARP_EXCLUSIONS}"
           )
 
           if [ "${{ github.event_name }}" = "pull_request" ]; then
