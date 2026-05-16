@@ -1,9 +1,12 @@
+using AeternumDB.Core.Sql.Ast;
+
 namespace AeternumDB.Core.Sql;
 
 /// <summary>Errors produced by semantic validation.</summary>
 public abstract class ValidationException : Exception
 {
-    protected ValidationException(string message) : base(message) { }
+    protected ValidationException(string message)
+        : base(message) { }
 
     public sealed class TableNotFoundException(string table)
         : ValidationException($"table '{table}' does not exist")
@@ -30,7 +33,9 @@ public abstract class ValidationException : Exception
         : ValidationException($"invalid aggregate usage: {message}") { }
 
     public sealed class NullConstraintViolationException(string table, string column)
-        : ValidationException($"null constraint violation: column '{column}' in table '{table}' is NOT NULL")
+        : ValidationException(
+            $"null constraint violation: column '{column}' in table '{table}' is NOT NULL"
+        )
     {
         public string Table { get; } = table;
         public string Column { get; } = column;
@@ -43,7 +48,9 @@ public abstract class ValidationException : Exception
         : ValidationException($"user-defined type '{name}' does not exist") { }
 
     public sealed class TypeInUseException(string name)
-        : ValidationException($"cannot drop type '{name}': it is still referenced by one or more columns") { }
+        : ValidationException(
+            $"cannot drop type '{name}': it is still referenced by one or more columns"
+        ) { }
 
     public sealed class InvalidEnumValueException(string column, string value)
         : ValidationException($"invalid enum value '{value}' for column '{column}'")
@@ -62,7 +69,9 @@ public abstract class ValidationException : Exception
         : ValidationException($"transaction '{name}' is not active in the current session") { }
 
     public sealed class TransactionNestingViolationException(string target, string blocking)
-        : ValidationException($"cannot commit or rollback transaction '{target}': nested transaction '{blocking}' is still open")
+        : ValidationException(
+            $"cannot commit or rollback transaction '{target}': nested transaction '{blocking}' is still open"
+        )
     {
         public string Target { get; } = target;
         public string Blocking { get; } = blocking;

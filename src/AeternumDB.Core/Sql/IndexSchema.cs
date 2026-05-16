@@ -1,3 +1,5 @@
+using AeternumDB.Core.Sql.Ast;
+
 namespace AeternumDB.Core.Sql;
 
 /// <summary>Metadata for a registered index.</summary>
@@ -16,7 +18,8 @@ public sealed class IndexSchema
         IReadOnlyList<string> columns,
         bool unique,
         IndexType indexType,
-        DateTimeOffset? createdAt = null)
+        DateTimeOffset? createdAt = null
+    )
     {
         Name = name;
         Table = table;

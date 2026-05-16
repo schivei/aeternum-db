@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using AeternumDB.Core.Errors;
+using AeternumDB.Core.Sql.Ast;
 using AeternumDB.Core.Sql.CatalogPersistence;
 using AeternumDB.Core.Sql.CatalogSnapshots;
 
@@ -13,7 +14,9 @@ public sealed partial class Catalog
     private const string DefaultIndexTypeName = CatalogSnapshotConstants.DefaultIndexTypeName;
 
     private readonly object _syncRoot = new();
-    private readonly Dictionary<string, IndexSchema> _indexes = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, IndexSchema> _indexes = new(
+        StringComparer.OrdinalIgnoreCase
+    );
     private readonly string? _persistencePath;
     private long _nextObjectId = 1;
 
@@ -48,8 +51,12 @@ public sealed partial class Catalog
             var key = schema.Name.ToLowerInvariant();
             if (_tables.ContainsKey(key))
             {
-                if (ifNotExists) return false;
-                throw new PlannerException(PlannerErrorKind.CatalogError, $"table '{schema.Name}' already exists");
+                if (ifNotExists)
+                    return false;
+                throw new PlannerException(
+                    PlannerErrorKind.CatalogError,
+                    $"table '{schema.Name}' already exists"
+                );
             }
 
             _tables[key] = schema;
@@ -60,8 +67,8 @@ public sealed partial class Catalog
 
     public bool CreateTable(CreateTableStatement stmt)
     {
-        var columns = stmt.Columns
-            .Select(c => new ColumnSchema(c.Name, c.DataType, c.Nullable))
+        var columns = stmt
+            .Columns.Select(c => new ColumnSchema(c.Name, c.DataType, c.Nullable))
             .ToList();
         var schema = new TableSchema(stmt.Table, columns);
         return CreateTable(schema, stmt.IfNotExists);
@@ -73,7 +80,10 @@ public sealed partial class Catalog
         {
             var removed = _tables.Remove(name.ToLowerInvariant());
             if (!removed && !ifExists)
-                throw new PlannerException(PlannerErrorKind.CatalogError, $"table '{name}' does not exist");
+                throw new PlannerException(
+                    PlannerErrorKind.CatalogError,
+                    $"table '{name}' does not exist"
+                );
 
             if (removed)
             {
@@ -97,7 +107,10 @@ public sealed partial class Catalog
         {
             var key = stmt.Table.ToLowerInvariant();
             if (!_tables.TryGetValue(key, out var schema))
-                throw new PlannerException(PlannerErrorKind.CatalogError, $"table '{stmt.Table}' does not exist");
+                throw new PlannerException(
+                    PlannerErrorKind.CatalogError,
+                    $"table '{stmt.Table}' does not exist"
+                );
 
             var originalTableName = schema.Name;
             var tableName = schema.Name;
@@ -114,7 +127,8 @@ public sealed partial class Catalog
                 schema.SchemaVersion + 1,
                 schema.CreatedAt,
                 DateTimeOffset.UtcNow,
-                schema.RowCount);
+                schema.RowCount
+            );
 
             _tables.Remove(key);
             _tables[tableName.ToLowerInvariant()] = updated;
@@ -127,22 +141,35 @@ public sealed partial class Catalog
     {
         lock (_syncRoot)
         {
-            var table = GetTable(stmt.Table)
-                ?? throw new PlannerException(PlannerErrorKind.CatalogError, $"table '{stmt.Table}' does not exist");
+            var table =
+                GetTable(stmt.Table)
+                ?? throw new PlannerException(
+                    PlannerErrorKind.CatalogError,
+                    $"table '{stmt.Table}' does not exist"
+                );
 
-            var missingColumn = stmt.Columns
-                .Where(col => table.GetColumn(col.Name) is null)
+            var missingColumn = stmt
+                .Columns.Where(col => table.GetColumn(col.Name) is null)
                 .Select(col => col.Name)
                 .FirstOrDefault();
             if (missingColumn is not null)
-                throw new PlannerException(PlannerErrorKind.CatalogError, $"column '{missingColumn}' does not exist in table '{stmt.Table}'");
+                throw new PlannerException(
+                    PlannerErrorKind.CatalogError,
+                    $"column '{missingColumn}' does not exist in table '{stmt.Table}'"
+                );
 
-            var indexName = stmt.Name ?? $"{stmt.Table}_{string.Join("_", stmt.Columns.Select(c => c.Name))}_idx";
+            var indexName =
+                stmt.Name
+                ?? $"{stmt.Table}_{string.Join("_", stmt.Columns.Select(c => c.Name))}_idx";
             var key = indexName.ToLowerInvariant();
             if (_indexes.ContainsKey(key))
             {
-                if (stmt.IfNotExists) return false;
-                throw new PlannerException(PlannerErrorKind.CatalogError, $"index '{indexName}' already exists");
+                if (stmt.IfNotExists)
+                    return false;
+                throw new PlannerException(
+                    PlannerErrorKind.CatalogError,
+                    $"index '{indexName}' already exists"
+                );
             }
 
             _indexes[key] = new IndexSchema(
@@ -150,7 +177,8 @@ public sealed partial class Catalog
                 table.Name,
                 stmt.Columns.Select(c => c.Name).ToList(),
                 stmt.Unique,
-                stmt.IndexType);
+                stmt.IndexType
+            );
 
             PersistIfConfiguredUnsafe();
             return true;
@@ -175,8 +203,10 @@ public sealed partial class Catalog
     public IReadOnlyList<IndexSchema> GetTableIndexes(string table)
     {
         lock (_syncRoot)
-            return _indexes.Values
-                .Where(i => string.Equals(i.Table, table, StringComparison.OrdinalIgnoreCase))
+            return _indexes
+                .Values.Where(i =>
+                    string.Equals(i.Table, table, StringComparison.OrdinalIgnoreCase)
+                )
                 .ToList();
     }
 
@@ -186,7 +216,10 @@ public sealed partial class Catalog
         {
             var removed = _indexes.Remove(name.ToLowerInvariant());
             if (!removed && !ifExists)
-                throw new PlannerException(PlannerErrorKind.CatalogError, $"index '{name}' does not exist");
+                throw new PlannerException(
+                    PlannerErrorKind.CatalogError,
+                    $"index '{name}' does not exist"
+                );
 
             if (removed)
                 PersistIfConfiguredUnsafe();
@@ -226,7 +259,9 @@ public sealed partial class Catalog
     private void RenameTableInIndexesUnsafe(string oldTableName, string newTableName)
     {
         var replacements = _indexes
-            .Where(x => string.Equals(x.Value.Table, oldTableName, StringComparison.OrdinalIgnoreCase))
+            .Where(x =>
+                string.Equals(x.Value.Table, oldTableName, StringComparison.OrdinalIgnoreCase)
+            )
             .Select(x => x.Key)
             .ToList();
 
@@ -239,23 +274,30 @@ public sealed partial class Catalog
                 idx.Columns,
                 idx.Unique,
                 idx.IndexType,
-                idx.CreatedAt);
+                idx.CreatedAt
+            );
         }
     }
 
     private void RenameColumnInIndexesUnsafe(string tableName, string oldColumn, string newColumn)
     {
         var replacements = _indexes
-            .Where(x => string.Equals(x.Value.Table, tableName, StringComparison.OrdinalIgnoreCase)
-                        && x.Value.Columns.Any(c => string.Equals(c, oldColumn, StringComparison.OrdinalIgnoreCase)))
+            .Where(x =>
+                string.Equals(x.Value.Table, tableName, StringComparison.OrdinalIgnoreCase)
+                && x.Value.Columns.Any(c =>
+                    string.Equals(c, oldColumn, StringComparison.OrdinalIgnoreCase)
+                )
+            )
             .Select(x => x.Key)
             .ToList();
 
         foreach (var key in replacements)
         {
             var idx = _indexes[key];
-            var cols = idx.Columns
-                .Select(c => string.Equals(c, oldColumn, StringComparison.OrdinalIgnoreCase) ? newColumn : c)
+            var cols = idx
+                .Columns.Select(c =>
+                    string.Equals(c, oldColumn, StringComparison.OrdinalIgnoreCase) ? newColumn : c
+                )
                 .ToList();
 
             _indexes[key] = new IndexSchema(
@@ -264,7 +306,8 @@ public sealed partial class Catalog
                 cols,
                 idx.Unique,
                 idx.IndexType,
-                idx.CreatedAt);
+                idx.CreatedAt
+            );
         }
     }
 
@@ -307,12 +350,17 @@ public sealed partial class Catalog
         try
         {
             var json = File.ReadAllText(source);
-            state = JsonSerializer.Deserialize(json, CatalogJsonContext.Default.CatalogStateSnapshot)
+            state =
+                JsonSerializer.Deserialize(json, CatalogJsonContext.Default.CatalogStateSnapshot)
                 ?? new CatalogStateSnapshot();
         }
-        catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
+        catch (Exception ex)
+            when (ex is IOException or JsonException or UnauthorizedAccessException)
         {
-            throw new PlannerException(PlannerErrorKind.CatalogError, $"failed to load catalog metadata from '{source}': {ex.Message}");
+            throw new PlannerException(
+                PlannerErrorKind.CatalogError,
+                $"failed to load catalog metadata from '{source}': {ex.Message}"
+            );
         }
 
         _tables.Clear();
@@ -321,8 +369,12 @@ public sealed partial class Catalog
 
         foreach (var t in state.Tables)
         {
-            var columns = t.Columns
-                .Select(c => new ColumnSchema(c.Name, ParseDataType(c.DataTypeText, c.UserDefinedTypeName), c.Nullable))
+            var columns = t
+                .Columns.Select(c => new ColumnSchema(
+                    c.Name,
+                    ParseDataType(c.DataTypeText, c.UserDefinedTypeName),
+                    c.Nullable
+                ))
                 .ToList();
             _tables[t.Name.ToLowerInvariant()] = new TableSchema(
                 t.Name,
@@ -330,7 +382,8 @@ public sealed partial class Catalog
                 t.SchemaVersion,
                 t.CreatedAt,
                 t.ModifiedAt,
-                t.RowCount);
+                t.RowCount
+            );
         }
 
         foreach (var t in state.Types)
@@ -340,10 +393,15 @@ public sealed partial class Catalog
                 EnumKind => new UserTypeKind.Enum(
                     t.Flag,
                     t.Variants.Select(v => new EnumVariant(v.Name, v.IsNone)).ToList(),
-                    t.ResolvedValues),
+                    t.ResolvedValues
+                ),
                 CompositeKind => new UserTypeKind.Composite(
-                    t.Fields.Select(f => (f.Name, ParseDataType(f.DataTypeText, f.UserDefinedTypeName))).ToList()),
-                _ => new UserTypeKind.Composite([])
+                    t.Fields.Select(f =>
+                            (f.Name, ParseDataType(f.DataTypeText, f.UserDefinedTypeName))
+                        )
+                        .ToList()
+                ),
+                _ => new UserTypeKind.Composite([]),
             };
 
             _types[t.Name.ToLowerInvariant()] = new UserTypeSchema(t.Name, kind);
@@ -357,7 +415,8 @@ public sealed partial class Catalog
                 idx.Columns,
                 idx.Unique,
                 ParseIndexType(idx.IndexType),
-                idx.CreatedAt);
+                idx.CreatedAt
+            );
         }
 
         _nextObjectId = Math.Max(1, state.NextObjectId);
@@ -367,61 +426,77 @@ public sealed partial class Catalog
         new()
         {
             NextObjectId = _nextObjectId,
-            Tables = _tables.Values.Select(t => new TableSnapshot
-            {
-                Name = t.Name,
-                SchemaVersion = t.SchemaVersion,
-                CreatedAt = t.CreatedAt,
-                ModifiedAt = t.ModifiedAt,
-                RowCount = t.RowCount,
-                Columns = t.Columns.Select(c => new ColumnSnapshot
+            Tables = _tables
+                .Values.Select(t => new TableSnapshot
                 {
-                    Name = c.Name,
-                    DataTypeText = SerializeDataType(c.DataType),
-                    Nullable = c.Nullable,
-                    UserDefinedTypeName = GetUserDefinedTypeName(c.DataType)
-                }).ToList()
-            }).ToList(),
-            Types = _types.Values.Select(t =>
-            {
-                if (t.Kind is UserTypeKind.Enum e)
-                {
-                    return new TypeSnapshot
-                    {
-                        Name = t.Name,
-                        Kind = EnumKind,
-                        Flag = e.Flag,
-                        Variants = e.Variants.Select(v => new EnumVariantSnapshot { Name = v.Name, IsNone = v.IsNone }).ToList(),
-                        ResolvedValues = e.ResolvedValues.ToList()
-                    };
-                }
-
-                if (t.Kind is UserTypeKind.Composite c)
-                {
-                    return new TypeSnapshot
-                    {
-                        Name = t.Name,
-                        Kind = CompositeKind,
-                        Fields = c.Fields.Select(f => new TypeFieldSnapshot
+                    Name = t.Name,
+                    SchemaVersion = t.SchemaVersion,
+                    CreatedAt = t.CreatedAt,
+                    ModifiedAt = t.ModifiedAt,
+                    RowCount = t.RowCount,
+                    Columns = t
+                        .Columns.Select(c => new ColumnSnapshot
                         {
-                            Name = f.Name,
-                            DataTypeText = SerializeDataType(f.Type),
-                            UserDefinedTypeName = GetUserDefinedTypeName(f.Type)
-                        }).ToList()
-                    };
-                }
+                            Name = c.Name,
+                            DataTypeText = SerializeDataType(c.DataType),
+                            Nullable = c.Nullable,
+                            UserDefinedTypeName = GetUserDefinedTypeName(c.DataType),
+                        })
+                        .ToList(),
+                })
+                .ToList(),
+            Types = _types
+                .Values.Select(t =>
+                {
+                    if (t.Kind is UserTypeKind.Enum e)
+                    {
+                        return new TypeSnapshot
+                        {
+                            Name = t.Name,
+                            Kind = EnumKind,
+                            Flag = e.Flag,
+                            Variants = e
+                                .Variants.Select(v => new EnumVariantSnapshot
+                                {
+                                    Name = v.Name,
+                                    IsNone = v.IsNone,
+                                })
+                                .ToList(),
+                            ResolvedValues = e.ResolvedValues.ToList(),
+                        };
+                    }
 
-                return new TypeSnapshot { Name = t.Name, Kind = CompositeKind };
-            }).ToList(),
-            Indexes = _indexes.Values.Select(i => new IndexSnapshot
-            {
-                Name = i.Name,
-                Table = i.Table,
-                Columns = i.Columns.ToList(),
-                Unique = i.Unique,
-                IndexType = IndexTypeName(i.IndexType),
-                CreatedAt = i.CreatedAt
-            }).ToList()
+                    if (t.Kind is UserTypeKind.Composite c)
+                    {
+                        return new TypeSnapshot
+                        {
+                            Name = t.Name,
+                            Kind = CompositeKind,
+                            Fields = c
+                                .Fields.Select(f => new TypeFieldSnapshot
+                                {
+                                    Name = f.Name,
+                                    DataTypeText = SerializeDataType(f.Type),
+                                    UserDefinedTypeName = GetUserDefinedTypeName(f.Type),
+                                })
+                                .ToList(),
+                        };
+                    }
+
+                    return new TypeSnapshot { Name = t.Name, Kind = CompositeKind };
+                })
+                .ToList(),
+            Indexes = _indexes
+                .Values.Select(i => new IndexSnapshot
+                {
+                    Name = i.Name,
+                    Table = i.Table,
+                    Columns = i.Columns.ToList(),
+                    Unique = i.Unique,
+                    IndexType = IndexTypeName(i.IndexType),
+                    CreatedAt = i.CreatedAt,
+                })
+                .ToList(),
         };
 
     private static DataType ParseDataType(string text, string? userDefinedTypeName) =>
@@ -446,7 +521,7 @@ public sealed partial class Catalog
             IndexType.FullText => "FULLTEXT",
             IndexType.Trigram => "TRIGRAM",
             IndexType.Other o => o.Name,
-            _ => DefaultIndexTypeName
+            _ => DefaultIndexTypeName,
         };
 
     private static IndexType ParseIndexType(string name) =>
@@ -461,10 +536,15 @@ public sealed partial class Catalog
             "BLOOM" => IndexType.Bloom.Instance,
             "FULLTEXT" => IndexType.FullText.Instance,
             "TRIGRAM" => IndexType.Trigram.Instance,
-            _ => new IndexType.Other(name)
+            _ => new IndexType.Other(name),
         };
 
-    private void ApplyAlterOperationUnsafe(AlterTableOperation op, string indexTableName, ref string tableName, List<ColumnSchema> columns)
+    private void ApplyAlterOperationUnsafe(
+        AlterTableOperation op,
+        string indexTableName,
+        ref string tableName,
+        List<ColumnSchema> columns
+    )
     {
         switch (op)
         {
@@ -483,27 +563,62 @@ public sealed partial class Catalog
         }
     }
 
-    private static void AddColumnUnsafe(AlterTableOperation.AddColumn add, List<ColumnSchema> columns)
+    private static void AddColumnUnsafe(
+        AlterTableOperation.AddColumn add,
+        List<ColumnSchema> columns
+    )
     {
-        if (columns.Any(c => string.Equals(c.Name, add.Column.Name, StringComparison.OrdinalIgnoreCase)))
-            throw new PlannerException(PlannerErrorKind.CatalogError, $"column '{add.Column.Name}' already exists");
+        if (
+            columns.Any(c =>
+                string.Equals(c.Name, add.Column.Name, StringComparison.OrdinalIgnoreCase)
+            )
+        )
+            throw new PlannerException(
+                PlannerErrorKind.CatalogError,
+                $"column '{add.Column.Name}' already exists"
+            );
         columns.Add(new ColumnSchema(add.Column.Name, add.Column.DataType, add.Column.Nullable));
     }
 
-    private static void DropColumnUnsafe(AlterTableOperation.DropColumn drop, List<ColumnSchema> columns)
+    private static void DropColumnUnsafe(
+        AlterTableOperation.DropColumn drop,
+        List<ColumnSchema> columns
+    )
     {
-        var found = columns.RemoveAll(c => string.Equals(c.Name, drop.Name, StringComparison.OrdinalIgnoreCase)) > 0;
+        var found =
+            columns.RemoveAll(c =>
+                string.Equals(c.Name, drop.Name, StringComparison.OrdinalIgnoreCase)
+            ) > 0;
         if (!found && !drop.IfExists)
-            throw new PlannerException(PlannerErrorKind.CatalogError, $"column '{drop.Name}' does not exist");
+            throw new PlannerException(
+                PlannerErrorKind.CatalogError,
+                $"column '{drop.Name}' does not exist"
+            );
     }
 
-    private void RenameColumnUnsafe(AlterTableOperation.RenameColumn rename, string tableName, List<ColumnSchema> columns)
+    private void RenameColumnUnsafe(
+        AlterTableOperation.RenameColumn rename,
+        string tableName,
+        List<ColumnSchema> columns
+    )
     {
-        var idx = columns.FindIndex(c => string.Equals(c.Name, rename.OldName, StringComparison.OrdinalIgnoreCase));
+        var idx = columns.FindIndex(c =>
+            string.Equals(c.Name, rename.OldName, StringComparison.OrdinalIgnoreCase)
+        );
         if (idx < 0)
-            throw new PlannerException(PlannerErrorKind.CatalogError, $"column '{rename.OldName}' does not exist");
-        if (columns.Any(c => string.Equals(c.Name, rename.NewName, StringComparison.OrdinalIgnoreCase)))
-            throw new PlannerException(PlannerErrorKind.CatalogError, $"column '{rename.NewName}' already exists");
+            throw new PlannerException(
+                PlannerErrorKind.CatalogError,
+                $"column '{rename.OldName}' does not exist"
+            );
+        if (
+            columns.Any(c =>
+                string.Equals(c.Name, rename.NewName, StringComparison.OrdinalIgnoreCase)
+            )
+        )
+            throw new PlannerException(
+                PlannerErrorKind.CatalogError,
+                $"column '{rename.NewName}' already exists"
+            );
 
         var existing = columns[idx];
         columns[idx] = new ColumnSchema(rename.NewName, existing.DataType, existing.Nullable);
@@ -514,13 +629,14 @@ public sealed partial class Catalog
     {
         var newKey = rename.NewName.ToLowerInvariant();
         if (_tables.ContainsKey(newKey))
-            throw new PlannerException(PlannerErrorKind.CatalogError, $"table '{rename.NewName}' already exists");
+            throw new PlannerException(
+                PlannerErrorKind.CatalogError,
+                $"table '{rename.NewName}' already exists"
+            );
         return rename.NewName;
     }
 
     [JsonSourceGenerationOptions(WriteIndented = true)]
     [JsonSerializable(typeof(CatalogStateSnapshot))]
-    private sealed partial class CatalogJsonContext : JsonSerializerContext
-    {
-    }
+    private sealed partial class CatalogJsonContext : JsonSerializerContext { }
 }

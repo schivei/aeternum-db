@@ -4,6 +4,7 @@
 // AOT-compatible — no reflection.
 
 using System.Collections.Generic;
+using AeternumDB.Core.Sql.Ast;
 
 namespace AeternumDB.Core.Sql;
 
@@ -15,22 +16,42 @@ public sealed class SqlValidator
 {
     private readonly Catalog _catalog;
 
-    public SqlValidator(Catalog catalog) { _catalog = catalog; }
+    public SqlValidator(Catalog catalog)
+    {
+        _catalog = catalog;
+    }
 
     /// <summary>Validate a top-level Statement.</summary>
     public void Validate(Statement stmt)
     {
         switch (stmt)
         {
-            case Statement.Select s: ValidateSelect(s.Query); break;
-            case Statement.Insert s: ValidateInsert(s.Stmt); break;
-            case Statement.Update s: ValidateUpdate(s.Stmt); break;
-            case Statement.Delete s: ValidateDelete(s.Stmt); break;
-            case Statement.CreateTable s: ValidateCreateTable(s.Stmt); break;
-            case Statement.AlterTable s: ValidateAlterTable(s.Stmt); break;
-            case Statement.CreateEnum s: ValidateCreateEnum(s.Stmt); break;
-            case Statement.DropEnum s: ValidateDropEnum(s.Stmt); break;
-            default: break;
+            case Statement.Select s:
+                ValidateSelect(s.Query);
+                break;
+            case Statement.Insert s:
+                ValidateInsert(s.Stmt);
+                break;
+            case Statement.Update s:
+                ValidateUpdate(s.Stmt);
+                break;
+            case Statement.Delete s:
+                ValidateDelete(s.Stmt);
+                break;
+            case Statement.CreateTable s:
+                ValidateCreateTable(s.Stmt);
+                break;
+            case Statement.AlterTable s:
+                ValidateAlterTable(s.Stmt);
+                break;
+            case Statement.CreateEnum s:
+                ValidateCreateEnum(s.Stmt);
+                break;
+            case Statement.DropEnum s:
+                ValidateDropEnum(s.Stmt);
+                break;
+            default:
+                break;
         }
     }
 
@@ -93,14 +114,20 @@ public sealed class SqlValidator
                 ValidateViewAsItem(va);
     }
 
-    private void ValidateSelectItem(SelectItem item, string? defaultTable, Dictionary<string, string> aliases)
+    private void ValidateSelectItem(
+        SelectItem item,
+        string? defaultTable,
+        Dictionary<string, string> aliases
+    )
     {
         switch (item)
         {
             case SelectItem.Wildcard:
                 break;
             case SelectItem.QualifiedWildcard qw:
-                RequireTable(aliases.TryGetValue(qw.Table, out var resolvedTable) ? resolvedTable : qw.Table);
+                RequireTable(
+                    aliases.TryGetValue(qw.Table, out var resolvedTable) ? resolvedTable : qw.Table
+                );
                 break;
             case SelectItem.ExprItem ei:
                 ValidateSelectExpr(ei.Expr, defaultTable, aliases);
@@ -111,7 +138,11 @@ public sealed class SqlValidator
         }
     }
 
-    private void ValidateTableReference(TableReference tref, Dictionary<string, string> aliases, List<string> tableNames)
+    private void ValidateTableReference(
+        TableReference tref,
+        Dictionary<string, string> aliases,
+        List<string> tableNames
+    )
     {
         switch (tref)
         {
@@ -131,13 +162,18 @@ public sealed class SqlValidator
         }
     }
 
-    private void ValidateSelectExpr(Expr expr, string? defaultTable, Dictionary<string, string> aliases)
+    private void ValidateSelectExpr(
+        Expr expr,
+        string? defaultTable,
+        Dictionary<string, string> aliases
+    )
     {
         if (expr is Expr.Column { Table: { } tbl } col)
         {
             var resolved = aliases.TryGetValue(tbl, out var resolvedTable) ? resolvedTable : tbl;
             RequireTable(resolved);
-            var schema = _catalog.GetTable(resolved)
+            var schema =
+                _catalog.GetTable(resolved)
                 ?? throw new ValidationException.TableNotFoundException(resolved);
             RequireColumn(schema, col.Name);
             return;
@@ -242,17 +278,25 @@ public sealed class SqlValidator
             ValidateExpr(s.Len, defaultTable);
     }
 
-    private static void ValidateInsertRow(TableSchema schema, IReadOnlyList<string> columns, IReadOnlyList<Expr> row)
+    private static void ValidateInsertRow(
+        TableSchema schema,
+        IReadOnlyList<string> columns,
+        IReadOnlyList<Expr> row
+    )
     {
         if (row.Count != columns.Count)
             throw new ValidationException.ConstraintViolationException(
-                $"INSERT column count ({columns.Count}) does not match value count ({row.Count})");
+                $"INSERT column count ({columns.Count}) does not match value count ({row.Count})"
+            );
 
         for (int i = 0; i < columns.Count; i++)
         {
             var col = schema.GetColumn(columns[i]);
             if (col != null && !col.Nullable && row[i] is Expr.Literal { Value: SqlValue.Null })
-                throw new ValidationException.NullConstraintViolationException(schema.Name, columns[i]);
+                throw new ValidationException.NullConstraintViolationException(
+                    schema.Name,
+                    columns[i]
+                );
         }
     }
 
@@ -271,7 +315,10 @@ public sealed class SqlValidator
 
         foreach (var col in schema.Columns)
         {
-            if (!col.Nullable && !ins.Columns.Any(c => c.Equals(col.Name, StringComparison.OrdinalIgnoreCase)))
+            if (
+                !col.Nullable
+                && !ins.Columns.Any(c => c.Equals(col.Name, StringComparison.OrdinalIgnoreCase))
+            )
                 throw new ValidationException.NullConstraintViolationException(ins.Table, col.Name);
         }
     }
@@ -287,7 +334,11 @@ public sealed class SqlValidator
         {
             RequireColumn(schema, col);
             var colMeta = schema.GetColumn(col);
-            if (colMeta != null && !colMeta.Nullable && val is Expr.Literal { Value: SqlValue.Null })
+            if (
+                colMeta != null
+                && !colMeta.Nullable
+                && val is Expr.Literal { Value: SqlValue.Null }
+            )
                 throw new ValidationException.NullConstraintViolationException(upd.Table, col);
         }
 
@@ -336,7 +387,9 @@ public sealed class SqlValidator
     private static void ValidateCreateEnum(CreateEnumStatement ce)
     {
         if (ce.Variants.Count == 0)
-            throw new ValidationException.ConstraintViolationException($"enum '{ce.Name}' must have at least one variant");
+            throw new ValidationException.ConstraintViolationException(
+                $"enum '{ce.Name}' must have at least one variant"
+            );
     }
 
     private void ValidateDropEnum(DropEnumStatement de)
@@ -370,7 +423,9 @@ public sealed class SqlValidator
     private void CheckNoAggregateInWhere(Expr expr)
     {
         if (expr is Expr.Function f && IsAggregate(f.Name))
-            throw new ValidationException.InvalidAggregateUsageException($"aggregate '{f.Name}' not allowed in WHERE clause");
+            throw new ValidationException.InvalidAggregateUsageException(
+                $"aggregate '{f.Name}' not allowed in WHERE clause"
+            );
         WalkExpr(expr, CheckNoAggregateInWhere);
     }
 
@@ -432,10 +487,22 @@ public sealed class SqlValidator
         }
     }
 
-    private static readonly HashSet<string> AggregateFunctions = new(StringComparer.OrdinalIgnoreCase)
+    private static readonly HashSet<string> AggregateFunctions = new(
+        StringComparer.OrdinalIgnoreCase
+    )
     {
-        "COUNT", "SUM", "AVG", "MIN", "MAX", "GROUP_CONCAT", "ARRAY_AGG",
-        "STRING_AGG", "BOOL_AND", "BOOL_OR", "STDDEV", "VARIANCE",
+        "COUNT",
+        "SUM",
+        "AVG",
+        "MIN",
+        "MAX",
+        "GROUP_CONCAT",
+        "ARRAY_AGG",
+        "STRING_AGG",
+        "BOOL_AND",
+        "BOOL_OR",
+        "STDDEV",
+        "VARIANCE",
     };
 
     private static bool IsAggregate(string name) => AggregateFunctions.Contains(name);
@@ -454,7 +521,12 @@ public sealed class SqlValidator
 
     private static void SeqBegin(List<string?> stack, string? name)
     {
-        if (name != null && stack.Any(open => open != null && open.Equals(name, StringComparison.OrdinalIgnoreCase)))
+        if (
+            name != null
+            && stack.Any(open =>
+                open != null && open.Equals(name, StringComparison.OrdinalIgnoreCase)
+            )
+        )
             throw new ValidationException.TransactionNameConflictException(name);
         stack.Add(name);
     }
@@ -479,7 +551,10 @@ public sealed class SqlValidator
                 if (idx < stack.Count - 1)
                 {
                     var blocking = stack[^1] ?? "(anonymous)";
-                    throw new ValidationException.TransactionNestingViolationException(n.Name, blocking);
+                    throw new ValidationException.TransactionNestingViolationException(
+                        n.Name,
+                        blocking
+                    );
                 }
 
                 stack.RemoveAt(idx);
@@ -509,7 +584,10 @@ public sealed class SqlValidator
                 if (idx < stack.Count - 1)
                 {
                     var blocking = stack[^1] ?? "(anonymous)";
-                    throw new ValidationException.TransactionNestingViolationException(n.Name, blocking);
+                    throw new ValidationException.TransactionNestingViolationException(
+                        n.Name,
+                        blocking
+                    );
                 }
 
                 stack.RemoveAt(idx);
