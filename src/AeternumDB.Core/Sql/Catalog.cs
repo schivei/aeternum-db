@@ -37,6 +37,7 @@ public sealed partial class Catalog
     private const string CompositeKind = "composite";
     private const string UnknownTypeName = "UNKNOWN";
     private const string DefaultIndexTypeName = "BTREE";
+    private const ulong MaxTypeParameterValue = 1_000_000;
 
     private readonly object _syncRoot = new();
     private readonly Dictionary<string, IndexSchema> _indexes = new(StringComparer.OrdinalIgnoreCase);
@@ -405,7 +406,7 @@ public sealed partial class Catalog
                     Name = c.Name,
                     DataTypeText = SerializeDataType(c.DataType),
                     Nullable = c.Nullable,
-                    UserDefinedTypeName = c.UserDefinedTypeName
+                    UserDefinedTypeName = GetUserDefinedTypeName(c.DataType)
                 }).ToList()
             }).ToList(),
             Types = _types.Values.Select(t =>
@@ -432,7 +433,7 @@ public sealed partial class Catalog
                         {
                             Name = f.Name,
                             DataTypeText = SerializeDataType(f.Type),
-                            UserDefinedTypeName = f.Type is DataType.EnumRef enumRef ? enumRef.Name : null
+                            UserDefinedTypeName = GetUserDefinedTypeName(f.Type)
                         }).ToList()
                     };
                 }
@@ -715,6 +716,8 @@ public sealed partial class Catalog
         var inside = upperText[prefix.Length..^1].Trim();
         if (!ulong.TryParse(inside, out var parsed))
             return false;
+        if (parsed > MaxTypeParameterValue)
+            return false;
 
         value = parsed;
         return true;
@@ -736,17 +739,24 @@ public sealed partial class Catalog
             return false;
         if (!ulong.TryParse(parts[0], out var parsedPrecision))
             return false;
+        if (parsedPrecision > MaxTypeParameterValue)
+            return false;
 
         precision = parsedPrecision;
         if (parts.Length == 2)
         {
             if (!ulong.TryParse(parts[1], out var parsedScale))
                 return false;
+            if (parsedScale > MaxTypeParameterValue)
+                return false;
             scale = parsedScale;
         }
 
         return true;
     }
+
+    private static string? GetUserDefinedTypeName(DataType type) =>
+        type is DataType.EnumRef enumRef ? enumRef.Name : null;
 
     private static bool TryParseVirtualReferenceText(string text, out DataType type)
     {
@@ -873,6 +883,7 @@ public sealed partial class Catalog
         public string? Name { get; set; }
         public string? Table { get; set; }
         public string? Column { get; set; }
+        // Stable internal identifier used as fallback when legacy payloads omit explicit names.
         public string? DataId { get; set; }
         public string? ElementTypeText { get; set; }
     }
