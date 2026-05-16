@@ -90,7 +90,7 @@ public sealed class BTreeTests
     [Fact]
     public async Task SplitAndRangeScan_Works()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"aeternum-index-{Guid.NewGuid():N}.db");
+        var path = Path.Join(Path.GetTempPath(), $"aeternum-index-{Guid.NewGuid():N}.db");
         try
         {
             await using var storage = new StorageEngine(MakeStorageConfig(path));
@@ -115,7 +115,7 @@ public sealed class BTreeTests
     [Fact]
     public async Task Range_WithFromGreaterThanTo_ReturnsEmpty()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"aeternum-index-{Guid.NewGuid():N}.db");
+        var path = Path.Join(Path.GetTempPath(), $"aeternum-index-{Guid.NewGuid():N}.db");
         try
         {
             await using var storage = new StorageEngine(MakeStorageConfig(path));
@@ -137,7 +137,7 @@ public sealed class BTreeTests
     [Fact]
     public async Task Delete_Works()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"aeternum-index-{Guid.NewGuid():N}.db");
+        var path = Path.Join(Path.GetTempPath(), $"aeternum-index-{Guid.NewGuid():N}.db");
         try
         {
             await using var storage = new StorageEngine(MakeStorageConfig(path));
@@ -167,7 +167,7 @@ public sealed class BTreeTests
     [Fact]
     public async Task BulkLoad_Works()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"aeternum-index-{Guid.NewGuid():N}.db");
+        var path = Path.Join(Path.GetTempPath(), $"aeternum-index-{Guid.NewGuid():N}.db");
         try
         {
             await using var storage = new StorageEngine(MakeStorageConfig(path));
@@ -190,7 +190,7 @@ public sealed class BTreeTests
     [Fact]
     public async Task Open_InvalidMetadataHeight_Throws()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"aeternum-index-{Guid.NewGuid():N}.db");
+        var path = Path.Join(Path.GetTempPath(), $"aeternum-index-{Guid.NewGuid():N}.db");
         try
         {
             await using var storage = new StorageEngine(MakeStorageConfig(path));
@@ -220,7 +220,7 @@ public sealed class BTreeTests
     [Fact]
     public async Task Open_InvalidMetadataFanout_Throws()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"aeternum-index-{Guid.NewGuid():N}.db");
+        var path = Path.Join(Path.GetTempPath(), $"aeternum-index-{Guid.NewGuid():N}.db");
         try
         {
             await using var storage = new StorageEngine(MakeStorageConfig(path));
@@ -250,7 +250,7 @@ public sealed class BTreeTests
     [Fact]
     public async Task Open_InvalidBlobLength_Throws()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"aeternum-index-{Guid.NewGuid():N}.db");
+        var path = Path.Join(Path.GetTempPath(), $"aeternum-index-{Guid.NewGuid():N}.db");
         try
         {
             await using var storage = new StorageEngine(MakeStorageConfig(path));
@@ -271,7 +271,7 @@ public sealed class BTreeTests
     [Fact]
     public async Task Open_MetadataTooSmall_Throws()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"aeternum-index-{Guid.NewGuid():N}.db");
+        var path = Path.Join(Path.GetTempPath(), $"aeternum-index-{Guid.NewGuid():N}.db");
         try
         {
             await using var storage = new StorageEngine(MakeStorageConfig(path));
@@ -293,7 +293,7 @@ public sealed class BTreeTests
     [Fact]
     public async Task Delete_ManyKeys_ShrinksRootAndKeepsLastValue()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"aeternum-index-{Guid.NewGuid():N}.db");
+        var path = Path.Join(Path.GetTempPath(), $"aeternum-index-{Guid.NewGuid():N}.db");
         try
         {
             await using var storage = new StorageEngine(MakeStorageConfig(path));
@@ -319,7 +319,7 @@ public sealed class BTreeTests
     [Fact]
     public async Task Insert_VeryLargeValue_ThrowsSerializationException()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"aeternum-index-{Guid.NewGuid():N}.db");
+        var path = Path.Join(Path.GetTempPath(), $"aeternum-index-{Guid.NewGuid():N}.db");
         try
         {
             await using var storage = new StorageEngine(new StorageConfig

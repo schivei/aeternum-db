@@ -726,7 +726,10 @@ public sealed class SqlCoverageTests
         Assert.Equal("a", ((SqlValue.SqlString)((Expr.Literal)positionExpr.Substr).Value).Value);
         Assert.Equal(BinaryOperator.Eq, arrayExpr.Op);
         Assert.False(isNullExpr.Negated);
+        Assert.False(betweenExpr.Negated);
+        Assert.False(inListExpr.Negated);
         Assert.False(inSubqueryExpr.Negated);
+        Assert.NotNull(subqueryExpr.Query);
         Assert.Equal("one", ((SelectItem.ExprItem)subquery.Columns.Single()).Alias);
         Assert.NotNull(tableRefSubquery.Query);
         Assert.NotNull(unaryExpr.Inner);
@@ -742,8 +745,8 @@ public sealed class SqlCoverageTests
     [Fact]
     public void Catalog_AdditionalPersistenceAndWrapperBranches_AreCovered()
     {
-        var rootDir = Path.Combine(Path.GetTempPath(), $"aeternum-catalog-branch-{Guid.NewGuid():N}");
-        var path = Path.Combine(rootDir, "meta", "catalog.json");
+        var rootDir = Path.Join(Path.GetTempPath(), $"aeternum-catalog-branch-{Guid.NewGuid():N}");
+        var path = Path.Join(rootDir, "meta", "catalog.json");
         try
         {
             var catalog = new Catalog(path);
@@ -769,7 +772,7 @@ public sealed class SqlCoverageTests
             catalog.AddIndex(new IndexSchema("idx_other", "users", ["id"], unique: false, new IndexType.Other("CUSTOM_KIND")));
 
             catalog.Save();
-            var snapshotPath = Path.Combine(rootDir, "meta", "catalog_snapshot.json");
+            var snapshotPath = Path.Join(rootDir, "meta", "catalog_snapshot.json");
             File.Copy(path, snapshotPath, overwrite: true);
             catalog.DropIndex(new DropIndexStatement(["idx_hash"], ifExists: true));
             catalog.DropTable(new DropTableStatement(["users"], ifExists: true));
@@ -783,7 +786,7 @@ public sealed class SqlCoverageTests
             Assert.Contains(snapshotCatalog.GetTableIndexes("users"), i => i.Name == "idx_gin");
             Assert.Contains(snapshotCatalog.GetTableIndexes("users"), i => i.Name == "idx_other");
 
-            var catalogTmpPath = Path.Combine(rootDir, "meta", "catalog_from_tmp.json");
+            var catalogTmpPath = Path.Join(rootDir, "meta", "catalog_from_tmp.json");
             var tmpOnly = $"{catalogTmpPath}.tmp";
             const string tmpState = """
                 {
@@ -1036,7 +1039,7 @@ public sealed class SqlCoverageTests
                 )
         );
 
-        var unknownKindPath = Path.Combine(
+        var unknownKindPath = Path.Join(
             Path.GetTempPath(),
             $"aeternum-catalog-unknown-kind-{Guid.NewGuid():N}.json"
         );
@@ -1070,7 +1073,7 @@ public sealed class SqlCoverageTests
                 File.Delete($"{unknownKindPath}.tmp");
         }
 
-        var nullKindPath = Path.Combine(
+        var nullKindPath = Path.Join(
             Path.GetTempPath(),
             $"aeternum-catalog-null-kind-{Guid.NewGuid():N}.json"
         );
@@ -1399,20 +1402,28 @@ public sealed class SqlCoverageTests
     public void SqlValidator_TransactionNamedSuccessBranches_AreCovered()
     {
         var validator = new SqlValidator(new Catalog());
-        validator.ValidateSequence(
-            [
-                new Statement.BeginTransaction(new BeginTransactionStatement { Name = "root" }),
-                new Statement.Commit(new CommitStatement(new CommitScope.Named("root"), chain: false)),
-            ]
+        var commitException = Record.Exception(
+            () =>
+                validator.ValidateSequence(
+                    [
+                        new Statement.BeginTransaction(new BeginTransactionStatement { Name = "root" }),
+                        new Statement.Commit(new CommitStatement(new CommitScope.Named("root"), chain: false)),
+                    ]
+                )
         );
+        Assert.Null(commitException);
 
-        validator.ValidateSequence(
-            [
-                new Statement.BeginTransaction(new BeginTransactionStatement { Name = "root2" }),
-                new Statement.Rollback(
-                    new RollbackStatement(new RollbackScope.Named("root2"), chain: false)
-                ),
-            ]
+        var rollbackException = Record.Exception(
+            () =>
+                validator.ValidateSequence(
+                    [
+                        new Statement.BeginTransaction(new BeginTransactionStatement { Name = "root2" }),
+                        new Statement.Rollback(
+                            new RollbackStatement(new RollbackScope.Named("root2"), chain: false)
+                        ),
+                    ]
+                )
         );
+        Assert.Null(rollbackException);
     }
 }
