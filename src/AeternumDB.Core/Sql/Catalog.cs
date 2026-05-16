@@ -325,19 +325,20 @@ public sealed partial class Catalog
 
     internal void PersistIfConfiguredUnsafe()
     {
-        if (string.IsNullOrWhiteSpace(_persistencePath))
+        var path = _persistencePath;
+        if (string.IsNullOrWhiteSpace(path))
             return;
 
         var state = SnapshotStateUnsafe();
         var json = JsonSerializer.Serialize(state, CatalogJsonContext.Default.CatalogStateSnapshot);
 
-        var dir = Path.GetDirectoryName(_persistencePath);
+        var dir = Path.GetDirectoryName(path);
         if (!string.IsNullOrWhiteSpace(dir))
             Directory.CreateDirectory(dir);
 
-        var tmp = $"{_persistencePath}.tmp";
+        var tmp = $"{path}.tmp";
         File.WriteAllText(tmp, json);
-        File.Move(tmp, _persistencePath!, overwrite: true);
+        File.Move(tmp, path, overwrite: true);
     }
 
     private void LoadFromPersistenceUnsafe()

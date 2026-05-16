@@ -23,7 +23,7 @@ public sealed class ColumnSchema
         Name = name;
         DataType = dataType;
         Nullable = nullable;
-        UserDefinedTypeName = dataType is DataType.EnumRef er ? er.Name : null;
+        UserDefinedTypeName = dataType is DataType.EnumRef enumRef ? enumRef.Name : null;
     }
 }
 
@@ -194,8 +194,8 @@ public sealed partial class Catalog
     {
         foreach (var table in _tables.Values)
             foreach (var col in table.Columns)
-                if ((col.DataType is DataType.EnumRef er && string.Equals(er.Name, name, StringComparison.OrdinalIgnoreCase))
-                    || (col.UserDefinedTypeName is not null && string.Equals(col.UserDefinedTypeName, name, StringComparison.OrdinalIgnoreCase)))
+                if (col.UserDefinedTypeName is not null
+                    && string.Equals(col.UserDefinedTypeName, name, StringComparison.OrdinalIgnoreCase))
                     return true;
         return false;
     }
