@@ -197,10 +197,10 @@ jobs:
           covered_branches = sum(c for c, _ in merged_branches.values())
 
           if total_lines == 0:
-              print("No trackable source lines found for coverage gate.", file=sys.stderr)
+              print("Error: No trackable source lines found. Check that source files match trackability criteria.", file=sys.stderr)
               sys.exit(1)
           if total_branches == 0:
-              print("No trackable source branches found for coverage gate.", file=sys.stderr)
+              print("Error: No trackable source branches found. Check that source files contain branch points.", file=sys.stderr)
               sys.exit(1)
 
           line_pct = 100.0 * covered_lines / total_lines

@@ -107,7 +107,7 @@ public sealed class StorageTests
     [Fact]
     public async Task FileManager_AllocateWriteReadDeallocateAndReuse_Works()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"aeternum-fm-{Guid.NewGuid():N}.db");
+        var path = Path.Join(Path.GetTempPath(), $"aeternum-fm-{Guid.NewGuid():N}.db");
         try
         {
             await using var fm = await FileManager.OpenAsync(path, 128);
@@ -136,7 +136,7 @@ public sealed class StorageTests
     [Fact]
     public async Task FileManager_InvalidOperations_Throw()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"aeternum-fm-{Guid.NewGuid():N}.db");
+        var path = Path.Join(Path.GetTempPath(), $"aeternum-fm-{Guid.NewGuid():N}.db");
         try
         {
             await using var fm = await FileManager.OpenAsync(path, 128);
@@ -159,7 +159,7 @@ public sealed class StorageTests
     [Fact]
     public async Task FileManager_InvalidPageSize_Throws()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"aeternum-fm-{Guid.NewGuid():N}.db");
+        var path = Path.Join(Path.GetTempPath(), $"aeternum-fm-{Guid.NewGuid():N}.db");
         try
         {
             await Assert.ThrowsAsync<ArgumentOutOfRangeException>(async () => await FileManager.OpenAsync(path, 16));
@@ -175,7 +175,7 @@ public sealed class StorageTests
     [Fact]
     public async Task StorageEngine_Deallocate_RemovesBothCachedAndNonCachedPages()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"aeternum-se-{Guid.NewGuid():N}.db");
+        var path = Path.Join(Path.GetTempPath(), $"aeternum-se-{Guid.NewGuid():N}.db");
         try
         {
             await using var se = new StorageEngine(new AeternumDB.Core.Config.StorageConfig
@@ -209,7 +209,7 @@ public sealed class StorageTests
     [Fact]
     public async Task FileManager_Reopen_ScansFreeHeaders_AndReusesSlots()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"aeternum-fm-{Guid.NewGuid():N}.db");
+        var path = Path.Join(Path.GetTempPath(), $"aeternum-fm-{Guid.NewGuid():N}.db");
         try
         {
             PageId id1;
@@ -239,7 +239,7 @@ public sealed class StorageTests
     [Fact]
     public async Task FileManager_ReadPage_ShortRead_ThrowsCorruption()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"aeternum-fm-{Guid.NewGuid():N}.db");
+        var path = Path.Join(Path.GetTempPath(), $"aeternum-fm-{Guid.NewGuid():N}.db");
         try
         {
             PageId id;
@@ -265,7 +265,7 @@ public sealed class StorageTests
     [Fact]
     public async Task StorageEngine_ReadChecksumMismatch_Throws()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"aeternum-se-{Guid.NewGuid():N}.db");
+        var path = Path.Join(Path.GetTempPath(), $"aeternum-se-{Guid.NewGuid():N}.db");
         try
         {
             var config = new AeternumDB.Core.Config.StorageConfig
@@ -302,7 +302,7 @@ public sealed class StorageTests
     [Fact]
     public async Task StorageEngine_ReadInvalidHeader_ThrowsFileManagerError()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"aeternum-se-{Guid.NewGuid():N}.db");
+        var path = Path.Join(Path.GetTempPath(), $"aeternum-se-{Guid.NewGuid():N}.db");
         try
         {
             var config = new AeternumDB.Core.Config.StorageConfig
@@ -339,7 +339,7 @@ public sealed class StorageTests
     [Fact]
     public async Task StorageEngine_DisposeTwice_IsSafe()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"aeternum-se-{Guid.NewGuid():N}.db");
+        var path = Path.Join(Path.GetTempPath(), $"aeternum-se-{Guid.NewGuid():N}.db");
         var config = new AeternumDB.Core.Config.StorageConfig
         {
             DataPath = path,
