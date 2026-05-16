@@ -1,0 +1,4 @@
+#!/bin/sh
+. "$(dirname "$0")/_/husky.sh"
+files=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '\.(cs|csproj|props|targets)$' || true)
+[ -z "$files" ] || dotnet csharpier check $files
