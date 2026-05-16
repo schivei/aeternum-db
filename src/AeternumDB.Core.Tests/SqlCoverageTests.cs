@@ -395,6 +395,20 @@ public sealed class SqlCoverageTests
         );
         Assert.Null(emptyAlterOperationsException);
 
+        var missingTableException = Assert.Throws<ValidationException.TableNotFoundException>(
+            () =>
+                validator.Validate(
+                    new Statement.Select(
+                        new SelectStatement
+                        {
+                            Columns = [SelectItem.Wildcard.Instance],
+                            From = new TableReference.Named(null, null, "missing_users", alias: null),
+                        }
+                    )
+                )
+        );
+        Assert.Equal("missing_users", missingTableException.Table);
+
         var anonymousStackException = Record.Exception(
             () =>
                 validator.ValidateSequence(

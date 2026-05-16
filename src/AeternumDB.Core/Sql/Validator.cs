@@ -503,12 +503,7 @@ public sealed class SqlValidator
     private static bool IsAggregate(string name) => AggregateFunctions.Contains(name);
 
     private TableSchema RequireTable(string name)
-    {
-        var schema = _catalog.GetTable(name);
-        if (schema is null)
-            throw new ValidationException.TableNotFoundException(name);
-        return schema;
-    }
+        => _catalog.GetTable(name) ?? throw new ValidationException.TableNotFoundException(name);
 
     private static void RequireColumn(TableSchema schema, string column)
     {
