@@ -84,5 +84,18 @@ public sealed class IndexCodecTests
         Assert.Equal(IndexErrorKind.Serialization, ex1.Kind);
         Assert.Equal(IndexErrorKind.Serialization, ex2.Kind);
     }
-}
 
+    [Fact]
+    public void PrimitiveCodecs_InvalidPayloadLength_Throws()
+    {
+        var i64 = IndexCodec.Default<long>();
+        var u64 = IndexCodec.Default<ulong>();
+        var i32 = IndexCodec.Default<int>();
+        var u32 = IndexCodec.Default<uint>();
+
+        Assert.Throws<IndexException>(() => i64.Deserialize([1, 2, 3]));
+        Assert.Throws<IndexException>(() => u64.Deserialize([1, 2, 3, 4, 5, 6, 7]));
+        Assert.Throws<IndexException>(() => i32.Deserialize([1, 2, 3]));
+        Assert.Throws<IndexException>(() => u32.Deserialize([1, 2, 3, 4, 5]));
+    }
+}

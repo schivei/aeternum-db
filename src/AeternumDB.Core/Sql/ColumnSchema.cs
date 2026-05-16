@@ -1,3 +1,5 @@
+using AeternumDB.Core.Sql.Ast;
+
 namespace AeternumDB.Core.Sql;
 
 /// <summary>Metadata for a single column in the catalog.</summary>

@@ -107,7 +107,7 @@ public sealed class StorageTests
     [Fact]
     public async Task FileManager_AllocateWriteReadDeallocateAndReuse_Works()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"aeternum-fm-{Guid.NewGuid():N}.db");
+        var path = Path.Join(Path.GetTempPath(), $"aeternum-fm-{Guid.NewGuid():N}.db");
         try
         {
             await using var fm = await FileManager.OpenAsync(path, 128);
@@ -136,7 +136,7 @@ public sealed class StorageTests
     [Fact]
     public async Task FileManager_InvalidOperations_Throw()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"aeternum-fm-{Guid.NewGuid():N}.db");
+        var path = Path.Join(Path.GetTempPath(), $"aeternum-fm-{Guid.NewGuid():N}.db");
         try
         {
             await using var fm = await FileManager.OpenAsync(path, 128);
@@ -159,7 +159,7 @@ public sealed class StorageTests
     [Fact]
     public async Task FileManager_InvalidPageSize_Throws()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"aeternum-fm-{Guid.NewGuid():N}.db");
+        var path = Path.Join(Path.GetTempPath(), $"aeternum-fm-{Guid.NewGuid():N}.db");
         try
         {
             await Assert.ThrowsAsync<ArgumentOutOfRangeException>(async () => await FileManager.OpenAsync(path, 16));
@@ -175,7 +175,7 @@ public sealed class StorageTests
     [Fact]
     public async Task StorageEngine_Deallocate_RemovesBothCachedAndNonCachedPages()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"aeternum-se-{Guid.NewGuid():N}.db");
+        var path = Path.Join(Path.GetTempPath(), $"aeternum-se-{Guid.NewGuid():N}.db");
         try
         {
             await using var se = new StorageEngine(new AeternumDB.Core.Config.StorageConfig
@@ -204,5 +204,154 @@ public sealed class StorageTests
             if (File.Exists(path))
                 File.Delete(path);
         }
+    }
+
+    [Fact]
+    public async Task FileManager_Reopen_ScansFreeHeaders_AndReusesSlots()
+    {
+        var path = Path.Join(Path.GetTempPath(), $"aeternum-fm-{Guid.NewGuid():N}.db");
+        try
+        {
+            PageId id1;
+            PageId id2;
+
+            await using (var fm = await FileManager.OpenAsync(path, 128))
+            {
+                id1 = await fm.AllocatePageAsync();
+                id2 = await fm.AllocatePageAsync();
+                await fm.DeallocatePageAsync(id1);
+            }
+
+            await using (var reopened = await FileManager.OpenAsync(path, 128))
+            {
+                await Assert.ThrowsAsync<StorageException>(async () => await reopened.ReadPageAsync(id1));
+                await reopened.WritePageAsync(id2, new Page(id2, PageType.Data, 112).Serialize());
+                _ = await reopened.AllocatePageAsync();
+            }
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task FileManager_ReadPage_ShortRead_ThrowsCorruption()
+    {
+        var path = Path.Join(Path.GetTempPath(), $"aeternum-fm-{Guid.NewGuid():N}.db");
+        try
+        {
+            PageId id;
+            await using (var fm = await FileManager.OpenAsync(path, 128))
+            {
+                id = await fm.AllocatePageAsync();
+            }
+
+            using (var fs = new FileStream(path, FileMode.Open, FileAccess.Write, FileShare.None))
+                fs.SetLength(32);
+
+            await using var reopened = await FileManager.OpenAsync(path, 128);
+            var ex = await Assert.ThrowsAsync<StorageException>(async () => await reopened.ReadPageAsync(id));
+            Assert.Equal(StorageErrorKind.FileManager, ex.Kind);
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task StorageEngine_ReadChecksumMismatch_Throws()
+    {
+        var path = Path.Join(Path.GetTempPath(), $"aeternum-se-{Guid.NewGuid():N}.db");
+        try
+        {
+            var config = new AeternumDB.Core.Config.StorageConfig
+            {
+                DataPath = path,
+                BufferPoolSize = 4,
+                PageSize = 256
+            };
+
+            PageId id;
+            await using (var se = new StorageEngine(config))
+            {
+                id = await se.AllocatePageAsync();
+                await se.WritePageDataAsync(id, 0, new byte[] { 1, 2, 3, 4 });
+            }
+
+            using (var fs = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            {
+                fs.Position = (long)id.Value * config.PageSize + PageHeader.Size;
+                fs.WriteByte(255);
+            }
+
+            await using var reopened = new StorageEngine(config);
+            var ex = await Assert.ThrowsAsync<StorageException>(async () => await reopened.ReadPageDataAsync(id, 0, 1));
+            Assert.Equal(StorageErrorKind.ChecksumMismatch, ex.Kind);
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task StorageEngine_ReadInvalidHeader_ThrowsFileManagerError()
+    {
+        var path = Path.Join(Path.GetTempPath(), $"aeternum-se-{Guid.NewGuid():N}.db");
+        try
+        {
+            var config = new AeternumDB.Core.Config.StorageConfig
+            {
+                DataPath = path,
+                BufferPoolSize = 4,
+                PageSize = 256
+            };
+
+            PageId id;
+            await using (var se = new StorageEngine(config))
+            {
+                id = await se.AllocatePageAsync();
+                await se.WritePageDataAsync(id, 0, new byte[] { 9 });
+            }
+
+            using (var fs = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            {
+                fs.Position = (long)id.Value * config.PageSize + 8;
+                fs.WriteByte(250);
+            }
+
+            await using var reopened = new StorageEngine(config);
+            var ex = await Assert.ThrowsAsync<StorageException>(async () => await reopened.ReadPageDataAsync(id, 0, 1));
+            Assert.Equal(StorageErrorKind.FileManager, ex.Kind);
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task StorageEngine_DisposeTwice_IsSafe()
+    {
+        var path = Path.Join(Path.GetTempPath(), $"aeternum-se-{Guid.NewGuid():N}.db");
+        var config = new AeternumDB.Core.Config.StorageConfig
+        {
+            DataPath = path,
+            BufferPoolSize = 4,
+            PageSize = 256
+        };
+
+        var se = new StorageEngine(config);
+        await se.AllocatePageAsync();
+        await se.DisposeAsync();
+        await se.DisposeAsync();
+        Assert.True(File.Exists(path));
+        File.Delete(path);
     }
 }

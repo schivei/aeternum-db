@@ -19,7 +19,7 @@ public sealed class BTreeTests
     [Fact]
     public async Task Create_InvalidFanout_Throws()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"aeternum-index-{Guid.NewGuid():N}.db");
+        var path = Path.Join(Path.GetTempPath(), $"aeternum-index-{Guid.NewGuid():N}.db");
         try
         {
             await using var storage = new StorageEngine(MakeStorageConfig(path));
@@ -37,7 +37,7 @@ public sealed class BTreeTests
     [Fact]
     public async Task InsertSearch_AndReopen_Works()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"aeternum-index-{Guid.NewGuid():N}.db");
+        var path = Path.Join(Path.GetTempPath(), $"aeternum-index-{Guid.NewGuid():N}.db");
         try
         {
             await using (var storage = new StorageEngine(MakeStorageConfig(path)))
@@ -68,7 +68,7 @@ public sealed class BTreeTests
     [Fact]
     public async Task Insert_SameKey_DoesNotIncreaseCount_AndUpdatesValue()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"aeternum-index-{Guid.NewGuid():N}.db");
+        var path = Path.Join(Path.GetTempPath(), $"aeternum-index-{Guid.NewGuid():N}.db");
         try
         {
             await using var storage = new StorageEngine(MakeStorageConfig(path));
@@ -90,7 +90,7 @@ public sealed class BTreeTests
     [Fact]
     public async Task SplitAndRangeScan_Works()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"aeternum-index-{Guid.NewGuid():N}.db");
+        var path = Path.Join(Path.GetTempPath(), $"aeternum-index-{Guid.NewGuid():N}.db");
         try
         {
             await using var storage = new StorageEngine(MakeStorageConfig(path));
@@ -115,7 +115,7 @@ public sealed class BTreeTests
     [Fact]
     public async Task Range_WithFromGreaterThanTo_ReturnsEmpty()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"aeternum-index-{Guid.NewGuid():N}.db");
+        var path = Path.Join(Path.GetTempPath(), $"aeternum-index-{Guid.NewGuid():N}.db");
         try
         {
             await using var storage = new StorageEngine(MakeStorageConfig(path));
@@ -137,7 +137,7 @@ public sealed class BTreeTests
     [Fact]
     public async Task Delete_Works()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"aeternum-index-{Guid.NewGuid():N}.db");
+        var path = Path.Join(Path.GetTempPath(), $"aeternum-index-{Guid.NewGuid():N}.db");
         try
         {
             await using var storage = new StorageEngine(MakeStorageConfig(path));
@@ -167,7 +167,7 @@ public sealed class BTreeTests
     [Fact]
     public async Task BulkLoad_Works()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"aeternum-index-{Guid.NewGuid():N}.db");
+        var path = Path.Join(Path.GetTempPath(), $"aeternum-index-{Guid.NewGuid():N}.db");
         try
         {
             await using var storage = new StorageEngine(MakeStorageConfig(path));
@@ -190,7 +190,7 @@ public sealed class BTreeTests
     [Fact]
     public async Task Open_InvalidMetadataHeight_Throws()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"aeternum-index-{Guid.NewGuid():N}.db");
+        var path = Path.Join(Path.GetTempPath(), $"aeternum-index-{Guid.NewGuid():N}.db");
         try
         {
             await using var storage = new StorageEngine(MakeStorageConfig(path));
@@ -220,7 +220,7 @@ public sealed class BTreeTests
     [Fact]
     public async Task Open_InvalidMetadataFanout_Throws()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"aeternum-index-{Guid.NewGuid():N}.db");
+        var path = Path.Join(Path.GetTempPath(), $"aeternum-index-{Guid.NewGuid():N}.db");
         try
         {
             await using var storage = new StorageEngine(MakeStorageConfig(path));
@@ -250,7 +250,7 @@ public sealed class BTreeTests
     [Fact]
     public async Task Open_InvalidBlobLength_Throws()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"aeternum-index-{Guid.NewGuid():N}.db");
+        var path = Path.Join(Path.GetTempPath(), $"aeternum-index-{Guid.NewGuid():N}.db");
         try
         {
             await using var storage = new StorageEngine(MakeStorageConfig(path));
@@ -260,6 +260,80 @@ public sealed class BTreeTests
             var ex = await Assert.ThrowsAsync<IndexException>(async () =>
                 await BTree<long, string>.OpenAsync(storage, meta));
             Assert.Equal(IndexErrorKind.TreeCorrupted, ex.Kind);
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task Open_MetadataTooSmall_Throws()
+    {
+        var path = Path.Join(Path.GetTempPath(), $"aeternum-index-{Guid.NewGuid():N}.db");
+        try
+        {
+            await using var storage = new StorageEngine(MakeStorageConfig(path));
+            var meta = await storage.AllocatePageAsync();
+            await storage.WritePageDataAsync(meta, 0, BitConverter.GetBytes(4));
+            await storage.WritePageDataAsync(meta, 4, new byte[] { 1, 2, 3, 4 });
+
+            var ex = await Assert.ThrowsAsync<IndexException>(async () =>
+                await BTree<long, string>.OpenAsync(storage, meta));
+            Assert.Equal(IndexErrorKind.TreeCorrupted, ex.Kind);
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task Delete_ManyKeys_ShrinksRootAndKeepsLastValue()
+    {
+        var path = Path.Join(Path.GetTempPath(), $"aeternum-index-{Guid.NewGuid():N}.db");
+        try
+        {
+            await using var storage = new StorageEngine(MakeStorageConfig(path));
+            var tree = await BTree<int, string>.CreateAsync(storage, new BTreeConfig { Fanout = 4 });
+
+            for (var i = 1; i <= 40; i++)
+                await tree.InsertAsync(i, $"v{i}");
+
+            for (var i = 1; i <= 39; i++)
+                Assert.True(await tree.DeleteAsync(i));
+
+            Assert.Equal(1, tree.Count);
+            Assert.Equal("v40", await tree.SearchAsync(40));
+            Assert.Null(await tree.SearchAsync(1));
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task Insert_VeryLargeValue_ThrowsSerializationException()
+    {
+        var path = Path.Join(Path.GetTempPath(), $"aeternum-index-{Guid.NewGuid():N}.db");
+        try
+        {
+            await using var storage = new StorageEngine(new StorageConfig
+            {
+                DataPath = path,
+                BufferPoolSize = 32,
+                PageSize = 128
+            });
+            var tree = await BTree<long, string>.CreateAsync(storage, new BTreeConfig { Fanout = 4 });
+            var largeValue = new string('x', 4096);
+
+            var ex = await Assert.ThrowsAsync<IndexException>(async () =>
+                await tree.InsertAsync(1, largeValue));
+            Assert.Equal(IndexErrorKind.Serialization, ex.Kind);
         }
         finally
         {

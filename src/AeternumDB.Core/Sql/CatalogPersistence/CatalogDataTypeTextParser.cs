@@ -1,4 +1,5 @@
 using AeternumDB.Core.Sql;
+using AeternumDB.Core.Sql.Ast;
 
 namespace AeternumDB.Core.Sql.CatalogPersistence;
 
@@ -164,7 +165,11 @@ internal static class CatalogDataTypeTextParser
         return false;
     }
 
-    private static bool TryParseSingleUnsignedParameter(string upperText, string prefix, out ulong? value)
+    private static bool TryParseSingleUnsignedParameter(
+        string upperText,
+        string prefix,
+        out ulong? value
+    )
     {
         value = null;
         if (!upperText.StartsWith(prefix, StringComparison.Ordinal) || !upperText.EndsWith(')'))
@@ -191,7 +196,10 @@ internal static class CatalogDataTypeTextParser
         if (inside.Length == 0)
             return true;
 
-        var parts = inside.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        var parts = inside.Split(
+            ',',
+            StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries
+        );
         if (parts.Length is < 1 or > 2)
             return false;
         if (!ulong.TryParse(parts[0], out var parsedPrecision))

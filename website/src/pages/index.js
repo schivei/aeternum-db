@@ -61,6 +61,40 @@ function HomepageHeader() {
                     <a href="https://github.com/schivei/aeternum-db">
                         <img src="https://img.shields.io/github/stars/schivei/aeternum-db?style=flat&logo=github" alt="GitHub Stars" />
                     </a>
+                    <br />
+                    <a href="https://sonarcloud.io/summary/new_code?id=schivei_aeternum-db">
+                        <img src="https://sonarcloud.io/api/project_badges/measure?project=schivei_aeternum-db&metric=alert_status" alt="Quality Gate Status" />
+                    </a>
+                    <a href="https://sonarcloud.io/summary/new_code?id=schivei_aeternum-db">
+                        <img src="https://sonarcloud.io/api/project_badges/measure?project=schivei_aeternum-db&metric=bugs" alt="Bugs" />
+                    </a>
+                    <a href="https://sonarcloud.io/summary/new_code?id=schivei_aeternum-db">
+                        <img src="https://sonarcloud.io/api/project_badges/measure?project=schivei_aeternum-db&metric=code_smells" alt="Code Smells" />
+                    </a>
+                    <a href="https://sonarcloud.io/summary/new_code?id=schivei_aeternum-db">
+                        <img src="https://sonarcloud.io/api/project_badges/measure?project=schivei_aeternum-db&metric=coverage" alt="Coverage" />
+                    </a>
+                    <a href="https://sonarcloud.io/summary/new_code?id=schivei_aeternum-db">
+                        <img src="https://sonarcloud.io/api/project_badges/measure?project=schivei_aeternum-db&metric=duplicated_lines_density" alt="Duplicated Lines (%)" />
+                    </a>
+                    <a href="https://sonarcloud.io/summary/new_code?id=schivei_aeternum-db">
+                        <img src="https://sonarcloud.io/api/project_badges/measure?project=schivei_aeternum-db&metric=ncloc" alt="Lines of Code" />
+                    </a>
+                    <a href="https://sonarcloud.io/summary/new_code?id=schivei_aeternum-db">
+                        <img src="https://sonarcloud.io/api/project_badges/measure?project=schivei_aeternum-db&metric=reliability_rating" alt="Reliability Rating" />
+                    </a>
+                    <a href="https://sonarcloud.io/summary/new_code?id=schivei_aeternum-db">
+                        <img src="https://sonarcloud.io/api/project_badges/measure?project=schivei_aeternum-db&metric=security_rating" alt="Security Rating" />
+                    </a>
+                    <a href="https://sonarcloud.io/summary/new_code?id=schivei_aeternum-db">
+                        <img src="https://sonarcloud.io/api/project_badges/measure?project=schivei_aeternum-db&metric=sqale_index" alt="Technical Debt" />
+                    </a>
+                    <a href="https://sonarcloud.io/summary/new_code?id=schivei_aeternum-db">
+                        <img src="https://sonarcloud.io/api/project_badges/measure?project=schivei_aeternum-db&metric=sqale_rating" alt="Maintainability Rating" />
+                    </a>
+                    <a href="https://sonarcloud.io/summary/new_code?id=schivei_aeternum-db">
+                        <img src="https://sonarcloud.io/api/project_badges/measure?project=schivei_aeternum-db&metric=vulnerabilities" alt="Vulnerabilities" />
+                    </a>
                 </div>
             </div>
         </header>

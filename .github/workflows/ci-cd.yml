@@ -85,16 +85,16 @@ jobs:
           PR_BASE: ${{ github.base_ref }}
           REF_NAME: ${{ github.ref_name }}
         run: |
+          SONAR_NON_CSHARP_EXCLUSIONS="**/.config/**,.config/**,**/.github/scripts/**,.github/scripts/**,**/.husky/**,.husky/**,**/deployment/**,deployment/**,**/docs/**,docs/**,**/poc/**,poc/**,**/website/**,website/**"
           SONAR_ARGS=(
             "/k:${SONAR_PROJECT_KEY}"
             "/o:${SONAR_ORGANIZATION}"
             "/d:sonar.host.url=${SONAR_HOST_URL}"
             "/d:sonar.token=${SONAR_TOKEN}"
-            "/d:sonar.cs.cobertura.reportsPaths=../coverage/**/coverage.cobertura.xml"
-            "/d:sonar.coverage.exclusions=.github/**,**/Executor/**,**/Sql/**,**/Query/**"
-            "/d:sonar.exclusions=**/website/**,website/**"
-            "/d:sonar.cpd.exclusions=.github/**,**/website/**,website/**"
-            "/d:sonar.test.exclusions=**/website/**,website/**"
+            "/d:sonar.cs.cobertura.reportsPaths=../coverage/**/coverage.cobertura.xml,../coverage-sonar/**/coverage.cobertura.xml,**/TestResults/**/coverage.cobertura.xml"
+            "/d:sonar.exclusions=${SONAR_NON_CSHARP_EXCLUSIONS}"
+            "/d:sonar.cpd.exclusions=${SONAR_NON_CSHARP_EXCLUSIONS}"
+            "/d:sonar.test.exclusions=${SONAR_NON_CSHARP_EXCLUSIONS}"
           )
 
           if [ "${{ github.event_name }}" = "pull_request" ]; then
@@ -139,10 +139,23 @@ jobs:
             --collect:"XPlat Code Coverage" \
             --results-directory ../coverage
 
-      - name: Enforce 80% line coverage
+          dotnet test AeternumDB.slnx \
+            --configuration Release \
+            --no-build \
+            --verbosity normal \
+            --settings ./AeternumDB.Core.Tests/coverage.sonar.runsettings \
+            --collect:"XPlat Code Coverage" \
+            --results-directory ../coverage-sonar
+
+      - name: Enforce 90% global coverage (lines and branches)
         run: |
           python3 << 'PYEOF'
           import xml.etree.ElementTree as ET, os, sys
+          sys.path.insert(0, os.path.abspath('.github/scripts'))
+          from coverage_helpers import is_trackable
+
+          LINE_THRESHOLD = 90.0
+          BRANCH_THRESHOLD = 90.0
 
           xml_files = [
               os.path.join(r, f)
@@ -153,35 +166,56 @@ jobs:
               print("No coverage.cobertura.xml found.", file=sys.stderr)
               sys.exit(1)
 
-          merged: dict = {}
+          merged_lines = {}
+          merged_branches = {}
           for xml_file in xml_files:
               root = ET.parse(xml_file).getroot()
               for cls in root.findall('.//class'):
                   filename = cls.get('filename', '')
-                  norm = filename.replace('\\', '/')
-                  if '/obj/' in norm:
-                      continue
-                  if not (norm.startswith('AeternumDB') or norm.startswith('src/')):
+                  if not is_trackable(filename):
                       continue
                   for line in cls.findall('./lines/line'):
                       hits = int(line.get('hits', 0) or 0)
                       lnum = int(line.get('number', 0) or 0)
-                      key = (filename, lnum)
-                      merged[key] = max(merged.get(key, 0), hits)
+                      line_key = (filename, lnum)
+                      merged_lines[line_key] = max(merged_lines.get(line_key, 0), hits)
 
-          total   = len(merged)
-          covered = sum(1 for hits in merged.values() if hits > 0)
+                      if line.get('branch') == 'True':
+                          coverage = line.get('condition-coverage', '')
+                          if '(' in coverage and '/' in coverage:
+                              fraction = coverage.split('(', 1)[1].split(')', 1)[0]
+                              covered_b, valid_b = map(int, fraction.split('/', 1))
+                          else:
+                              covered_b = 1 if hits > 0 else 0
+                              valid_b = 1
+                          prev_c, prev_v = merged_branches.get(line_key, (0, 0))
+                          merged_branches[line_key] = (max(prev_c, covered_b), max(prev_v, valid_b))
 
-          if total == 0:
-              print("⚠️  No trackable source lines found — skipping gate.", file=sys.stderr)
-              sys.exit(0)
+          total_lines = len(merged_lines)
+          covered_lines = sum(1 for hits in merged_lines.values() if hits > 0)
+          total_branches = sum(v for _, v in merged_branches.values())
+          covered_branches = sum(c for c, _ in merged_branches.values())
 
-          pct = 100.0 * covered / total
-          THRESHOLD = 80.0
-          status = '✅' if pct >= THRESHOLD else '❌'
-          print(f"{status} Line coverage: {pct:.1f}% ({covered}/{total} lines) — threshold {THRESHOLD:.0f}%")
+          if total_lines == 0:
+              print("Error: No trackable source lines found. Check that source files match trackability criteria.", file=sys.stderr)
+              sys.exit(1)
+          if total_branches == 0:
+              print("Error: No trackable source branches found. Check that source files contain branch points.", file=sys.stderr)
+              sys.exit(1)
 
-          if pct < THRESHOLD:
+          line_pct = 100.0 * covered_lines / total_lines
+          branch_pct = 100.0 * covered_branches / total_branches
+
+          print(
+              f"{'✅' if line_pct >= LINE_THRESHOLD else '❌'} "
+              f"Line coverage: {line_pct:.1f}% ({covered_lines}/{total_lines}) — threshold {LINE_THRESHOLD:.0f}%"
+          )
+          print(
+              f"{'✅' if branch_pct >= BRANCH_THRESHOLD else '❌'} "
+              f"Branch coverage: {branch_pct:.1f}% ({covered_branches}/{total_branches}) — threshold {BRANCH_THRESHOLD:.0f}%"
+          )
+
+          if line_pct < LINE_THRESHOLD or branch_pct < BRANCH_THRESHOLD:
               sys.exit(1)
           PYEOF
 
@@ -190,6 +224,8 @@ jobs:
         run: |
           python3 << 'PYEOF'
           import xml.etree.ElementTree as ET, os, sys
+          sys.path.insert(0, os.path.abspath('.github/scripts'))
+          from coverage_helpers import is_trackable
 
           xml_files = [
               os.path.join(r, f)
@@ -204,7 +240,7 @@ jobs:
               root = ET.parse(xml_file).getroot()
               for cls in root.findall('.//class'):
                   filename = cls.get('filename')
-                  if not filename or '/obj/' in filename.replace('\\', '/'):
+                  if not filename or not is_trackable(filename):
                       continue
                   for line in cls.findall('./lines/line'):
                       line_number = int(line.get('number', 0) or 0)
@@ -238,8 +274,8 @@ jobs:
               "",
               "| Metric | Coverage |",
               "|--------|----------|",
-              f"| **Lines** | {lr:.1f}% ({total_covered}/{total_valid} lines) |",
-              f"| **Branches** | {br:.1f}% |",
+              f"| **Lines** | {lr:.1f}% ({total_covered}/{total_valid} lines, target: 90%) |",
+              f"| **Branches** | {br:.1f}% (target: 90%) |",
               "",
               "<sub>Generated by CI from `dotnet test --collect:\"XPlat Code Coverage\"`</sub>",
           ]
@@ -264,6 +300,8 @@ jobs:
           import xml.etree.ElementTree as ET, os, subprocess, sys
 
           MARKER = "<!-- aeternumdb-coverage-report -->"
+          sys.path.insert(0, os.path.abspath('.github/scripts'))
+          from coverage_helpers import is_trackable
 
           xml_files = [
               os.path.join(r, f)
@@ -280,7 +318,7 @@ jobs:
               root = ET.parse(xml_file).getroot()
               for cls in root.findall('.//class'):
                   filename = cls.get('filename')
-                  if not filename or '/obj/' in filename.replace('\\', '/'):
+                  if not filename or not is_trackable(filename):
                       continue
                   for line in cls.findall('./lines/line'):
                       lnum = int(line.get('number', 0) or 0)
@@ -304,7 +342,7 @@ jobs:
           bc   = sum(c for c, _ in merged_branches.values())
           lr   = (tc / tv * 100) if tv > 0 else 0.0
           br   = (bc / bv * 100) if bv > 0 else 0.0
-          emoji = '✅' if lr >= 80 else '⚠️' if lr >= 60 else '❌'
+          emoji = '✅' if lr >= 90 and br >= 90 else '⚠️' if lr >= 80 and br >= 80 else '❌'
           sha  = os.environ['COMMIT_SHA'][:7]
 
           comment = (
@@ -312,8 +350,8 @@ jobs:
               f"## {emoji} Code Coverage Report — `{sha}`\n\n"
               f"| Metric | Coverage |\n"
               f"|--------|----------|\n"
-              f"| **Lines** | {lr:.1f}% ({tc}/{tv} lines) |\n"
-              f"| **Branches** | {br:.1f}% |\n\n"
+              f"| **Lines** | {lr:.1f}% ({tc}/{tv} lines, target: 90%) |\n"
+              f"| **Branches** | {br:.1f}% (target: 90%) |\n\n"
               f"<sub>Generated by CI from `dotnet test --collect:\"XPlat Code Coverage\"`</sub>"
           )
 
