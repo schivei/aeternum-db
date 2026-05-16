@@ -120,9 +120,6 @@ public sealed class SqlValidator
         Dictionary<string, string> aliases
     )
     {
-        if (item is null)
-            return;
-
         if (item is SelectItem.Wildcard)
             return;
 
@@ -176,8 +173,7 @@ public sealed class SqlValidator
         if (expr is Expr.Column { Table: { } tbl } col)
         {
             var resolved = aliases.TryGetValue(tbl, out var resolvedTable) ? resolvedTable : tbl;
-            RequireTable(resolved);
-            var schema = _catalog.GetTable(resolved)!;
+            var schema = RequireTable(resolved);
             RequireColumn(schema, col.Name);
             return;
         }
@@ -506,10 +502,12 @@ public sealed class SqlValidator
 
     private static bool IsAggregate(string name) => AggregateFunctions.Contains(name);
 
-    private void RequireTable(string name)
+    private TableSchema RequireTable(string name)
     {
-        if (!_catalog.TableExists(name))
+        var schema = _catalog.GetTable(name);
+        if (schema is null)
             throw new ValidationException.TableNotFoundException(name);
+        return schema;
     }
 
     private static void RequireColumn(TableSchema schema, string column)

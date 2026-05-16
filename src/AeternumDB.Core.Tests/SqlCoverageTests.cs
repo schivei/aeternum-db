@@ -325,20 +325,6 @@ public sealed class SqlCoverageTests
         );
         Assert.Null(expandException);
 
-        var nullSelectItemException = Record.Exception(
-            () =>
-                validator.Validate(
-                    new Statement.Select(
-                        new SelectStatement
-                        {
-                            Columns = [null!],
-                            From = new TableReference.Named(null, null, "users", alias: "u"),
-                        }
-                    )
-                )
-        );
-        Assert.Null(nullSelectItemException);
-
         var trimWithoutTrimWhatException = Record.Exception(
             () =>
                 validator.Validate(
@@ -517,6 +503,48 @@ public sealed class SqlCoverageTests
         );
         Assert.Equal("outer_commit", commitNestingException.Target);
         Assert.Equal("inner_commit", commitNestingException.Blocking);
+
+        var commitAnonymousBlockingException =
+            Assert.Throws<ValidationException.TransactionNestingViolationException>(
+                () =>
+                    validator.ValidateSequence(
+                        [
+                            new Statement.BeginTransaction(
+                                new BeginTransactionStatement { Name = "outer_commit_anon" }
+                            ),
+                            new Statement.BeginTransaction(new BeginTransactionStatement()),
+                            new Statement.Commit(
+                                new CommitStatement(
+                                    new CommitScope.Named("outer_commit_anon"),
+                                    chain: false
+                                )
+                            ),
+                        ]
+                    )
+            );
+        Assert.Equal("outer_commit_anon", commitAnonymousBlockingException.Target);
+        Assert.Equal("(anonymous)", commitAnonymousBlockingException.Blocking);
+
+        var rollbackAnonymousBlockingException =
+            Assert.Throws<ValidationException.TransactionNestingViolationException>(
+                () =>
+                    validator.ValidateSequence(
+                        [
+                            new Statement.BeginTransaction(
+                                new BeginTransactionStatement { Name = "outer_rollback_anon" }
+                            ),
+                            new Statement.BeginTransaction(new BeginTransactionStatement()),
+                            new Statement.Rollback(
+                                new RollbackStatement(
+                                    new RollbackScope.Named("outer_rollback_anon"),
+                                    chain: false
+                                )
+                            ),
+                        ]
+                    )
+            );
+        Assert.Equal("outer_rollback_anon", rollbackAnonymousBlockingException.Target);
+        Assert.Equal("(anonymous)", rollbackAnonymousBlockingException.Blocking);
 
         validator.ValidateSequence(
             [
