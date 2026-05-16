@@ -77,7 +77,8 @@ public sealed class CatalogTests
     [Fact]
     public void CatalogPersistence_RoundtripRestoresTablesIndexesTypesAndObjId()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"aeternum-catalog-{Guid.NewGuid():N}.json");
+        var fileName = $"aeternum-catalog-{Guid.NewGuid():N}.json";
+        var path = Path.GetFullPath(fileName, Path.GetTempPath());
         try
         {
             var catalog = new Catalog(path);

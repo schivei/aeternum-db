@@ -192,12 +192,10 @@ public sealed partial class Catalog
 
     private bool IsTypeInUseUnsafe(string name)
     {
-        foreach (var table in _tables.Values)
-            foreach (var col in table.Columns)
-                if (col.UserDefinedTypeName is not null
-                    && string.Equals(col.UserDefinedTypeName, name, StringComparison.OrdinalIgnoreCase))
-                    return true;
-        return false;
+        return _tables.Values
+            .SelectMany(table => table.Columns)
+            .Where(col => col.UserDefinedTypeName is not null)
+            .Any(col => string.Equals(col.UserDefinedTypeName, name, StringComparison.OrdinalIgnoreCase));
     }
 }
 

@@ -33,6 +33,11 @@ public sealed class IndexSchema
 
 public sealed partial class Catalog
 {
+    private const string EnumKind = "enum";
+    private const string CompositeKind = "composite";
+    private const string UnknownTypeName = "UNKNOWN";
+    private const string DefaultIndexTypeName = "BTREE";
+
     private readonly object _syncRoot = new();
     private readonly Dictionary<string, IndexSchema> _indexes = new(StringComparer.OrdinalIgnoreCase);
     private readonly string? _persistencePath;
@@ -125,44 +130,7 @@ public sealed partial class Catalog
 
             foreach (var op in stmt.Operations)
             {
-                switch (op)
-                {
-                    case AlterTableOperation.AddColumn add:
-                        if (columns.Any(c => string.Equals(c.Name, add.Column.Name, StringComparison.OrdinalIgnoreCase)))
-                            throw new PlannerException(PlannerErrorKind.CatalogError, $"column '{add.Column.Name}' already exists");
-                        columns.Add(new ColumnSchema(add.Column.Name, add.Column.DataType, add.Column.Nullable));
-                        break;
-
-                    case AlterTableOperation.DropColumn drop:
-                    {
-                        var found = columns.RemoveAll(c => string.Equals(c.Name, drop.Name, StringComparison.OrdinalIgnoreCase)) > 0;
-                        if (!found && !drop.IfExists)
-                            throw new PlannerException(PlannerErrorKind.CatalogError, $"column '{drop.Name}' does not exist");
-                        break;
-                    }
-
-                    case AlterTableOperation.RenameColumn rename:
-                    {
-                        var idx = columns.FindIndex(c => string.Equals(c.Name, rename.OldName, StringComparison.OrdinalIgnoreCase));
-                        if (idx < 0)
-                            throw new PlannerException(PlannerErrorKind.CatalogError, $"column '{rename.OldName}' does not exist");
-                        if (columns.Any(c => string.Equals(c.Name, rename.NewName, StringComparison.OrdinalIgnoreCase)))
-                            throw new PlannerException(PlannerErrorKind.CatalogError, $"column '{rename.NewName}' already exists");
-                        var existing = columns[idx];
-                        columns[idx] = new ColumnSchema(rename.NewName, existing.DataType, existing.Nullable);
-                        RenameColumnInIndexesUnsafe(tableName, rename.OldName, rename.NewName);
-                        break;
-                    }
-
-                    case AlterTableOperation.RenameTable rename:
-                    {
-                        var newKey = rename.NewName.ToLowerInvariant();
-                        if (_tables.ContainsKey(newKey))
-                            throw new PlannerException(PlannerErrorKind.CatalogError, $"table '{rename.NewName}' already exists");
-                        tableName = rename.NewName;
-                        break;
-                    }
-                }
+                ApplyAlterOperationUnsafe(op, ref tableName, columns);
             }
 
             var updated = new TableSchema(
@@ -186,11 +154,13 @@ public sealed partial class Catalog
         {
             var table = GetTable(stmt.Table)
                 ?? throw new PlannerException(PlannerErrorKind.CatalogError, $"table '{stmt.Table}' does not exist");
-            foreach (var col in stmt.Columns)
-            {
-                if (table.GetColumn(col.Name) is null)
-                    throw new PlannerException(PlannerErrorKind.CatalogError, $"column '{col.Name}' does not exist in table '{stmt.Table}'");
-            }
+
+            var missingColumn = stmt.Columns
+                .Where(col => table.GetColumn(col.Name) is null)
+                .Select(col => col.Name)
+                .FirstOrDefault();
+            if (missingColumn is not null)
+                throw new PlannerException(PlannerErrorKind.CatalogError, $"column '{missingColumn}' does not exist in table '{stmt.Table}'");
 
             var indexName = stmt.Name ?? $"{stmt.Table}_{string.Join("_", stmt.Columns.Select(c => c.Name))}_idx";
             var key = indexName.ToLowerInvariant();
@@ -347,9 +317,13 @@ public sealed partial class Catalog
 
         var primary = _persistencePath!;
         var tmp = $"{primary}.tmp";
-        var source = File.Exists(primary)
-            ? primary
-            : (File.Exists(tmp) ? tmp : null);
+        string? source;
+        if (File.Exists(primary))
+            source = primary;
+        else if (File.Exists(tmp))
+            source = tmp;
+        else
+            source = null;
 
         if (source is null)
             return;
@@ -380,11 +354,11 @@ public sealed partial class Catalog
         {
             UserTypeKind kind = t.Kind switch
             {
-                "enum" => new UserTypeKind.Enum(
+                EnumKind => new UserTypeKind.Enum(
                     t.Flag,
                     t.Variants.Select(v => new EnumVariant(v.Name, v.IsNone)).ToList(),
                     t.ResolvedValues),
-                "composite" => new UserTypeKind.Composite(
+                CompositeKind => new UserTypeKind.Composite(
                     t.Fields.Select(f => (f.Name, ParseDataType(f.DataTypeText, null))).ToList()),
                 _ => new UserTypeKind.Composite([])
             };
@@ -420,7 +394,7 @@ public sealed partial class Catalog
                 Columns = t.Columns.Select(c => new ColumnSnapshot
                 {
                     Name = c.Name,
-                    DataTypeText = c.DataType.ToString() ?? "UNKNOWN",
+                    DataTypeText = c.DataType.ToString() ?? UnknownTypeName,
                     Nullable = c.Nullable,
                     UserDefinedTypeName = c.UserDefinedTypeName
                 }).ToList()
@@ -432,7 +406,7 @@ public sealed partial class Catalog
                     return new TypeSnapshot
                     {
                         Name = t.Name,
-                        Kind = "enum",
+                        Kind = EnumKind,
                         Flag = e.Flag,
                         Variants = e.Variants.Select(v => new EnumVariantSnapshot { Name = v.Name, IsNone = v.IsNone }).ToList(),
                         ResolvedValues = e.ResolvedValues.ToList()
@@ -444,16 +418,16 @@ public sealed partial class Catalog
                     return new TypeSnapshot
                     {
                         Name = t.Name,
-                        Kind = "composite",
+                        Kind = CompositeKind,
                         Fields = c.Fields.Select(f => new TypeFieldSnapshot
                         {
                             Name = f.Name,
-                            DataTypeText = f.Type.ToString() ?? "UNKNOWN"
+                            DataTypeText = f.Type.ToString() ?? UnknownTypeName
                         }).ToList()
                     };
                 }
 
-                return new TypeSnapshot { Name = t.Name, Kind = "composite" };
+                return new TypeSnapshot { Name = t.Name, Kind = CompositeKind };
             }).ToList(),
             Indexes = _indexes.Values.Select(i => new IndexSnapshot
             {
@@ -484,7 +458,7 @@ public sealed partial class Catalog
     private static string IndexTypeName(IndexType type) =>
         type switch
         {
-            IndexType.BTree => "BTREE",
+            IndexType.BTree => DefaultIndexTypeName,
             IndexType.Hash => "HASH",
             IndexType.Gin => "GIN",
             IndexType.Gist => "GIST",
@@ -494,13 +468,13 @@ public sealed partial class Catalog
             IndexType.FullText => "FULLTEXT",
             IndexType.Trigram => "TRIGRAM",
             IndexType.Other o => o.Name,
-            _ => "BTREE"
+            _ => DefaultIndexTypeName
         };
 
     private static IndexType ParseIndexType(string name) =>
         name.ToUpperInvariant() switch
         {
-            "BTREE" => IndexType.BTree.Instance,
+            DefaultIndexTypeName => IndexType.BTree.Instance,
             "HASH" => IndexType.Hash.Instance,
             "GIN" => IndexType.Gin.Instance,
             "GIST" => IndexType.Gist.Instance,
@@ -533,7 +507,7 @@ public sealed partial class Catalog
     private sealed class ColumnSnapshot
     {
         public string Name { get; set; } = "";
-        public string DataTypeText { get; set; } = "UNKNOWN";
+        public string DataTypeText { get; set; } = UnknownTypeName;
         public bool Nullable { get; set; } = true;
         public string? UserDefinedTypeName { get; set; }
     }
@@ -541,7 +515,7 @@ public sealed partial class Catalog
     private sealed class TypeSnapshot
     {
         public string Name { get; set; } = "";
-        public string Kind { get; set; } = "composite";
+        public string Kind { get; set; } = CompositeKind;
         public bool Flag { get; set; }
         public List<EnumVariantSnapshot> Variants { get; set; } = [];
         public List<ulong> ResolvedValues { get; set; } = [];
@@ -557,7 +531,7 @@ public sealed partial class Catalog
     private sealed class TypeFieldSnapshot
     {
         public string Name { get; set; } = "";
-        public string DataTypeText { get; set; } = "UNKNOWN";
+        public string DataTypeText { get; set; } = UnknownTypeName;
     }
 
     private sealed class IndexSnapshot
@@ -566,8 +540,62 @@ public sealed partial class Catalog
         public string Table { get; set; } = "";
         public List<string> Columns { get; set; } = [];
         public bool Unique { get; set; }
-        public string IndexType { get; set; } = "BTREE";
+        public string IndexType { get; set; } = DefaultIndexTypeName;
         public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+    }
+
+    private void ApplyAlterOperationUnsafe(AlterTableOperation op, ref string tableName, List<ColumnSchema> columns)
+    {
+        switch (op)
+        {
+            case AlterTableOperation.AddColumn add:
+                AddColumnUnsafe(add, columns);
+                break;
+            case AlterTableOperation.DropColumn drop:
+                DropColumnUnsafe(drop, columns);
+                break;
+            case AlterTableOperation.RenameColumn rename:
+                RenameColumnUnsafe(rename, tableName, columns);
+                break;
+            case AlterTableOperation.RenameTable rename:
+                tableName = RenameTableUnsafe(rename);
+                break;
+        }
+    }
+
+    private static void AddColumnUnsafe(AlterTableOperation.AddColumn add, List<ColumnSchema> columns)
+    {
+        if (columns.Any(c => string.Equals(c.Name, add.Column.Name, StringComparison.OrdinalIgnoreCase)))
+            throw new PlannerException(PlannerErrorKind.CatalogError, $"column '{add.Column.Name}' already exists");
+        columns.Add(new ColumnSchema(add.Column.Name, add.Column.DataType, add.Column.Nullable));
+    }
+
+    private static void DropColumnUnsafe(AlterTableOperation.DropColumn drop, List<ColumnSchema> columns)
+    {
+        var found = columns.RemoveAll(c => string.Equals(c.Name, drop.Name, StringComparison.OrdinalIgnoreCase)) > 0;
+        if (!found && !drop.IfExists)
+            throw new PlannerException(PlannerErrorKind.CatalogError, $"column '{drop.Name}' does not exist");
+    }
+
+    private void RenameColumnUnsafe(AlterTableOperation.RenameColumn rename, string tableName, List<ColumnSchema> columns)
+    {
+        var idx = columns.FindIndex(c => string.Equals(c.Name, rename.OldName, StringComparison.OrdinalIgnoreCase));
+        if (idx < 0)
+            throw new PlannerException(PlannerErrorKind.CatalogError, $"column '{rename.OldName}' does not exist");
+        if (columns.Any(c => string.Equals(c.Name, rename.NewName, StringComparison.OrdinalIgnoreCase)))
+            throw new PlannerException(PlannerErrorKind.CatalogError, $"column '{rename.NewName}' already exists");
+
+        var existing = columns[idx];
+        columns[idx] = new ColumnSchema(rename.NewName, existing.DataType, existing.Nullable);
+        RenameColumnInIndexesUnsafe(tableName, rename.OldName, rename.NewName);
+    }
+
+    private string RenameTableUnsafe(AlterTableOperation.RenameTable rename)
+    {
+        var newKey = rename.NewName.ToLowerInvariant();
+        if (_tables.ContainsKey(newKey))
+            throw new PlannerException(PlannerErrorKind.CatalogError, $"table '{rename.NewName}' already exists");
+        return rename.NewName;
     }
 
     [JsonSourceGenerationOptions(WriteIndented = true)]
