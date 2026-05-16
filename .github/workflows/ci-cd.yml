@@ -91,7 +91,7 @@ jobs:
             "/o:${SONAR_ORGANIZATION}"
             "/d:sonar.host.url=${SONAR_HOST_URL}"
             "/d:sonar.token=${SONAR_TOKEN}"
-            "/d:sonar.cs.cobertura.reportsPaths=../coverage/**/coverage.cobertura.xml,**/TestResults/**/coverage.cobertura.xml"
+            "/d:sonar.cs.cobertura.reportsPaths=../coverage/**/coverage.cobertura.xml,../coverage-sonar/**/coverage.cobertura.xml,**/TestResults/**/coverage.cobertura.xml"
             "/d:sonar.exclusions=${SONAR_NON_CSHARP_EXCLUSIONS}"
             "/d:sonar.cpd.exclusions=${SONAR_NON_CSHARP_EXCLUSIONS}"
             "/d:sonar.test.exclusions=${SONAR_NON_CSHARP_EXCLUSIONS}"
@@ -138,6 +138,14 @@ jobs:
             --verbosity normal \
             --collect:"XPlat Code Coverage" \
             --results-directory ../coverage
+
+          dotnet test AeternumDB.slnx \
+            --configuration Release \
+            --no-build \
+            --verbosity normal \
+            --settings ./AeternumDB.Core.Tests/coverage.sonar.runsettings \
+            --collect:"XPlat Code Coverage" \
+            --results-directory ../coverage-sonar
 
       - name: Enforce 90% global coverage (lines and branches)
         run: |
