@@ -2,11 +2,13 @@
 husky_sh="$(dirname "$0")/_/husky.sh"
 [ ! -f "$husky_sh" ] || . "$husky_sh"
 
+staged_files="$(mktemp -t aeternumdb-staged-files.XXXXXX)" || exit 1
+trap 'rm -f "$staged_files"' EXIT
+git diff --cached --name-only --diff-filter=ACMR -- '*.cs' '*.csproj' '*.props' '*.targets' > "$staged_files"
+
 set --
 while IFS= read -r file; do
   [ -z "$file" ] || set -- "$@" "$file"
-done <<EOF
-$(git diff --cached --name-only --diff-filter=ACMR -- '*.cs' '*.csproj' '*.props' '*.targets')
-EOF
+done < "$staged_files"
 
 [ "$#" -eq 0 ] || dotnet csharpier check "$@"
