@@ -5,7 +5,7 @@ namespace AeternumDB.Core.Executor;
 
 using System.Collections.Generic;
 using System.Text;
-using AeternumDB.Core.Abstractions;
+using AeternumDB.Core.Abstractions.Executor;
 using AeternumDB.Core.Errors;
 using AeternumDB.Core.Query;
 using AeternumDB.Core.Sql;

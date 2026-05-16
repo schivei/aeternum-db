@@ -1,4 +1,4 @@
-using AeternumDB.Core.Abstractions;
+using AeternumDB.Core.Abstractions.Storage;
 using AeternumDB.Core.Errors;
 using AeternumDB.Core.Types;
 using Microsoft.Win32.SafeHandles;

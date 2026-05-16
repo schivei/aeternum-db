@@ -1,6 +1,7 @@
 namespace AeternumDB.Core.Query;
 
-using AeternumDB.Core.Abstractions;
+using AeternumDB.Core.Abstractions.Executor;
+using AeternumDB.Core.Abstractions.Query;
 using AeternumDB.Core.Errors;
 using AeternumDB.Core.Executor;
 using AeternumDB.Core.Sql;
