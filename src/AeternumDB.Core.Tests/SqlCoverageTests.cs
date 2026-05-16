@@ -153,6 +153,233 @@ public sealed class SqlCoverageTests
     }
 
     [Fact]
+    public void SqlCoverage_AdditionalBranchPaths_AreCoveredDeterministically()
+    {
+        Assert.True(
+            CatalogPersistedDataTypeJsonCodec.TryParseDataType(
+                """{"Kind":"reference","DataId":"users_data_id"}""",
+                out var referenceFromDataId
+            )
+        );
+        Assert.Equal("users_data_id", Assert.IsType<DataType.Reference>(referenceFromDataId).Table);
+
+        Assert.True(
+            CatalogPersistedDataTypeJsonCodec.TryParseDataType(
+                """{"Kind":"reference_array","DataId":"users_array_data_id"}""",
+                out var referenceArrayFromDataId
+            )
+        );
+        Assert.Equal(
+            "users_array_data_id",
+            Assert.IsType<DataType.ReferenceArray>(referenceArrayFromDataId).Table
+        );
+
+        Assert.True(
+            CatalogPersistedDataTypeJsonCodec.TryParseDataType(
+                """{"Kind":"user_defined","DataId":"status_data_id"}""",
+                out var enumFromDataId
+            )
+        );
+        Assert.Equal("status_data_id", Assert.IsType<DataType.EnumRef>(enumFromDataId).Name);
+
+        Assert.True(
+            CatalogPersistedDataTypeJsonCodec.TryParseDataType(
+                """{"Kind":"reference"}""",
+                out var referenceFallback
+            )
+        );
+        Assert.Equal(
+            CatalogDataTypePersistenceConstants.UnknownTypeName,
+            Assert.IsType<DataType.Reference>(referenceFallback).Table
+        );
+
+        Assert.True(
+            CatalogPersistedDataTypeJsonCodec.TryParseDataType(
+                """{"Kind":"reference_array"}""",
+                out var referenceArrayFallback
+            )
+        );
+        Assert.Equal(
+            CatalogDataTypePersistenceConstants.UnknownTypeName,
+            Assert.IsType<DataType.ReferenceArray>(referenceArrayFallback).Table
+        );
+
+        Assert.True(
+            CatalogPersistedDataTypeJsonCodec.TryParseDataType(
+                """{"Kind":"user_defined"}""",
+                out var enumFallback
+            )
+        );
+        Assert.Equal(
+            CatalogDataTypePersistenceConstants.UnknownTypeName,
+            Assert.IsType<DataType.EnumRef>(enumFallback).Name
+        );
+
+        var catalog = new Catalog();
+        catalog.CreateTable(
+            new TableSchema(
+                "users",
+                [
+                    new ColumnSchema("id", DataType.BigInt.Instance, nullable: false),
+                    new ColumnSchema("name", new DataType.Varchar(32), nullable: true),
+                ]
+            )
+        );
+        catalog.CreateTable(
+            new TableSchema(
+                "other",
+                [new ColumnSchema("id", DataType.BigInt.Instance, nullable: false)]
+            )
+        );
+
+        Assert.True(
+            catalog.CreateIndex(
+                new CreateIndexStatement
+                {
+                    Name = null,
+                    Table = "users",
+                    Columns = [new IndexColumn("id", ascending: true)],
+                    Unique = false,
+                    IfNotExists = false,
+                }
+            )
+        );
+        Assert.Contains(catalog.GetTableIndexes("users"), i => i.Name == "users_id_idx");
+
+        catalog.AddIndex(
+            new IndexSchema(
+                "users_multi_idx",
+                "users",
+                ["id", "name"],
+                unique: false,
+                IndexType.BTree.Instance
+            )
+        );
+        catalog.AddIndex(
+            new IndexSchema(
+                "users_name_idx",
+                "users",
+                ["name"],
+                unique: false,
+                IndexType.BTree.Instance
+            )
+        );
+        catalog.AddIndex(
+            new IndexSchema(
+                "other_id_idx",
+                "other",
+                ["id"],
+                unique: false,
+                IndexType.BTree.Instance
+            )
+        );
+        catalog.AlterTable(
+            new AlterTableStatement("users", [new AlterTableOperation.RenameColumn("id", "id2")])
+        );
+
+        var usersIndexes = catalog.GetTableIndexes("users");
+        Assert.Contains(usersIndexes, i => i.Name == "users_multi_idx" && i.Columns.SequenceEqual(["id2", "name"]));
+        Assert.Contains(usersIndexes, i => i.Name == "users_name_idx" && i.Columns.SequenceEqual(["name"]));
+        Assert.Contains(catalog.GetTableIndexes("other"), i => i.Name == "other_id_idx");
+
+        var validator = new SqlValidator(catalog);
+        var qualifiedAliasException = Record.Exception(
+            () =>
+                validator.Validate(
+                    new Statement.Select(
+                        new SelectStatement
+                        {
+                            Columns = [new SelectItem.QualifiedWildcard("u")],
+                            From = new TableReference.Named(null, null, "users", alias: "u"),
+                        }
+                    )
+                )
+        );
+        Assert.Null(qualifiedAliasException);
+
+        var wildcardException = Record.Exception(
+            () =>
+                validator.Validate(
+                    new Statement.Select(
+                        new SelectStatement
+                        {
+                            Columns = [SelectItem.Wildcard.Instance],
+                            From = new TableReference.Named(null, null, "users", alias: "u"),
+                        }
+                    )
+                )
+        );
+        Assert.Null(wildcardException);
+
+        var expandException = Record.Exception(
+            () =>
+                validator.Validate(
+                    new Statement.Select(
+                        new SelectStatement
+                        {
+                            Columns = [new SelectItem.Expand(new Expr.Column("u", "id2"), "id_alias")],
+                            From = new TableReference.Named(null, null, "users", alias: "u"),
+                        }
+                    )
+                )
+        );
+        Assert.Null(expandException);
+
+        var nullSelectItemException = Record.Exception(
+            () =>
+                validator.Validate(
+                    new Statement.Select(
+                        new SelectStatement
+                        {
+                            Columns = [null!],
+                            From = new TableReference.Named(null, null, "users", alias: "u"),
+                        }
+                    )
+                )
+        );
+        Assert.Null(nullSelectItemException);
+
+        var emptyAlterOperationsException = Record.Exception(
+            () =>
+                validator.Validate(
+                    new Statement.AlterTable(new AlterTableStatement("users", []))
+                )
+        );
+        Assert.Null(emptyAlterOperationsException);
+
+        var anonymousStackException = Record.Exception(
+            () =>
+                validator.ValidateSequence(
+                    [
+                        new Statement.BeginTransaction(new BeginTransactionStatement()),
+                        new Statement.BeginTransaction(new BeginTransactionStatement { Name = "named_tx" }),
+                        new Statement.Commit(new CommitStatement(CommitScope.Current.Instance, chain: false)),
+                        new Statement.Commit(new CommitStatement(CommitScope.Current.Instance, chain: false)),
+                    ]
+                )
+        );
+        Assert.Null(anonymousStackException);
+
+        var nullSnapshotPath = Path.Join(
+            Path.GetTempPath(),
+            $"aeternum-catalog-null-snapshot-{Guid.NewGuid():N}.json"
+        );
+        try
+        {
+            File.WriteAllText(nullSnapshotPath, "null");
+            var loadedCatalog = new Catalog(nullSnapshotPath);
+            Assert.False(loadedCatalog.TableExists("users"));
+        }
+        finally
+        {
+            if (File.Exists(nullSnapshotPath))
+                File.Delete(nullSnapshotPath);
+            if (File.Exists($"{nullSnapshotPath}.tmp"))
+                File.Delete($"{nullSnapshotPath}.tmp");
+        }
+    }
+
+    [Fact]
     public void SqlValidator_ValidateSequence_CoversTransactionBranches()
     {
         var validator = new SqlValidator(new Catalog());
@@ -201,6 +428,21 @@ public sealed class SqlCoverageTests
                     ]
                 )
         );
+
+        var commitNestingException = Assert.Throws<ValidationException.TransactionNestingViolationException>(
+            () =>
+                validator.ValidateSequence(
+                    [
+                        new Statement.BeginTransaction(new BeginTransactionStatement { Name = "outer_commit" }),
+                        new Statement.BeginTransaction(new BeginTransactionStatement { Name = "inner_commit" }),
+                        new Statement.Commit(
+                            new CommitStatement(new CommitScope.Named("outer_commit"), chain: false)
+                        ),
+                    ]
+                )
+        );
+        Assert.Equal("outer_commit", commitNestingException.Target);
+        Assert.Equal("inner_commit", commitNestingException.Blocking);
 
         validator.ValidateSequence(
             [

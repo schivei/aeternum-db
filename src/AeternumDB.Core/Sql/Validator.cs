@@ -125,9 +125,8 @@ public sealed class SqlValidator
             case SelectItem.Wildcard:
                 break;
             case SelectItem.QualifiedWildcard qw:
-                RequireTable(
-                    aliases.TryGetValue(qw.Table, out var resolvedTable) ? resolvedTable : qw.Table
-                );
+                var tableName = aliases.GetValueOrDefault(qw.Table, qw.Table);
+                RequireTable(tableName);
                 break;
             case SelectItem.ExprItem ei:
                 ValidateSelectExpr(ei.Expr, defaultTable, aliases);
@@ -172,9 +171,7 @@ public sealed class SqlValidator
         {
             var resolved = aliases.TryGetValue(tbl, out var resolvedTable) ? resolvedTable : tbl;
             RequireTable(resolved);
-            var schema =
-                _catalog.GetTable(resolved)
-                ?? throw new ValidationException.TableNotFoundException(resolved);
+            var schema = _catalog.GetTable(resolved)!;
             RequireColumn(schema, col.Name);
             return;
         }
