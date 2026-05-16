@@ -1,4 +1,12 @@
 #!/bin/sh
-. "$(dirname "$0")/_/husky.sh"
-files=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '\.(cs|csproj|props|targets)$' || true)
-[ -z "$files" ] || dotnet csharpier check $files
+husky_sh="$(dirname "$0")/_/husky.sh"
+[ ! -f "$husky_sh" ] || . "$husky_sh"
+
+set --
+while IFS= read -r file; do
+  [ -z "$file" ] || set -- "$@" "$file"
+done <<EOF
+$(git diff --cached --name-only --diff-filter=ACMR -- '*.cs' '*.csproj' '*.props' '*.targets')
+EOF
+
+[ "$#" -eq 0 ] || dotnet csharpier check "$@"
