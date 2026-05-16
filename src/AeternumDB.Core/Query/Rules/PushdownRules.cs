@@ -1,6 +1,7 @@
 namespace AeternumDB.Core.Query.Rules;
 
 using AeternumDB.Core.Sql;
+using AeternumDB.Core.Sql.Ast;
 
 public sealed class PredicatePushdownRule : IOptimizationRule
 {

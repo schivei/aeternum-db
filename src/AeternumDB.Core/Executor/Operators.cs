@@ -9,6 +9,7 @@ using AeternumDB.Core.Abstractions.Executor;
 using AeternumDB.Core.Errors;
 using AeternumDB.Core.Query;
 using AeternumDB.Core.Sql;
+using AeternumDB.Core.Sql.Ast;
 using AeternumDB.Core.Types;
 
 // ── Internal helpers ──────────────────────────────────────────────────────────

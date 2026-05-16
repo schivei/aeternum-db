@@ -6,6 +6,7 @@ namespace AeternumDB.Core.Executor;
 using AeternumDB.Core.Abstractions.Executor;
 using AeternumDB.Core.Query;
 using AeternumDB.Core.Sql;
+using AeternumDB.Core.Sql.Ast;
 
 /// <summary>
 /// Builds an <see cref="IExecutionPlan"/> tree from a <see cref="PhysicalPlan"/> tree.

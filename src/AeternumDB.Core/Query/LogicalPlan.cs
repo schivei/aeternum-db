@@ -2,6 +2,7 @@ namespace AeternumDB.Core.Query;
 
 using AeternumDB.Core.Errors;
 using AeternumDB.Core.Sql;
+using AeternumDB.Core.Sql.Ast;
 
 public abstract class LogicalPlan
 {
