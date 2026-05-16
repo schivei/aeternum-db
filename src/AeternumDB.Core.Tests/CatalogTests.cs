@@ -296,7 +296,8 @@ public sealed class CatalogTests
                     { "Name": "ratio", "DataTypeText": "DECIMAL(10,2)", "Nullable": true },
                     { "Name": "tags", "DataTypeText": "[INTEGER]", "Nullable": true },
                     { "Name": "owner_ref", "DataTypeText": "~users(id)", "Nullable": true },
-                    { "Name": "owners", "DataTypeText": "[users]", "Nullable": true }
+                    { "Name": "owners", "DataTypeText": "[users]", "Nullable": true },
+                    { "Name": "profile_ref", "DataTypeText": "~[profiles](id)", "Nullable": true }
                   ]
                 }
               ],
@@ -328,6 +329,10 @@ public sealed class CatalogTests
 
             var owners = Assert.IsType<DataType.ReferenceArray>(table.GetColumn("owners")!.DataType);
             Assert.Equal("users", owners.Table);
+
+            var profileRef = Assert.IsType<DataType.VirtualReferenceArray>(table.GetColumn("profile_ref")!.DataType);
+            Assert.Equal("profiles", profileRef.Table);
+            Assert.Equal("id", profileRef.Column);
 
             Assert.Equal(3, reloaded.NextObjectId());
         }

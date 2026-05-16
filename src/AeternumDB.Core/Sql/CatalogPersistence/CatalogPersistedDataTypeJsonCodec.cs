@@ -1,4 +1,5 @@
 using System.Text.Json;
+using AeternumDB.Core.Sql;
 using AeternumDB.Core.Sql.CatalogSnapshots;
 
 namespace AeternumDB.Core.Sql.CatalogPersistence;

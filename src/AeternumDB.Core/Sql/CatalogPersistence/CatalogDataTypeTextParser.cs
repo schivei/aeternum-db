@@ -1,3 +1,5 @@
+using AeternumDB.Core.Sql;
+
 namespace AeternumDB.Core.Sql.CatalogPersistence;
 
 internal static class CatalogDataTypeTextParser
@@ -237,7 +239,7 @@ internal static class CatalogDataTypeTextParser
 
         var close = text.IndexOf(']');
         var open = text.IndexOf('(');
-        if (close < 2 || open <= close + 1 || !text.EndsWith(')'))
+        if (close < 2 || open < close + 1 || !text.EndsWith(')'))
             return false;
 
         var table = text[2..close];
