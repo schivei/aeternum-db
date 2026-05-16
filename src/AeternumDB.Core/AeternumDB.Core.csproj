@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
@@ -14,7 +14,6 @@
     <LangVersion>latest</LangVersion>
     <Optimize>true</Optimize>
   </PropertyGroup>
-
   <ItemGroup>
     <PackageReference Include="System.IO.Hashing" Version="9.*" />
     <PackageReference Include="GenDI" Version="26.*" />
@@ -23,4 +22,31 @@
       <PrivateAssets>contentfiles; compile; runtime</PrivateAssets>
     </PackageReference>
   </ItemGroup>
+  <Target
+    Name="Husky"
+    AfterTargets="Restore"
+    Condition="'$(HUSKY)' != 0"
+    Inputs="../../.config/dotnet-tools.json"
+    Outputs="../../.husky/_/install.stamp"
+  >
+    <Exec
+      Command="dotnet tool restore"
+      StandardOutputImportance="Low"
+      StandardErrorImportance="High"
+    />
+    <Exec
+      Command="dotnet husky install"
+      StandardOutputImportance="Low"
+      StandardErrorImportance="High"
+      WorkingDirectory="../.."
+    />
+    <Touch
+      Files="../../.husky/_/install.stamp"
+      AlwaysCreate="true"
+      Condition="Exists('../../.husky/_')"
+    />
+    <ItemGroup>
+      <FileWrites Include="../../.husky/_/install.stamp" />
+    </ItemGroup>
+  </Target>
 </Project>

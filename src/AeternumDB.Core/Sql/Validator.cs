@@ -16,12 +16,14 @@ public sealed class ColumnSchema
     public string Name { get; }
     public DataType DataType { get; }
     public bool Nullable { get; }
+    public string? UserDefinedTypeName { get; }
 
     public ColumnSchema(string name, DataType dataType, bool nullable = true)
     {
         Name = name;
         DataType = dataType;
         Nullable = nullable;
+        UserDefinedTypeName = dataType is DataType.EnumRef enumRef ? enumRef.Name : null;
     }
 }
 
@@ -30,11 +32,26 @@ public sealed class TableSchema
 {
     public string Name { get; }
     public IReadOnlyList<ColumnSchema> Columns { get; }
+    public int SchemaVersion { get; }
+    public DateTimeOffset CreatedAt { get; }
+    public DateTimeOffset ModifiedAt { get; }
+    public long RowCount { get; }
 
-    public TableSchema(string name, IReadOnlyList<ColumnSchema> columns)
+    public TableSchema(
+        string name,
+        IReadOnlyList<ColumnSchema> columns,
+        int schemaVersion = 1,
+        DateTimeOffset? createdAt = null,
+        DateTimeOffset? modifiedAt = null,
+        long rowCount = 0)
     {
+        var now = DateTimeOffset.UtcNow;
         Name = name;
         Columns = columns;
+        SchemaVersion = schemaVersion;
+        CreatedAt = createdAt ?? now;
+        ModifiedAt = modifiedAt ?? CreatedAt;
+        RowCount = rowCount;
     }
 
     /// <summary>Look up a column by name (case-insensitive).</summary>
@@ -77,8 +94,8 @@ public sealed class UserTypeSchema
 
 // ── Catalog ───────────────────────────────────────────────────────────────────
 
-/// <summary>Simple in-memory schema catalog used for semantic validation.</summary>
-public sealed class Catalog
+/// <summary>Catalog with schema metadata, DDL/index mutations, and optional persistence for semantic validation.</summary>
+public sealed partial class Catalog
 {
     private readonly Dictionary<string, TableSchema> _tables = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, UserTypeSchema> _types = new(StringComparer.OrdinalIgnoreCase);
@@ -86,55 +103,103 @@ public sealed class Catalog
     // ── Table management ──────────────────────────────────────────────────────
 
     /// <summary>Register a table in the catalog.</summary>
-    public void AddTable(TableSchema schema) => _tables[schema.Name.ToLowerInvariant()] = schema;
+    public void AddTable(TableSchema schema)
+    {
+        lock (SyncRoot)
+        {
+            _tables[schema.Name.ToLowerInvariant()] = schema;
+            PersistIfConfiguredUnsafe();
+        }
+    }
 
     /// <summary>Remove a table from the catalog.</summary>
-    public void RemoveTable(string name) => _tables.Remove(name.ToLowerInvariant());
+    public void RemoveTable(string name)
+    {
+        lock (SyncRoot)
+        {
+            var removed = _tables.Remove(name.ToLowerInvariant());
+            if (!removed)
+                return;
+
+            RemoveIndexesForTableUnsafe(name);
+            PersistIfConfiguredUnsafe();
+        }
+    }
 
     /// <summary>Check whether a table exists.</summary>
-    public bool TableExists(string name) => _tables.ContainsKey(name.ToLowerInvariant());
+    public bool TableExists(string name)
+    {
+        lock (SyncRoot)
+            return _tables.ContainsKey(name.ToLowerInvariant());
+    }
 
     /// <summary>Retrieve a table schema.</summary>
     public TableSchema? GetTable(string name)
     {
-        _tables.TryGetValue(name.ToLowerInvariant(), out var schema);
-        return schema;
+        lock (SyncRoot)
+        {
+            _tables.TryGetValue(name.ToLowerInvariant(), out var schema);
+            return schema;
+        }
     }
 
     // ── User-defined type management ──────────────────────────────────────────
 
     /// <summary>Register a user-defined type.</summary>
-    public void AddType(UserTypeSchema schema) => _types[schema.Name.ToLowerInvariant()] = schema;
+    public void AddType(UserTypeSchema schema)
+    {
+        lock (SyncRoot)
+        {
+            _types[schema.Name.ToLowerInvariant()] = schema;
+            PersistIfConfiguredUnsafe();
+        }
+    }
 
     /// <summary>Retrieve a user-defined type by name (case-insensitive).</summary>
     public UserTypeSchema? GetType(string name)
     {
-        _types.TryGetValue(name.ToLowerInvariant(), out var schema);
-        return schema;
+        lock (SyncRoot)
+        {
+            _types.TryGetValue(name.ToLowerInvariant(), out var schema);
+            return schema;
+        }
     }
 
     /// <summary>Check whether a user-defined type exists.</summary>
-    public bool TypeExists(string name) => _types.ContainsKey(name.ToLowerInvariant());
+    public bool TypeExists(string name)
+    {
+        lock (SyncRoot)
+            return _types.ContainsKey(name.ToLowerInvariant());
+    }
 
     /// <summary>
     /// Remove a user-defined type. Throws <see cref="PlannerException"/> if the type is still in use.
     /// </summary>
     public void RemoveType(string name)
     {
-        if (IsTypeInUse(name))
-            throw new PlannerException(PlannerErrorKind.CatalogError,
-                $"cannot drop type '{name}': it is still referenced by one or more columns");
-        _types.Remove(name.ToLowerInvariant());
+        lock (SyncRoot)
+        {
+            if (IsTypeInUseUnsafe(name))
+                throw new PlannerException(PlannerErrorKind.CatalogError,
+                    $"cannot drop type '{name}': it is still referenced by one or more columns");
+            _types.Remove(name.ToLowerInvariant());
+            PersistIfConfiguredUnsafe();
+        }
     }
 
     /// <summary>Returns true if any column in any table references this type via EnumRef.</summary>
     public bool IsTypeInUse(string name)
     {
-        foreach (var table in _tables.Values)
-            foreach (var col in table.Columns)
-                if (col.DataType is DataType.EnumRef er && string.Equals(er.Name, name, StringComparison.OrdinalIgnoreCase))
-                    return true;
-        return false;
+        lock (SyncRoot)
+            return IsTypeInUseUnsafe(name);
+    }
+
+    private bool IsTypeInUseUnsafe(string name)
+    {
+        return _tables.Values
+            .SelectMany(table => table.Columns)
+            .Where(col => col.UserDefinedTypeName is not null)
+            .Any(col => string.Equals(col.UserDefinedTypeName, name, StringComparison.OrdinalIgnoreCase));
     }
 }
 
