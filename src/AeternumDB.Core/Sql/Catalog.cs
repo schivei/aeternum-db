@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using AeternumDB.Core.Errors;
+using AeternumDB.Core.Sql.CatalogSnapshots;
 
 namespace AeternumDB.Core.Sql;
 
@@ -800,76 +801,6 @@ public sealed partial class Catalog
             "TRIGRAM" => IndexType.Trigram.Instance,
             _ => new IndexType.Other(name)
         };
-
-    private sealed class CatalogStateSnapshot
-    {
-        public List<TableSnapshot> Tables { get; set; } = [];
-        public List<TypeSnapshot> Types { get; set; } = [];
-        public List<IndexSnapshot> Indexes { get; set; } = [];
-        public long NextObjectId { get; set; } = 1;
-    }
-
-    private sealed class TableSnapshot
-    {
-        public string Name { get; set; } = "";
-        public int SchemaVersion { get; set; } = 1;
-        public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
-        public DateTimeOffset ModifiedAt { get; set; } = DateTimeOffset.UtcNow;
-        public long RowCount { get; set; }
-        public List<ColumnSnapshot> Columns { get; set; } = [];
-    }
-
-    private sealed class ColumnSnapshot
-    {
-        public string Name { get; set; } = "";
-        public string DataTypeText { get; set; } = UnknownTypeName;
-        public bool Nullable { get; set; } = true;
-        public string? UserDefinedTypeName { get; set; }
-    }
-
-    private sealed class TypeSnapshot
-    {
-        public string Name { get; set; } = "";
-        public string Kind { get; set; } = CompositeKind;
-        public bool Flag { get; set; }
-        public List<EnumVariantSnapshot> Variants { get; set; } = [];
-        public List<ulong> ResolvedValues { get; set; } = [];
-        public List<TypeFieldSnapshot> Fields { get; set; } = [];
-    }
-
-    private sealed class EnumVariantSnapshot
-    {
-        public string Name { get; set; } = "";
-        public bool IsNone { get; set; }
-    }
-
-    private sealed class TypeFieldSnapshot
-    {
-        public string Name { get; set; } = "";
-        public string DataTypeText { get; set; } = UnknownTypeName;
-        public string? UserDefinedTypeName { get; set; }
-    }
-
-    private sealed class PersistedDataTypeSnapshot
-    {
-        public string? Kind { get; set; }
-        public string? Name { get; set; }
-        public string? Table { get; set; }
-        public string? Column { get; set; }
-        // Stable internal identifier used as fallback when legacy payloads omit explicit names.
-        public string? DataId { get; set; }
-        public string? ElementTypeText { get; set; }
-    }
-
-    private sealed class IndexSnapshot
-    {
-        public string Name { get; set; } = "";
-        public string Table { get; set; } = "";
-        public List<string> Columns { get; set; } = [];
-        public bool Unique { get; set; }
-        public string IndexType { get; set; } = DefaultIndexTypeName;
-        public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
-    }
 
     private void ApplyAlterOperationUnsafe(AlterTableOperation op, string indexTableName, ref string tableName, List<ColumnSchema> columns)
     {
