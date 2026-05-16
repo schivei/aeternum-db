@@ -1,4 +1,4 @@
-namespace AeternumDB.Core.Sql.Ast;
+namespace AeternumDB.Core.Sql;
 
 public abstract class RollbackScope
 {

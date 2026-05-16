@@ -1,4 +1,4 @@
-namespace AeternumDB.Core.Sql.Ast;
+namespace AeternumDB.Core.Sql;
 
 public sealed class RollbackStatement(RollbackScope scope, bool chain)
 {

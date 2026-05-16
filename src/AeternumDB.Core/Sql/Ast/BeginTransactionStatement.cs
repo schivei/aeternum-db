@@ -1,4 +1,6 @@
-namespace AeternumDB.Core.Sql.Ast;
+using AeternumDB.Core.Sql.Ast;
+
+namespace AeternumDB.Core.Sql;
 
 public sealed class BeginTransactionStatement
 {
