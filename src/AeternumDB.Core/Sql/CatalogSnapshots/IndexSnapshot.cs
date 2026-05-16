@@ -6,6 +6,6 @@ internal sealed class IndexSnapshot
     public string Table { get; set; } = "";
     public List<string> Columns { get; set; } = [];
     public bool Unique { get; set; }
-    public string IndexType { get; set; } = "BTREE";
+    public string IndexType { get; set; } = CatalogSnapshotConstants.DefaultIndexTypeName;
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 }

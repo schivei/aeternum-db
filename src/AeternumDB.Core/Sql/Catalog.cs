@@ -7,10 +7,10 @@ namespace AeternumDB.Core.Sql;
 
 public sealed partial class Catalog
 {
-    private const string EnumKind = "enum";
-    private const string CompositeKind = "composite";
-    private const string UnknownTypeName = "UNKNOWN";
-    private const string DefaultIndexTypeName = "BTREE";
+    private const string EnumKind = CatalogSnapshotConstants.EnumKind;
+    private const string CompositeKind = CatalogSnapshotConstants.CompositeKind;
+    private const string UnknownTypeName = CatalogSnapshotConstants.UnknownTypeName;
+    private const string DefaultIndexTypeName = CatalogSnapshotConstants.DefaultIndexTypeName;
     private const ulong MaxTypeParameterValue = 1_000_000;
 
     private readonly object _syncRoot = new();
