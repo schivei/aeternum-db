@@ -8,7 +8,13 @@ internal sealed class Token
     /// <summary>Gets the kind of this token.</summary>
     public TokenKind Kind { get; }
 
-    /// <summary>Gets the raw text matched from the SQL source.</summary>
+    /// <summary>
+    /// Gets the token text.
+    /// For most token kinds this is the raw SQL source fragment.
+    /// For <see cref="TokenKind.StringLiteral"/> tokens, this is the
+    /// <em>unescaped</em> value (e.g. doubled quotes and backslash sequences
+    /// have already been resolved), not the original source text.
+    /// </summary>
     public string Text { get; }
 
     /// <summary>Gets the one-based source line on which this token appears.</summary>

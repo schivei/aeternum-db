@@ -205,8 +205,7 @@ internal sealed class Tokenizer
             if (_pos >= _src.Length)
                 break;
             var token = ReadNextToken(_line);
-            if (token != null)
-                tokens.Add(token);
+            tokens.Add(token);
         }
         tokens.Add(new Token(TokenKind.Eof, "", _line));
         return tokens;
@@ -216,7 +215,7 @@ internal sealed class Tokenizer
 
     #region Token dispatch
 
-    private Token? ReadNextToken(int line)
+    private Token ReadNextToken(int line)
     {
         var ch = _src[_pos];
         if (ch == '\'' || ch == '"')
@@ -286,10 +285,11 @@ internal sealed class Tokenizer
         }
 
         if (_pos + 1 >= _src.Length)
-        {
-            _pos = _src.Length;
-            return true;
-        }
+            throw new SqlException(
+                SqlErrorKind.ParseError,
+                $"Unterminated block comment starting at line {_line}.",
+                _line
+            );
 
         _pos += 2;
         return true;
@@ -306,30 +306,26 @@ internal sealed class Tokenizer
         while (_pos < _src.Length)
         {
             var ch = _src[_pos];
-            if (TryReadEscapedQuote(sb, quote))
-                continue;
+            if (ch == quote)
+            {
+                _pos++;
+                if (_pos < _src.Length && _src[_pos] == quote)
+                {
+                    sb.Append(quote);
+                    _pos++;
+                    continue;
+                }
+                return new Token(TokenKind.StringLiteral, sb.ToString(), line);
+            }
             if (TryReadEscapedCharacter(sb))
                 continue;
             AppendStringCharacter(sb, ch);
         }
-        return new Token(TokenKind.StringLiteral, sb.ToString(), line);
-    }
-
-    private bool TryReadEscapedQuote(StringBuilder sb, char quote)
-    {
-        if (_pos >= _src.Length)
-            return false;
-        if (_src[_pos] != quote)
-            return false;
-        _pos++;
-        if (_pos < _src.Length && _src[_pos] == quote)
-        {
-            sb.Append(quote);
-            _pos++;
-            return true;
-        }
-
-        return false;
+        throw new SqlException(
+            SqlErrorKind.ParseError,
+            $"Unterminated string literal starting at line {line}.",
+            line
+        );
     }
 
     private bool TryReadEscapedCharacter(StringBuilder sb)
@@ -366,9 +362,14 @@ internal sealed class Tokenizer
         var start = _pos;
         while (_pos < _src.Length && _src[_pos] != '`')
             _pos++;
+        if (_pos >= _src.Length)
+            throw new SqlException(
+                SqlErrorKind.ParseError,
+                $"Unterminated backtick identifier starting at line {line}.",
+                line
+            );
         var name = _src[start.._pos];
-        if (_pos < _src.Length)
-            _pos++;
+        _pos++;
         return new Token(TokenKind.Ident, name, line);
     }
 
@@ -431,7 +432,7 @@ internal sealed class Tokenizer
 
     #region Operators
 
-    private Token? ReadOperator(int line)
+    private Token ReadOperator(int line)
     {
         var ch = _src[_pos++];
         return ch switch
@@ -465,7 +466,11 @@ internal sealed class Tokenizer
                 => _pos < _src.Length && _src[_pos] == '|'
                     ? AdvanceAndReturn(new Token(TokenKind.PipePipe, "||", line))
                     : new Token(TokenKind.Pipe, "|", line),
-            _ => null,
+            _ => throw new SqlException(
+                SqlErrorKind.ParseError,
+                $"Unexpected character '{ch}' at line {line}.",
+                line
+            ),
         };
     }
 
